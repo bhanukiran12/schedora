@@ -52,6 +52,16 @@ Protect `main` and require the **Schedora checks** workflow before merging. CI r
 
 ## 2. Render (backend)
 
+### Free evaluation setup (current `render.yaml`)
+`render.yaml` uses Render's **free** plan so the Blueprint can be applied without payment:
+- No persistent disk: the SQLite database is erased on every deploy, restart and spin-down. Use it to test the deployment, not for real bookings or responses.
+- The service sleeps after 15 idle minutes. The first request then takes up to about a minute, and the background worker (reminders, Flow retries, calendar sync) pauses while asleep.
+- `BILLING_MODE=open` (all products available, nothing charged) and no `COOKIE_DOMAIN`, so sign-in works on the `*.vercel.app` address before `schedora.in` is connected.
+
+To keep real data, either move to a paid plan and uncomment the `disk` block (set `DATABASE_PATH=/var/data/schedora.db`), or move the database to a free hosted one (Turso or Neon), which needs the async database change described in the project history. Before launch also set `BILLING_MODE=enforced`, `COOKIE_DOMAIN=.schedora.in` and `BASE_URL` to the live domain.
+
+### Steps
+
 1. Render dashboard → **New → Blueprint** → select the repository. Render reads `render.yaml` and creates `schedora-api`.
 2. Enter the values marked `sync: false`:
    - `ALLOWED_ORIGINS`: your Vercel production domain, e.g. `https://schedora.vercel.app` (custom `schedora.in` domains are already allowed).
@@ -61,8 +71,8 @@ Protect `main` and require the **Schedora checks** workflow before merging. CI r
 3. After the first deploy, open `https://<service>.onrender.com/api/health`. It should return `"status":"ok"`.
 4. Note the service URL. If it is not `https://schedora-api.onrender.com`, update the rewrite destination in `frontend/vercel.json` (step 3).
 
-Important Render facts:
-- **Persistent disk is required.** SQLite lives at `/var/data/schedora.db` on the attached disk. Without it, every deploy or restart erases all data. Disks need a paid instance type (the Blueprint uses `starter`).
+Important Render facts for the paid setup:
+- **Persistent disk is required for real data.** SQLite lives at `/var/data/schedora.db` on the attached disk. Without it, every deploy or restart erases all data. Disks need a paid instance type (the Blueprint uses `starter`).
 - **One instance only.** A service with a disk cannot scale horizontally, and deploys have a short gap while the old instance stops. The in-memory rate limiter also assumes one instance.
 - **Do not use the free plan for real data.** Free services sleep when idle (the worker stops, so reminders and Flow retries pause) and have no disk.
 - `render.yaml` uses region `singapore` and builds only when `backend/**` changes. Change either to suit you.

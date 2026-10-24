@@ -6,9 +6,11 @@ services:
     name: schedora-api
     runtime: node
     rootDir: backend
-    # A persistent disk keeps the SQLite database across deploys. Disks need a paid instance
-    # and limit the service to one instance (no horizontal scaling, brief downtime on deploy).
-    plan: starter
+    # EVALUATION SETUP (free). The free plan has no persistent disk: the SQLite database is
+    # erased on every deploy, restart or spin-down, and the service sleeps after 15 idle minutes
+    # (background jobs pause until the next request). Do not collect real data on this setup.
+    # For real data: use a paid plan with the disk below, or a hosted database (see docs/DEPLOYMENT.md).
+    plan: free
     region: singapore
     buildCommand: npm run check && npm run sync-shared -- --check
     startCommand: npm start
@@ -17,10 +19,10 @@ services:
     buildFilter:
       paths:
         - backend/**
-    disk:
-      name: schedora-data
-      mountPath: /var/data
-      sizeGB: 1
+    # disk:                      # paid plans only; then set DATABASE_PATH=/var/data/schedora.db
+    #   name: schedora-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -29,7 +31,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: DATABASE_PATH
-        value: /var/data/schedora.db
+        value: ./data/schedora.db
       - key: SERVE_FRONTEND
         value: "false"
       - key: TRUST_PROXY
@@ -41,13 +43,15 @@ services:
         value: https://schedora.in
       - key: PRODUCT_DOMAIN
         value: schedora.in
-      - key: COOKIE_DOMAIN
-        value: .schedora.in
+      # Add COOKIE_DOMAIN=.schedora.in only after the schedora.in domains point at Vercel;
+      # until then sign-in must work on the *.vercel.app address, so leave it unset.
       # Extra origins allowed to make changes, e.g. the Vercel project and preview domains.
       - key: ALLOWED_ORIGINS
         sync: false
+      # open = evaluation: all products available, nothing charged. Switch to enforced only
+      # once a payment provider is connected.
       - key: BILLING_MODE
-        value: enforced
+        value: open
       - key: BILLING_PROVIDER
         value: none
       - key: BILLING_WEBHOOK_SECRET
