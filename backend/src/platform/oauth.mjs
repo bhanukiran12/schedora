@@ -137,11 +137,24 @@ async function api(app, integrationId, url, init = {}) {
 
 // Busy periods for a connected OAuth calendar (used by calendar sync).
 export async function oauthBusy(app, connection, { from, to }) {
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new Error('Invalid calendar sync interval.');
+  const window = 30 * 86400000;
+  if (to - from > window) {
+    const periods = new Map();
+    for (let start = from; start < to; start += window) {
+      for (const period of await oauthBusy(app, connection, { from: start, to: Math.min(start + window, to) })) {
+        periods.set(period.starts_at + ':' + period.ends_at, period);
+      }
+    }
+    return [...periods.values()];
+  }
   const timeMin = new Date(from).toISOString();
   const timeMax = new Date(to).toISOString();
   if (connection.provider === 'google') {
     const data = await api(app, connection.integration_id, 'https://www.googleapis.com/calendar/v3/freeBusy', { method: 'POST', body: JSON.stringify({ timeMin, timeMax, items: [{ id: 'primary' }] }) });
-    return (data.calendars?.primary?.busy || []).map(period => ({ starts_at: Date.parse(period.start), ends_at: Date.parse(period.end) }));
+    const calendar = data.calendars?.primary;
+    if (!calendar || calendar.errors?.length) throw new Error('Google could not return calendar availability. Check calendar access and reconnect if needed.');
+    return (calendar.busy || []).map(period => ({ starts_at: Date.parse(period.start), ends_at: Date.parse(period.end) }));
   }
   const integration = app.db.get('SELECT account FROM integrations WHERE id = ?', connection.integration_id);
   const data = await api(app, connection.integration_id, 'https://graph.microsoft.com/v1.0/me/calendar/getSchedule', {

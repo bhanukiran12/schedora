@@ -10,7 +10,7 @@ const MON9 = '2026-10-26T09:00:00.000Z';
 
 function fakeGoogle(env) {
   const calls = [];
-  const state = { events: new Map(), refreshFails: false };
+  const state = { events: new Map(), refreshFails: false, busyError: false };
   env.app.fetchProvider = async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET', body: init.body ? String(init.body) : '' });
     if (url === 'https://oauth2.googleapis.com/token') {
@@ -19,7 +19,11 @@ function fakeGoogle(env) {
       return json({ access_token: 'ya29.' + calls.length, refresh_token: 'refresh-1', expires_in: 3600 });
     }
     if (url.startsWith('https://openidconnect.googleapis.com/v1/userinfo')) return json({ email: 'host@gmail.com' });
-    if (url === 'https://www.googleapis.com/calendar/v3/freeBusy') return json({ calendars: { primary: { busy: [{ start: '2026-10-26T10:00:00Z', end: '2026-10-26T11:00:00Z' }] } } });
+    if (url === 'https://www.googleapis.com/calendar/v3/freeBusy') {
+      const range = JSON.parse(init.body);
+      assert.ok(Date.parse(range.timeMax) - Date.parse(range.timeMin) <= 30 * 86400000, 'busy checks use bounded date windows');
+      return json({ calendars: { primary: state.busyError ? { errors: [{ reason: 'notFound' }] } : { busy: [{ start: '2026-10-26T10:00:00Z', end: '2026-10-26T11:00:00Z' }] } } });
+    }
     if (url.startsWith('https://www.googleapis.com/calendar/v3/calendars/primary/events') && init.method === 'POST') {
       const body = JSON.parse(String(init.body));
       const id = 'evt' + (state.events.size + 1);
@@ -65,6 +69,9 @@ test('Google: OAuth connect, busy times, calendar events with Meet links, cleanu
     const calendars = (await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections;
     assert.equal(calendars[0].provider, 'google');
     assert.equal(calendars[0].busy_count, 1);
+    const checks = google.calls.filter(call => call.url.endsWith('/freeBusy')).map(call => JSON.parse(call.body));
+    assert.equal(checks.length, 5);
+    for (let index = 1; index < checks.length; index++) assert.equal(checks[index].timeMin, checks[index - 1].timeMax);
     const type = (await host.post(`/api/workspaces/${ws.id}/event-types`, { title: 'Video call', timezone: 'UTC', published: true, min_notice_min: 0, duration_min: 60, locations: [{ type: 'google_meet' }] })).body;
     const slots = (await env.client().get(`/api/public/meet/${ws.slug}/${type.slug}/slots`)).body.slots;
     assert.ok(!slots.includes('2026-10-26T10:00:00.000Z'), 'Google busy time removed');
@@ -82,6 +89,13 @@ test('Google: OAuth connect, busy times, calendar events with Meet links, cleanu
     await env.client().post(`/api/public/bookings/${booked.manage_token}/cancel`, {});
     await env.app.worker.tick();
     assert.ok(!google.state.events.has(eventId), 'calendar event removed after cancellation');
+
+    google.state.busyError = true;
+    await host.post(`/api/workspaces/${ws.id}/calendar/sync`);
+    const failedCheck = (await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections[0];
+    assert.equal(failedCheck.status, 'error');
+    assert.equal(failedCheck.busy_count, 1, 'failed calendar results preserve the last successful busy periods');
+    google.state.busyError = false;
 
     // Expired token + rejected refresh: integration and calendar are marked revoked.
     google.state.refreshFails = true;
