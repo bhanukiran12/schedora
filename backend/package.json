@@ -1,0 +1,20 @@
+{
+  "name": "schedora",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "check": "node scripts/check.mjs",
+    "sync-shared": "node scripts/sync-shared.mjs",
+    "browser-check": "node --disable-warning=ExperimentalWarning scripts/browser-check.mjs",
+    "migrate": "node --disable-warning=ExperimentalWarning scripts/migrate.mjs",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.mjs",
+    "restore": "node --disable-warning=ExperimentalWarning scripts/restore.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

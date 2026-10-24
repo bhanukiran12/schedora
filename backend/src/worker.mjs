@@ -1,0 +1,63 @@
+import { deliverDueEmails } from './platform/email.mjs';
+import { dispatchOutbox, processDueRuns } from './flow/service.mjs';
+import { syncDueCalendars } from './meet/calendar.mjs';
+
+const DAY = 86400000;
+
+// Applies retention rules: responses and past bookings older than the workspace retention period,
+// delivered email copies after 30 days, expired sessions and old dispatched events.
+export function applyRetention(app) {
+  const now = app.now();
+  const removed = { responses: 0, bookings: 0, emails: 0 };
+  app.db.transaction(() => {
+    for (const workspace of app.db.all('SELECT id, retention_days FROM workspaces')) {
+      const cutoff = now - workspace.retention_days * DAY;
+      removed.responses += app.db.run('DELETE FROM responses WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff).changes;
+      removed.bookings += app.db.run(`UPDATE bookings SET invitee_name = 'Removed after retention period', invitee_email = 'removed@invalid', notes = '', cancel_reason = NULL, anonymized_at = ?
+        WHERE workspace_id = ? AND ends_at < ? AND anonymized_at IS NULL`, now, workspace.id, cutoff).changes;
+      app.db.run('DELETE FROM flow_runs WHERE workspace_id = ? AND created_at < ? AND status IN (\'succeeded\', \'failed\')', workspace.id, cutoff);
+    }
+    removed.emails = app.db.run("DELETE FROM emails WHERE created_at < ? AND status IN ('sent', 'failed', 'canceled')", now - 30 * DAY).changes;
+    app.db.run('DELETE FROM sessions WHERE expires_at < ?', now);
+    app.db.run('DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < ?', now - 30 * DAY);
+  });
+  return removed;
+}
+
+export function createWorker(app, { intervalMs = 2000 } = {}) {
+  let timer = null;
+  let running = false;
+  let again = false;
+  let lastRetention = 0;
+  const state = { lastTickAt: null, lastError: null };
+
+  async function tick() {
+    if (running) { again = true; return; }
+    running = true;
+    try {
+      do {
+        again = false;
+        dispatchOutbox(app);
+        await processDueRuns(app);
+        await deliverDueEmails(app);
+        await syncDueCalendars(app);
+        if (app.now() - lastRetention > 3600000) { applyRetention(app); lastRetention = app.now(); }
+      } while (again);
+      state.lastTickAt = app.now();
+      state.lastError = null;
+    } catch (error) {
+      state.lastError = error.message;
+      app.log('error', 'worker_tick_failed', { error: error.message });
+    } finally {
+      running = false;
+    }
+  }
+
+  return {
+    state,
+    tick,
+    nudge() { if (timer) setImmediate(tick); },
+    start() { if (!timer) { timer = setInterval(tick, intervalMs); timer.unref(); setImmediate(tick); } },
+    stop() { clearInterval(timer); timer = null; }
+  };
+}

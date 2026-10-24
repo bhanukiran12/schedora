@@ -1,0 +1,70 @@
+# Render Blueprint for the Schedora API (backend/). The web app is deployed separately on Vercel
+# from frontend/ and reaches this service through its /api rewrite.
+# Secrets marked sync: false are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: schedora-api
+    runtime: node
+    rootDir: backend
+    # A persistent disk keeps the SQLite database across deploys. Disks need a paid instance
+    # and limit the service to one instance (no horizontal scaling, brief downtime on deploy).
+    plan: starter
+    region: singapore
+    buildCommand: npm run check && npm run sync-shared -- --check
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - backend/**
+    disk:
+      name: schedora-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_PATH
+        value: /var/data/schedora.db
+      - key: SERVE_FRONTEND
+        value: "false"
+      - key: TRUST_PROXY
+        value: "true"
+      # Browser → Vercel edge → Render proxy → app: the client address is two hops from the right.
+      - key: TRUST_PROXY_HOPS
+        value: "2"
+      - key: BASE_URL
+        value: https://schedora.in
+      - key: PRODUCT_DOMAIN
+        value: schedora.in
+      - key: COOKIE_DOMAIN
+        value: .schedora.in
+      # Extra origins allowed to make changes, e.g. the Vercel project and preview domains.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: BILLING_MODE
+        value: enforced
+      - key: BILLING_PROVIDER
+        value: none
+      - key: BILLING_WEBHOOK_SECRET
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: outbox
+      - key: EMAIL_HTTP_URL
+        sync: false
+      - key: EMAIL_HTTP_TOKEN
+        sync: false
+      - key: EMAIL_FROM
+        value: Schedora <no-reply@schedora.in>
+      - key: OPERATOR_NAME
+        sync: false
+      - key: OPERATOR_CONTACT
+        sync: false
+      - key: OPERATOR_JURISDICTION
+        sync: false
+      - key: LOG_LEVEL
+        value: info
