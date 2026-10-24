@@ -3,6 +3,7 @@ import { fail } from '../http.mjs';
 import { text } from '../validate.mjs';
 import { decryptJson, encryptJson } from '../platform/crypto.mjs';
 import { confirmPayment } from './bookings.mjs';
+import { createRazorpay, razorpayCredentials, razorpayFeePolicy } from './razorpay.mjs';
 
 // Paid bookings. Each workspace connects its own Stripe account (restricted secret key and webhook
 // signing secret, stored encrypted), so payments go to the host, not to Schedora. Outside
@@ -15,13 +16,19 @@ function stripeCredentials(app, workspaceId) {
 
 export function createPayments(app, fetchImpl = fetch) {
   const testMode = () => !app.config.production || app.config.allowTestPayments;
+  const razorpay = createRazorpay(app);
   return {
-    available(workspaceId) {
-      return Boolean(stripeCredentials(app, workspaceId)) || testMode();
+    razorpay,
+    feePolicy: workspaceId => razorpayFeePolicy(app, workspaceId),
+    holdMinutes: workspaceId => razorpayCredentials(app, workspaceId) ? 20 : 15,
+    available(workspaceId, currency) {
+      if (razorpayCredentials(app, workspaceId) && currency && currency.toUpperCase() !== 'INR') return false;
+      return Boolean(razorpayCredentials(app, workspaceId) || stripeCredentials(app, workspaceId)) || testMode();
     },
 
     // Returns the URL where the invitee pays for a pending booking.
     async checkout(booking, eventType, token) {
+      if (razorpayCredentials(app, booking.workspace_id)) return razorpay.checkout(booking, eventType, token);
       const stripe = stripeCredentials(app, booking.workspace_id);
       if (!stripe) {
         if (!testMode()) fail(409, 'payments_unavailable', 'Online payment is not set up for this workspace.');
@@ -75,6 +82,8 @@ export function createPayments(app, fetchImpl = fetch) {
     // Test provider: only outside production.
     testPay(token, bookingId) {
       if (!testMode()) fail(404, 'not_found', 'Not available.');
+      const booking = app.db.get('SELECT workspace_id FROM bookings WHERE id = ?', bookingId);
+      if (booking && (razorpayCredentials(app, booking.workspace_id) || stripeCredentials(app, booking.workspace_id))) fail(409, 'real_payments_connected', 'Use the connected payment provider. Simulated payment is disabled.');
       const result = confirmPayment(app, bookingId, 'test_' + bookingId, token);
       app.nudge?.();
       return result;
@@ -83,6 +92,7 @@ export function createPayments(app, fetchImpl = fetch) {
 }
 
 export function connectStripe(app, workspaceId, body) {
+  if (razorpayCredentials(app, workspaceId)) fail(409, 'payment_provider_connected', 'Disconnect Razorpay before switching to Stripe.');
   const secretKey = text(body.secret_key, 'secret_key', { min: 10, max: 200 });
   const webhookSecret = text(body.webhook_secret, 'webhook_secret', { min: 10, max: 200 });
   if (!/^(sk|rk)_(test|live)_/.test(secretKey)) fail(400, 'validation_failed', 'Use a Stripe secret or restricted key (sk_… or rk_…).', { field: 'secret_key' });

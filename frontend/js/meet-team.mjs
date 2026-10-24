@@ -258,6 +258,7 @@ export async function integrationsTab(ctx, panel) {
   if (!ctx.alive()) return;
   const connected = provider => integrations.find(item => item.provider === provider && item.user_id === session.user.id);
   const stripe = integrations.find(item => item.provider === 'stripe' && !item.user_id);
+  const razorpay = integrations.find(item => item.provider === 'razorpay' && !item.user_id);
   const error = ctx.query.get('error');
   const statusNote = connection => ({
     active: badge('active', `Connected · ${connection.busy_count} busy periods`), revoked: badge('canceled', 'Access revoked: reconnect'), error: badge('pending', 'Last check failed'), pending: badge('pending', 'Checking')
@@ -280,13 +281,24 @@ export async function integrationsTab(ctx, panel) {
     <section class="card card-plain section-gap"><h2>My working hours</h2><p class="hint">Used by team event types that are set to follow each host's working hours.</p>
       <form id="hours-form" novalidate><label for="h-zone">Time zone</label><select id="h-zone" name="timezone">${zoneOptions(schedule?.timezone || browserZone())}</select><div id="hours"></div>
         <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Save working hours</button></div></form></section>
-    ${isAdmin() ? html`<section class="card card-plain section-gap"><h2>Payments (Stripe)</h2>
+    ${isAdmin() ? html`<section class="card card-plain section-gap"><h2>Payments (Razorpay)</h2>
+      ${razorpay ? html`<p>${badge('active', `Connected (${razorpay.account} mode)`)}</p><p>Payments use Razorpay's hosted checkout. Any customer-paid processing fees are controlled by your approved Razorpay Fee Bearer settings. Schedora adds no extra fee.</p><button class="btn btn-small btn-danger" id="razorpay-disconnect">Disconnect Razorpay</button>` : html`
+        <p>Accept INR appointment payments into your own Razorpay account. Start with test keys. Configure a webhook for <code>payment_link.paid</code> at:</p><p class="hint">${location.origin}/api/payments/razorpay/${workspace().id}</p>
+        <p>To collect processing charges from customers, ask Razorpay to enable its Convenience Fee model, then select it under Fee Bearer. Razorpay shows the actual fee and applicable tax before payment. There is no additional Schedora charge. Fee Bearer changes can affect both test and live mode.</p>
+        ${stripe ? html`<p>Disconnect Stripe before connecting Razorpay.</p>` : html`<form id="razorpay-form" novalidate>
+          <label for="rzp-key">Key ID</label><input id="rzp-key" name="key_id" required autocomplete="off" placeholder="rzp_test_…">
+          <label for="rzp-secret">Key secret</label><input id="rzp-secret" name="key_secret" type="password" required autocomplete="new-password">
+          <label for="rzp-webhook">Webhook signing secret</label><input id="rzp-webhook" name="webhook_secret" type="password" required minlength="16" autocomplete="new-password">
+          <label class="check"><input type="checkbox" name="customer_pays_processing"> Razorpay has approved and enabled customer-paid convenience fees on this account</label>
+          <p class="hint">This checkbox records your setup; it does not enable fees at Razorpay. Leave it unchecked until Razorpay confirms activation.</p>
+          <div data-form-status tabindex="-1"></div><button class="btn" type="submit">Connect Razorpay</button></form>`}`}
+      </section><section class="card card-plain section-gap"><h2>Payments (Stripe)</h2>
       ${stripe ? html`<p>${badge('active', `Connected (${stripe.account} mode)`)}</p><button class="btn btn-small btn-danger" id="stripe-disconnect">Disconnect Stripe</button>`
         : html`<p class="hint">Invitees pay through your own Stripe account. Create a restricted key with Checkout Sessions write access and a webhook for <code>checkout.session.completed</code>.</p>
         <form id="stripe-form" novalidate><label for="sk">Restricted or secret key</label><input id="sk" name="secret_key" required autocomplete="off" placeholder="rk_live_…">
           <label for="whsec">Webhook signing secret</label><input id="whsec" name="webhook_secret" required autocomplete="off" placeholder="whsec_…">
           <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Connect Stripe</button></div></form>`}
-      ${!stripe && boot.integrations?.testPayments ? html`<p class="muted">Until Stripe is connected, paid event types use a test checkout (no money moves).</p>` : ''}</section>` : ''}`);
+      ${!stripe && !razorpay && boot.integrations?.testPayments ? html`<p class="muted">Until a payment provider is connected, paid event types use a test checkout (no money moves).</p>` : ''}</section>` : ''}`);
 
   $$('[data-connect]', panel).forEach(button => button.onclick = async () => { try { location.href = (await api('GET', wsPath(`/integrations/${button.dataset.connect}/start`))).url; } catch (failure) { toast(failure.message); } });
   $$('[data-disconnect]', panel).forEach(button => button.onclick = async () => { if (await ask({ title: 'Disconnect?', body: 'Busy times and calendar events from this app stop syncing.', confirm: 'Disconnect', danger: true })) { await api('DELETE', wsPath('/integrations/' + button.dataset.disconnect)); ctx.render(); } });
@@ -312,6 +324,16 @@ export async function integrationsTab(ctx, panel) {
     const result = await api('POST', wsPath('/integrations/stripe'), data);
     await ask({ title: 'Stripe connected', body: 'Add this webhook endpoint in Stripe (Developers → Webhooks) for checkout.session.completed:', fields: html`<input readonly value="${result.webhook_url}" aria-label="Webhook URL">`, confirm: 'Done' });
     ctx.render();
+  });
+  if ($('#razorpay-form')) handleSubmit($('#razorpay-form'), async data => {
+    await api('POST', wsPath('/integrations/razorpay'), { ...data, customer_pays_processing: $('#razorpay-form [name="customer_pays_processing"]').checked });
+    toast('Razorpay connected. Verify the payment_link.paid webhook before accepting customers.');
+    ctx.render();
+  });
+  $('#razorpay-disconnect')?.addEventListener('click', async () => {
+    if (await ask({ title: 'Disconnect Razorpay?', body: 'Reconcile all payments and refunds first. Paid bookings will stop using this account.', confirm: 'Disconnect', danger: true })) {
+      await api('DELETE', wsPath('/integrations/razorpay')); ctx.render();
+    }
   });
   $('#stripe-disconnect')?.addEventListener('click', async () => { if (await ask({ title: 'Disconnect Stripe?', body: 'Paid event types will stop accepting bookings.', confirm: 'Disconnect', danger: true })) { await api('DELETE', wsPath('/integrations/stripe')); ctx.render(); } });
 }

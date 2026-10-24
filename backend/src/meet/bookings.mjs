@@ -62,6 +62,9 @@ function applyLimits(app, eventType, hostId, slots, timeZone, exempt) {
 // Returns Map<start ms, host ids available at that start>, honoring the meeting kind:
 // one-on-one and group use the single host; collective needs every host; round robin needs any.
 export function computeAvailability(app, eventType, { fromDate, toDate, excludeMeetingId } = {}) {
+  if (eventType.price_cents && app.payments.feePolicy(eventType.workspace_id)?.provider === 'razorpay') {
+    eventType = { ...eventType, min_notice_min: Math.max(eventType.min_notice_min, app.payments.holdMinutes(eventType.workspace_id)) };
+  }
   const now = app.now();
   const result = new Map();
   if (eventType.expires_at && eventType.expires_at < now) return { slots: result, joinable: new Map() };
@@ -300,7 +303,7 @@ function claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, 
     notes: input.notes, answers: JSON.stringify(input.answers), location: input.location ? JSON.stringify(input.location) : null, guests: JSON.stringify(input.guests || []),
     idempotency_key: idempotencyKey, request_hash: requestHash, manage_token_hash: sha256(token), manage_expires_at: start, rescheduled_from: rescheduledFrom,
     payment_status: payment ? payment.status : pending ? 'pending' : 'none', payment_ref: payment?.ref ?? null,
-    amount_cents: eventType.price_cents ?? null, currency: eventType.currency ?? null, hold_expires_at: pending ? now + HOLD_MINUTES * MINUTE : null,
+    amount_cents: eventType.price_cents ?? null, currency: eventType.currency ?? null, hold_expires_at: pending ? now + (app.payments.holdMinutes?.(eventType.workspace_id) || HOLD_MINUTES) * MINUTE : null,
     booked_by: bookedBy, contact_id: contactId, source, created_at: now
   };
   app.db.run(`INSERT INTO bookings (${Object.keys(booking).join(', ')}) VALUES (${Object.keys(booking).map(() => '?').join(', ')})`, ...Object.values(booking));
@@ -325,7 +328,7 @@ export function createBooking(app, eventType, body, idempotencyKey, options = {}
         return { booking: existing, token: null, replay: true };
       }
       requireEntitlement(app, eventType.workspace_id, 'meet');
-      if (eventType.price_cents && !options.override && !app.payments.available(eventType.workspace_id)) fail(409, 'payments_unavailable', 'This event requires payment, but online payment is not set up yet. Contact the host.');
+      if (eventType.price_cents && !options.override && !app.payments.available(eventType.workspace_id, eventType.currency)) fail(409, 'payments_unavailable', 'Online payment is not available for this event and currency. Contact the host.');
       consumeQuota(app, eventType.workspace_id, 'bookings');
       const { booking, token } = claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, ...options, payment: options.override ? { status: eventType.price_cents ? 'pending' : 'none' } : null });
       if (booking.status === 'confirmed') onConfirmed(app, booking, eventType, token, 'created');

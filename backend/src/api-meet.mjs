@@ -11,6 +11,7 @@ import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow, TRIGGERS
 import { closePoll, confirmPoll, createPoll, deletePoll, getPoll, listPolls, publicPoll, vote } from './meet/polls.mjs';
 import { analytics } from './meet/analytics.mjs';
 import { connectStripe } from './meet/payments.mjs';
+import { connectRazorpay } from './meet/razorpay.mjs';
 import { addFollowUp, addNote, createContact, deleteContact, deleteNote, getContact, listContacts, updateContact } from './platform/contacts.mjs';
 import { queueEmail, deliverEmail } from './platform/email.mjs';
 
@@ -173,6 +174,16 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     app.db.run("DELETE FROM integrations WHERE workspace_id = ? AND user_id IS NULL AND provider = 'stripe'", actor.workspace.id);
     return { status: 204 };
   });
+  post(ws('/integrations/razorpay'), async ctx => {
+    const actor = member(ctx, 'integrations.manage');
+    return connectRazorpay(app, actor.workspace.id, await ctx.json());
+  });
+  del(ws('/integrations/razorpay'), ctx => {
+    const actor = member(ctx, 'integrations.manage');
+    if (app.db.get("SELECT 1 FROM bookings WHERE workspace_id = ? AND status = 'pending' AND payment_ref LIKE 'razorpay:%'", actor.workspace.id)) fail(409, 'payments_pending', 'Wait for pending payments before disconnecting Razorpay.');
+    app.db.run("DELETE FROM integrations WHERE workspace_id = ? AND user_id IS NULL AND provider = 'razorpay'", actor.workspace.id);
+    return { status: 204 };
+  });
 
   // ---- Public ----
   const publicEvent = ctx => {
@@ -190,7 +201,7 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     host_name: eventType.kind === 'round_robin' ? eventType.workspace_name : eventType.hosts.map(host => host.name).join(', '),
     location: eventType.location,
     locations: eventType.locations.map(location => ({ type: location.type, label: LOCATION_TYPES[location.type], display: locationDisplay(location), needs_phone: location.type === 'phone_host_calls', auto_video: AUTO_VIDEO.includes(location.type) })),
-    questions: eventType.questions, price: eventType.price_cents ? { amount_cents: eventType.price_cents, currency: eventType.currency } : null,
+    questions: eventType.questions, price: eventType.price_cents ? { amount_cents: eventType.price_cents, currency: eventType.currency, fee_policy: app.payments.feePolicy(eventType.workspace_id) } : null,
     branding: { color: eventType.brand_color, logo: eventType.logo, welcome: eventType.welcome_message },
     confirmation_message: eventType.confirmation_message, redirect_url: eventType.redirect_url, preview: Boolean(eventType.preview), one_off: eventType.one_off
   });
@@ -224,8 +235,12 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     try {
       const { booking, token, replay } = createBooking(app, eventType, body, ctx.request.headers['idempotency-key']);
       let checkout = null;
-      if (booking.status === 'pending' && token) checkout = await app.payments.checkout(booking, eventType, token);
-      return { status: replay ? 200 : 201, body: { booking: publicBooking(app, booking, eventType), manage_token: token, replay, checkout } };
+      let checkout_error = null;
+      if (booking.status === 'pending' && token) {
+        try { checkout = await app.payments.checkout(booking, eventType, token); }
+        catch { checkout_error = 'Checkout is temporarily unavailable. Retry payment from your booking page before the hold expires.'; }
+      }
+      return { status: replay ? 200 : 201, body: { booking: publicBooking(app, booking, eventType), manage_token: token, replay, checkout, checkout_error } };
     } catch (error) {
       if (error.code === 'slot_unavailable') error.details = { ...error.details, ...slotsResponse(eventType, ctx) };
       throw error;
@@ -275,6 +290,15 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     const raw = (await ctx.raw(256 * 1024)).toString('utf8');
     return { result: app.payments.handleStripeWebhook(ctx.params.wsId, raw, ctx.request.headers['stripe-signature']) };
   }, { public: true, csrfExempt: true });
+  post('/api/payments/razorpay/:wsId', async ctx => {
+    const raw = (await ctx.raw(256 * 1024)).toString('utf8');
+    return { result: await app.payments.razorpay.webhook(ctx.params.wsId, raw, ctx.request.headers['x-razorpay-signature']) };
+  }, { public: true, csrfExempt: true });
+  post('/api/public/bookings/:token/verify-payment', async ctx => {
+    limit(ctx, 'manage', 20);
+    const { booking } = bookingByToken(app, ctx.params.token);
+    return { result: await app.payments.razorpay.verify(booking, ctx.params.token) };
+  }, { public: true });
 
   get('/api/public/polls/:slug', ctx => { limit(ctx, 'manage', 60); return publicPoll(app, ctx.params.slug); }, { public: true });
   post('/api/public/polls/:slug/votes', async ctx => { limit(ctx, 'responses', 30); return vote(app, ctx.params.slug, await ctx.json()); }, { public: true });

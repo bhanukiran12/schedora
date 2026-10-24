@@ -257,7 +257,7 @@ export async function editor(ctx) {
       <section class="card card-plain"><h2>Payment</h2>
         <div class="inline-fields"><div><label for="price">Price (leave empty for free)</label><input id="price" name="price" type="number" min="0.5" step="0.01" value="${type.price_cents ? type.price_cents / 100 : ''}" ${lockAttr('price_cents')}></div>
           <div><label for="currency">Currency</label><select id="currency" name="currency" ${lockAttr('price_cents')}>${['inr', 'usd', 'eur', 'gbp', 'aud', 'cad', 'sgd', 'aed'].map(code => html`<option value="${code}" ${code === (type.currency || 'inr') ? raw('selected') : ''}>${code.toUpperCase()}</option>`)}</select></div></div>
-        <p class="hint">Invitees pay when booking; the time is held for 15 minutes. Connect Stripe under <a href="/meet?tab=integrations">Calendars &amp; apps</a>.</p></section>
+        <p class="hint">Invitees pay when booking. The payment page shows the hold deadline (20 minutes with Razorpay). Connect a payment provider under <a href="/meet?tab=integrations">Calendars &amp; apps</a>.</p></section>
       <section class="card card-plain"><h2>After booking</h2>
         <label for="confirmation_message">Message on the confirmation page and email</label><textarea id="confirmation_message" name="confirmation_message" maxlength="1000" ${lockAttr('confirmation_message')}>${type.confirmation_message}</textarea>
         <label for="redirect_url">Or send invitees to your own page (https://…)</label><input id="redirect_url" name="redirect_url" type="url" value="${type.redirect_url || ''}"></section>
@@ -617,7 +617,8 @@ export async function booking(ctx) {
         <label for="guests">Add guests (optional)</label><span class="hint" id="guests-hint">Email addresses separated by commas. They receive the invitation too.</span><input id="guests" name="guests" aria-describedby="guests-hint" autocomplete="off">
         <input class="visually-hidden" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
         <div data-form-status tabindex="-1"></div>
-        <div class="actions"><button class="btn btn-primary" type="submit">${event.price ? `Continue to payment (${money(event.price.amount_cents, event.price.currency)})` : 'Confirm appointment'}</button></div>
+        ${event.price?.fee_policy?.customer_pays_processing ? html`<p class="hint">Appointment price: ${money(event.price.amount_cents, event.price.currency)}. Razorpay will show its processing fee and applicable tax before you pay. No extra Schedora fee is added.</p>` : ''}
+        <div class="actions"><button class="btn btn-primary" type="submit">${event.price ? `Continue to payment (${money(event.price.amount_cents, event.price.currency)}${event.price.fee_policy?.customer_pays_processing ? ' + Razorpay fees' : ''})` : 'Confirm appointment'}</button></div>
       </form>`);
     const form = $('#invitee-form');
     const updatePhone = () => {
@@ -647,6 +648,10 @@ export async function booking(ctx) {
         if (data.phone) body.phone = data.phone;
         const result = await api('POST', base + '/bookings', body, { 'Idempotency-Key': state.key });
         if (result.checkout?.url) { location.href = result.checkout.url; return; }
+        if (result.booking.status === 'pending' && result.manage_token) {
+          if (result.checkout_error) toast(result.checkout_error);
+          ctx.navigate(`/meet/manage/${result.manage_token}`); return;
+        }
         showConfirmation(result);
       } catch (error) {
         button.textContent = 'Confirm appointment';
@@ -693,7 +698,13 @@ export async function manage(ctx) {
   setTitle('Manage appointment · Meet by Schedora');
   mount(ctx.main, html`<div class="container page">${loading()}</div>`);
   let data;
-  try { data = await api('GET', `/api/public/bookings/${token}`); }
+  try {
+    data = await api('GET', `/api/public/bookings/${token}`);
+    if (ctx.query.get('razorpay_payment_link_id')) {
+      await api('POST', `/api/public/bookings/${token}/verify-payment`);
+      data = await api('GET', `/api/public/bookings/${token}`);
+    }
+  }
   catch (error) {
     if (error.status === 404) return mount(ctx.main, html`<div class="container page"><h1>This link is not valid</h1><p>Check that you used the newest link from your confirmation email. If you rescheduled, an updated email contains a new link.</p></div>`);
     throw error;
@@ -713,7 +724,8 @@ export async function manage(ctx) {
     <span class="tag">Your appointment</span><h1>${booking.event.title}</h1>
     <dl class="confirm-facts"><dt>With</dt><dd>${booking.event.host_name}</dd><dt>When</dt><dd>${fmtFull(booking.starts_at, zone)} (${zone.replace(/_/g, ' ')})</dd>
       <dt>Where</dt><dd>${booking.location?.display || 'The host will share the location'}</dd><dt>Reference</dt><dd>${booking.reference}</dd><dt>Status</dt><dd>${badge(booking.status)}</dd>
-      ${booking.payment ? html`<dt>Payment</dt><dd>${money(booking.payment.amount_cents, booking.payment.currency)} · ${booking.payment.status}</dd>` : ''}</dl>
+      ${booking.payment ? html`<dt>Appointment payment</dt><dd>${money(booking.payment.amount_cents, booking.payment.currency)} · ${booking.payment.status}</dd>` : ''}</dl>
+    ${booking.status === 'canceled' && booking.payment?.status === 'paid' ? notice('warn', html`<p>A payment was received for this canceled appointment. Contact the host to review your refund. This time has not been rebooked.</p>`) : ''}
     ${status}
     ${data.can_change ? html`<div class="actions" id="manage-actions"><button class="btn btn-primary" id="reschedule">Reschedule</button><button class="btn btn-danger" id="cancel">Cancel appointment</button>
       <a class="btn" href="/api/public/bookings/${token}/ics" download>Add to calendar</a></div><div id="reschedule-panel"></div>` : ''}
