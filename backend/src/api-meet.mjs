@@ -12,6 +12,7 @@ import { closePoll, confirmPoll, createPoll, deletePoll, getPoll, listPolls, pub
 import { analytics } from './meet/analytics.mjs';
 import { connectStripe } from './meet/payments.mjs';
 import { addFollowUp, addNote, createContact, deleteContact, deleteNote, getContact, listContacts, updateContact } from './platform/contacts.mjs';
+import { queueEmail, deliverEmail } from './platform/email.mjs';
 
 // Meet routes: host management (workspace members) and public booking (invitees).
 export function registerMeetRoutes(app, router, { member, limit }) {
@@ -68,6 +69,31 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     const actor = member(ctx, 'emails.read');
     return app.db.all(`SELECT id, kind, channel, to_address, subject, status, attempts, last_error, created_at, sent_at, next_attempt_at FROM emails WHERE workspace_id = ?
       ORDER BY created_at DESC LIMIT 100`, actor.workspace.id);
+  });
+  post(ws('/emails/test'), async ctx => {
+    const actor = member(ctx, 'emails.read');
+    if (!['owner', 'admin'].includes(actor.role)) fail(403, 'forbidden', 'Only workspace administrators can send delivery checks.');
+    if (ctx.apiKey) fail(403, 'forbidden', 'Send delivery checks from the web app.');
+    const body = await ctx.json();
+    if (!['account', 'google'].includes(body.target)) fail(400, 'validation_failed', 'Choose your account or connected Google inbox.');
+    // Never accept a caller-supplied address: tests can only reach the current user's inboxes.
+    const to = body.target === 'google'
+      ? app.db.get("SELECT account FROM integrations WHERE workspace_id = ? AND user_id = ? AND provider = 'google' AND status = 'active'", actor.workspace.id, ctx.user.id)?.account
+      : ctx.user.email;
+    if (!to) fail(400, 'not_connected', 'Connect your Google account first.');
+    if (app.config.emailProvider !== 'http') fail(409, 'email_not_configured', 'A real email provider is not configured yet.');
+    limit(ctx, 'email-test', 6, 3600000);
+    // A persisted hourly key also deduplicates double clicks and checks after a restart.
+    const id = queueEmail(app, {
+      workspaceId: actor.workspace.id,
+      key: `delivery-test:${actor.workspace.id}:${ctx.user.id}:${body.target}:${Math.floor(app.now() / 3600000)}`,
+      kind: 'delivery_test', to, subject: 'Schedora email delivery check',
+      body: 'This is the email delivery check you requested from Schedora. Your sending configuration is working. No appointment was created.'
+    });
+    await deliverEmail(app, id);
+    app.nudge();
+    const result = app.db.get('SELECT status, last_error FROM emails WHERE id = ?', id);
+    return { to, status: result.status, error: result.last_error, provider: 'http' };
   });
 
   // ---- Calendars ----
