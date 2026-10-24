@@ -115,8 +115,9 @@ test('backup and restore round-trip (recovery drill)', () => {
     restore(file, path);
     const restored = new DatabaseSync(path);
     assert.equal(restored.prepare("SELECT name FROM workspaces WHERE id = 'w1'").get().name, 'Before');
-    assert.equal(restored.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 1);
+    const migrations = restored.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count;
     restored.close();
+    assert.ok(migrations >= 2, 'all migrations present after restore');
     assert.ok(readFileSync(file).length > 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

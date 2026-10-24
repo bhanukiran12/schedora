@@ -5,8 +5,9 @@ import { deliverEmail, queueEmail } from '../platform/email.mjs';
 import { entitlementsFor, consumeQuota } from '../billing/entitlements.mjs';
 import { answerText } from '../shared/forms-logic.mjs';
 import { formatInstant } from '../meet/bookings.mjs';
+import { enqueueWebhooks } from '../platform/developer.mjs';
 
-export const TRIGGERS = ['meet.booking.created', 'forms.response.created'];
+export const TRIGGERS = ['meet.booking.created', 'meet.booking.canceled', 'meet.booking.rescheduled', 'forms.response.created'];
 const MAX_ATTEMPTS = 5;
 const backoff = attempts => Math.min(3600000, 30000 * 2 ** (attempts - 1));
 
@@ -19,7 +20,7 @@ function normalizeAction(type, config, triggerType) {
   }
   let to = config.to;
   if (to === 'invitee' || to === 'host') {
-    if (triggerType !== 'meet.booking.created') invalid('action_config.to', 'Invitee and host recipients need a Meet booking trigger.');
+    if (!triggerType.startsWith('meet.booking.')) invalid('action_config.to', 'Invitee and host recipients need a Meet booking trigger.');
   } else if (typeof to === 'string' && to.startsWith('field:')) {
     if (triggerType !== 'forms.response.created') invalid('action_config.to', 'Answer recipients need a Forms response trigger.');
     if (!/^field:[a-z0-9_]{1,40}$/.test(to)) invalid('action_config.to', 'Choose an email question.');
@@ -36,7 +37,7 @@ function normalize(app, workspaceId, body, current) {
   if (body.trigger_source !== undefined || !current) {
     const source = body.trigger_source || null;
     if (source) {
-      const table = value.trigger_type === 'meet.booking.created' ? 'event_types' : 'forms';
+      const table = value.trigger_type.startsWith('meet.') ? 'event_types' : 'forms';
       if (!app.db.get(`SELECT 1 FROM ${table} WHERE id = ? AND workspace_id = ?`, source, workspaceId)) invalid('trigger_source', 'Choose an item from this workspace.');
     }
     value.trigger_source = source;
@@ -92,7 +93,7 @@ export function deleteFlow(app, workspaceId, id) {
 // ---- Rendering -----------------------------------------------------------------------------
 
 function loadContext(app, run) {
-  if (run.event_type === 'meet.booking.created') {
+  if (run.event_type.startsWith('meet.booking.')) {
     const row = app.db.get(`SELECT b.*, e.title AS event_title, e.location, e.timezone AS host_timezone, u.name AS host_name, u.email AS host_email
       FROM bookings b JOIN event_types e ON e.id = b.event_type_id JOIN users u ON u.id = b.host_id WHERE b.id = ? AND b.workspace_id = ?`, run.subject_id, run.workspace_id);
     if (!row || row.anonymized_at) return null;
@@ -130,7 +131,7 @@ function recipient(config, context) {
 
 export function simulateFlow(app, workspaceId, id) {
   const flow = getFlow(app, workspaceId, id);
-  const sample = flow.trigger_type === 'meet.booking.created'
+  const sample = flow.trigger_type.startsWith('meet.')
     ? { 'invitee.name': 'Sample Invitee', 'invitee.email': 'invitee@example.com', 'booking.reference': 'SCH-SAMPLE', 'booking.start': 'Monday, 2 November 2026 at 10:00 (Asia/Kolkata)', 'booking.start_host': 'Monday, 2 November 2026 at 10:00 (Asia/Kolkata)', 'event.title': 'Sample event', 'event.location': 'Online', 'host.name': 'Sample Host' }
     : { 'form.title': 'Sample form', 'response.id': 'sample-response' };
   const config = flow.action_config;
@@ -157,6 +158,7 @@ export function dispatchEvent(app, event) {
       app.db.run(`INSERT INTO flow_runs (id, workspace_id, flow_id, event_id, event_type, subject_id, status, next_attempt_at, last_error, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, randomUUID(), event.workspace_id, flow.id, event.id, event.type, event.subject_id, status, now, error, now, now);
     }
+    enqueueWebhooks(app, event);
     app.db.run('UPDATE outbox SET dispatched_at = ? WHERE id = ?', now, event.id);
   });
 }

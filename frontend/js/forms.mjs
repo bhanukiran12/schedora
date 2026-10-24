@@ -17,6 +17,7 @@ function inputFor(field, value, labelText) {
     case 'long_text': return html`${label}${help}<textarea ${common} maxlength="5000">${value || ''}</textarea>`;
     case 'email': return html`${label}${help}<input ${common} type="email" maxlength="254" autocomplete="email" value="${value || ''}">`;
     case 'date': return html`${label}${help}<input ${common} type="date" value="${value || ''}">`;
+    case 'phone': return html`${label}${help}<input ${common} type="tel" maxlength="30" autocomplete="tel" value="${value || ''}">`;
     case 'single_choice':
     case 'multiple_choice': {
       const type = field.type === 'single_choice' ? 'radio' : 'checkbox';
@@ -35,6 +36,7 @@ function readAnswer(form, field) {
 }
 
 // Renders a form definition. In preview mode nothing is submitted.
+export { inputFor, readAnswer };
 export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit } = {}) {
   const answers = {};
   let position = 0; // page index (classic) or question index (conversational)

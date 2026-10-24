@@ -18,14 +18,25 @@ export function migrate(db) {
   const applied = new Set(db.prepare('SELECT name FROM schema_migrations').all().map(row => row.name));
   for (const name of readdirSync(migrationsDir).filter(file => file.endsWith('.sql')).sort()) {
     if (applied.has(name)) continue;
+    const sql = readFileSync(new URL(name, migrationsDir), 'utf8');
+    // Table rebuilds follow SQLite's procedure: enforcement off (so dropping a parent table does not
+    // cascade), then a foreign key check before commit. The pragma only works outside a transaction.
+    const rebuild = sql.includes('-- migrate: foreign_keys_off');
+    if (rebuild) db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(readFileSync(new URL(name, migrationsDir), 'utf8'));
+      db.exec(sql);
+      if (rebuild) {
+        const violations = db.prepare('PRAGMA foreign_key_check').all();
+        if (violations.length) throw new Error('foreign key violations: ' + JSON.stringify(violations.slice(0, 3)));
+      }
       db.prepare('INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)').run(name, Date.now());
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
       throw new Error(`Migration ${name} failed: ${error.message}`);
+    } finally {
+      if (rebuild) db.exec('PRAGMA foreign_keys = ON');
     }
   }
 }

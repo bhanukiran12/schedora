@@ -30,11 +30,16 @@ export function validateFeedUrl(value) {
   return url.href;
 }
 
-// Fetches a feed with SSRF protection: public HTTPS hosts only, no redirects to other hosts, size and time limits.
-export async function fetchFeed(url, fetchImpl = fetch, resolve = lookup) {
+// Rejects URLs whose host resolves to a private, loopback or link-local address (SSRF protection).
+export async function assertPublicHost(url, resolve = lookup) {
   const { hostname } = new URL(url);
   const addresses = isIP(hostname) ? [{ address: hostname }] : await resolve(hostname, { all: true });
-  if (!addresses.length || addresses.some(entry => isPrivateAddress(entry.address))) throw Object.assign(new Error('Calendar host is not reachable from Schedora.'), { permanent: true });
+  if (!addresses.length || addresses.some(entry => isPrivateAddress(entry.address))) throw Object.assign(new Error('That host is not reachable from Schedora.'), { permanent: true });
+}
+
+// Fetches a feed with SSRF protection: public HTTPS hosts only, no redirects to other hosts, size and time limits.
+export async function fetchFeed(url, fetchImpl = fetch, resolve = lookup) {
+  await assertPublicHost(url, resolve);
   const response = await fetchImpl(url, { redirect: 'manual', signal: AbortSignal.timeout(10000), headers: { Accept: 'text/calendar' } });
   if ([401, 403, 404, 410].includes(response.status)) throw Object.assign(new Error(`Calendar access was revoked or the address changed (HTTP ${response.status}).`), { revoked: true });
   if (response.status >= 300 && response.status < 400) throw Object.assign(new Error('Calendar address redirects elsewhere. Copy the final address.'), { permanent: true });
@@ -54,25 +59,39 @@ export async function fetchFeed(url, fetchImpl = fetch, resolve = lookup) {
   return text;
 }
 
-export function getConnection(app, workspaceId, userId) {
-  const row = app.db.get('SELECT id, provider, status, last_synced_at, last_error, created_at FROM calendar_connections WHERE workspace_id = ? AND user_id = ?', workspaceId, userId);
-  if (!row) return null;
-  return { ...row, busy_count: app.db.get('SELECT COUNT(*) AS count FROM busy_blocks WHERE connection_id = ?', row.id).count };
+const MAX_CALENDARS = 6;
+
+export function listConnections(app, workspaceId, userId) {
+  return app.db.all(`SELECT id, provider, label, status, last_synced_at, last_error, created_at,
+      (SELECT COUNT(*) FROM busy_blocks b WHERE b.connection_id = c.id) AS busy_count
+    FROM calendar_connections c WHERE workspace_id = ? AND user_id = ? ORDER BY created_at`, workspaceId, userId);
 }
 
+export function getConnection(app, workspaceId, userId) {
+  return listConnections(app, workspaceId, userId)[0] || null;
+}
+
+// Adds an ICS feed; the same address again replaces the earlier connection.
 export async function connectCalendar(app, workspaceId, userId, body) {
   const feedUrl = validateFeedUrl(body.feed_url);
+  const label = typeof body.label === 'string' ? body.label.trim().slice(0, 60) : '';
   const id = randomUUID();
   app.db.transaction(() => {
-    app.db.run('DELETE FROM calendar_connections WHERE workspace_id = ? AND user_id = ?', workspaceId, userId);
-    app.db.run("INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, status, created_at) VALUES (?, ?, ?, 'ics', ?, 'pending', ?)", id, workspaceId, userId, feedUrl, app.now());
+    app.db.run("DELETE FROM calendar_connections WHERE workspace_id = ? AND user_id = ? AND provider = 'ics' AND feed_url = ?", workspaceId, userId, feedUrl);
+    if (app.db.get('SELECT COUNT(*) AS count FROM calendar_connections WHERE workspace_id = ? AND user_id = ?', workspaceId, userId).count >= MAX_CALENDARS) {
+      fail(409, 'limit_reached', `Connect up to ${MAX_CALENDARS} calendars.`);
+    }
+    app.db.run("INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, created_at) VALUES (?, ?, ?, 'ics', ?, ?, 'pending', ?)",
+      id, workspaceId, userId, feedUrl, label || new URL(feedUrl).hostname, app.now());
   });
   await syncConnection(app, id);
-  return getConnection(app, workspaceId, userId);
+  return listConnections(app, workspaceId, userId).find(connection => connection.id === id);
 }
 
-export function disconnectCalendar(app, workspaceId, userId) {
-  const result = app.db.run('DELETE FROM calendar_connections WHERE workspace_id = ? AND user_id = ?', workspaceId, userId);
+export function disconnectCalendar(app, workspaceId, userId, connectionId) {
+  const result = connectionId
+    ? app.db.run('DELETE FROM calendar_connections WHERE id = ? AND workspace_id = ? AND user_id = ?', connectionId, workspaceId, userId)
+    : app.db.run('DELETE FROM calendar_connections WHERE workspace_id = ? AND user_id = ?', workspaceId, userId);
   if (!result.changes) fail(404, 'not_found', 'No calendar is connected.');
 }
 
@@ -81,8 +100,9 @@ export async function syncConnection(app, id) {
   if (!connection) return;
   const now = app.now();
   try {
-    const text = await app.fetchCalendar(connection.feed_url);
-    const busy = parseBusy(text, { from: now - 86400000, to: now + 366 * 86400000 });
+    const busy = connection.provider === 'ics'
+      ? parseBusy(await app.fetchCalendar(connection.feed_url), { from: now - 86400000, to: now + 366 * 86400000 })
+      : await app.oauthBusy(connection, { from: now - 86400000, to: now + 120 * 86400000 });
     app.db.transaction(() => {
       if (!app.db.get('SELECT 1 FROM calendar_connections WHERE id = ?', id)) return;
       app.db.run('DELETE FROM busy_blocks WHERE connection_id = ?', id);

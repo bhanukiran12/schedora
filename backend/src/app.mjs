@@ -4,8 +4,10 @@ import { loadConfig, releaseWarnings } from './config.mjs';
 import { createRateLimiter, send, clientAddress } from './http.mjs';
 import { createApi } from './api.mjs';
 import { createWeb, isSecure, securityHeaders } from './web.mjs';
-import { createEmailProvider } from './platform/email.mjs';
-import { fetchFeed } from './meet/calendar.mjs';
+import { createEmailProvider, createSmsProvider } from './platform/email.mjs';
+import { createPayments } from './meet/payments.mjs';
+import { oauthBusy } from './platform/oauth.mjs';
+import { assertPublicHost, fetchFeed } from './meet/calendar.mjs';
 import { createWorker } from './worker.mjs';
 
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
@@ -20,6 +22,10 @@ export function createApp(options = {}) {
     csp: CSP,
     now: options.now || (() => Date.now()),
     emailProvider: options.emailProvider || createEmailProvider(config),
+    smsProvider: options.smsProvider || createSmsProvider(config),
+    fetchWebhook: options.fetchWebhook || ((url, init) => fetch(url, init)),
+    assertPublicHost: options.assertPublicHost || (url => assertPublicHost(url)),
+    fetchProvider: options.fetchProvider || ((url, init) => fetch(url, init)),
     fetchCalendar: options.fetchCalendar || (url => fetchFeed(url)),
     rateLimit: createRateLimiter(),
     analytics: new Map(),
@@ -28,6 +34,8 @@ export function createApp(options = {}) {
       process.stdout.write(JSON.stringify({ time: new Date().toISOString(), level, message, ...fields }) + '\n');
     })
   };
+  app.payments = createPayments(app, (url, init) => app.fetchProvider(url, init));
+  app.oauthBusy = (connection, range) => oauthBusy(app, connection, range);
   app.worker = createWorker(app, { intervalMs: config.workerIntervalMs });
   app.nudge = () => app.worker.nudge();
   const api = createApi(app);

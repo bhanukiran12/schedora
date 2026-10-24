@@ -30,6 +30,21 @@ export function loadConfig(env = process.env, overrides = {}) {
     emailHttpUrl: env.EMAIL_HTTP_URL || '',
     emailHttpToken: env.EMAIL_HTTP_TOKEN || '',
     emailFrom: env.EMAIL_FROM || `Schedora <no-reply@${productDomain}>`,
+    smsProvider: env.SMS_PROVIDER || 'outbox',
+    twilioAccountSid: env.TWILIO_ACCOUNT_SID || '',
+    twilioAuthToken: env.TWILIO_AUTH_TOKEN || '',
+    twilioFrom: env.TWILIO_FROM || '',
+    encryptionKey: env.APP_ENCRYPTION_KEY || '',
+    allowTestPayments: env.ALLOW_TEST_PAYMENTS === 'true',
+    // Public address of this API, for webhook URLs given to providers (defaults to BASE_URL, which proxies /api).
+    apiBaseUrl: (env.API_BASE_URL || '').replace(/\/$/, ''),
+    google: { clientId: env.GOOGLE_CLIENT_ID || '', clientSecret: env.GOOGLE_CLIENT_SECRET || '' },
+    microsoft: { clientId: env.MICROSOFT_CLIENT_ID || '', clientSecret: env.MICROSOFT_CLIENT_SECRET || '' },
+    zoom: { clientId: env.ZOOM_CLIENT_ID || '', clientSecret: env.ZOOM_CLIENT_SECRET || '' },
+    anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    aiModel: env.AI_MODEL || 'claude-sonnet-5-5',
+    inboundEmailSecret: env.INBOUND_EMAIL_SECRET || '',
+    assistAddress: env.ASSIST_ADDRESS || `assist@${productDomain}`,
     operator: {
       name: env.OPERATOR_NAME || '',
       contact: env.OPERATOR_CONTACT || '',
@@ -47,6 +62,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     .map(origin => new RegExp('^' + origin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+') + '$', 'i'));
   if (!['open', 'enforced'].includes(config.billingMode)) throw new Error('BILLING_MODE must be open or enforced.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
+  if (config.smsProvider === 'twilio' && (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioFrom)) throw new Error('SMS_PROVIDER=twilio needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.');
   return config;
 }
 
@@ -61,7 +77,12 @@ export function publicConfig(config) {
     analytics: config.analytics,
     billingMode: config.billingMode,
     operator: config.operator,
-    providers: { email: config.emailProvider, calendar: 'ICS feed', billing: config.billingProvider }
+    providers: { email: config.emailProvider, sms: config.smsProvider, calendar: 'ICS feed', billing: config.billingProvider },
+    integrations: {
+      google: Boolean(config.google.clientId), microsoft: Boolean(config.microsoft.clientId), zoom: Boolean(config.zoom.clientId),
+      ai: Boolean(config.anthropicApiKey), testPayments: !config.production || config.allowTestPayments
+    },
+    assistAddress: config.assistAddress
   };
 }
 
@@ -72,5 +93,6 @@ export function releaseWarnings(config) {
   if (config.emailProvider === 'outbox') warnings.push('Email provider is the local outbox; no email leaves the server.');
   if (config.billingProvider !== 'test' && !config.billingWebhookSecret) warnings.push('No payment provider webhook secret is configured.');
   if (config.billingMode === 'open') warnings.push('Billing mode is open: every workspace has evaluation access to all products.');
+  if (config.production && !config.encryptionKey) warnings.push('APP_ENCRYPTION_KEY is not set: integrations (calendars, Stripe, SSO) cannot be connected.');
   return warnings;
 }

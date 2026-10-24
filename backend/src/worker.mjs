@@ -1,6 +1,9 @@
 import { deliverDueEmails } from './platform/email.mjs';
 import { dispatchOutbox, processDueRuns } from './flow/service.mjs';
 import { syncDueCalendars } from './meet/calendar.mjs';
+import { expireHolds } from './meet/bookings.mjs';
+import { deliverWebhooks } from './platform/developer.mjs';
+import { syncMeetingCalendars } from './platform/oauth.mjs';
 
 const DAY = 86400000;
 
@@ -13,13 +16,16 @@ export function applyRetention(app) {
     for (const workspace of app.db.all('SELECT id, retention_days FROM workspaces')) {
       const cutoff = now - workspace.retention_days * DAY;
       removed.responses += app.db.run('DELETE FROM responses WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff).changes;
-      removed.bookings += app.db.run(`UPDATE bookings SET invitee_name = 'Removed after retention period', invitee_email = 'removed@invalid', notes = '', cancel_reason = NULL, anonymized_at = ?
+      removed.bookings += app.db.run(`UPDATE bookings SET invitee_name = 'Removed after retention period', invitee_email = 'removed@invalid', invitee_phone = NULL, notes = '', answers = '{}', guests = '[]', cancel_reason = NULL, anonymized_at = ?
         WHERE workspace_id = ? AND ends_at < ? AND anonymized_at IS NULL`, now, workspace.id, cutoff).changes;
       app.db.run('DELETE FROM flow_runs WHERE workspace_id = ? AND created_at < ? AND status IN (\'succeeded\', \'failed\')', workspace.id, cutoff);
+      app.db.run('DELETE FROM transcripts WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff);
+      app.db.run('DELETE FROM poll_votes WHERE poll_id IN (SELECT id FROM polls WHERE workspace_id = ? AND created_at < ?)', workspace.id, cutoff);
     }
     removed.emails = app.db.run("DELETE FROM emails WHERE created_at < ? AND status IN ('sent', 'failed', 'canceled')", now - 30 * DAY).changes;
     app.db.run('DELETE FROM sessions WHERE expires_at < ?', now);
     app.db.run('DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < ?', now - 30 * DAY);
+    app.db.run("DELETE FROM webhook_deliveries WHERE status IN ('delivered', 'failed') AND created_at < ?", now - 30 * DAY);
   });
   return removed;
 }
@@ -37,9 +43,12 @@ export function createWorker(app, { intervalMs = 2000 } = {}) {
     try {
       do {
         again = false;
+        expireHolds(app);
         dispatchOutbox(app);
         await processDueRuns(app);
+        await syncMeetingCalendars(app);
         await deliverDueEmails(app);
+        await deliverWebhooks(app);
         await syncDueCalendars(app);
         if (app.now() - lastRetention > 3600000) { applyRetention(app); lastRetention = app.now(); }
       } while (again);

@@ -33,15 +33,43 @@ export function createEmailProvider(config, fetchImpl = fetch) {
   return { name: 'outbox', async send() { return { id: 'local-' + randomUUID() }; } };
 }
 
+// SMS providers. 'outbox' records messages locally; 'twilio' uses the Twilio Messages API.
+export function createSmsProvider(config, fetchImpl = fetch) {
+  if (config.smsProvider === 'twilio') {
+    return {
+      name: 'twilio',
+      async send(message) {
+        const response = await fetchImpl(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.twilioAccountSid)}/Messages.json`, {
+          method: 'POST',
+          headers: { Authorization: 'Basic ' + Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ To: message.to, From: config.twilioFrom, Body: message.body.slice(0, 1500) }),
+          signal: AbortSignal.timeout(10000)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(`SMS provider returned ${response.status}${result.message ? ': ' + result.message : ''}`);
+          error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429;
+          throw error;
+        }
+        return { id: result.sid || null };
+      }
+    };
+  }
+  return { name: 'outbox', async send() { return { id: 'local-sms-' + randomUUID() }; } };
+}
+
+// Placeholder resolved at delivery time, so a video link created after booking still reaches the email.
+export const VIDEO_PLACEHOLDER = '[[VIDEO_URL]]';
+
 // Queues a message once per idempotency key. Returns the email id (existing or new).
-export function queueEmail(app, { workspaceId, key, kind, relatedId, to, subject, body, ics, sendAt }) {
+export function queueEmail(app, { workspaceId, key, kind, relatedId, to, subject, body, ics, sendAt, channel = 'email' }) {
   const now = app.now();
   const existing = app.db.get('SELECT id FROM emails WHERE idempotency_key = ?', key);
   if (existing) return existing.id;
   const id = randomUUID();
   const status = sendAt && sendAt > now ? 'scheduled' : 'queued';
-  app.db.run(`INSERT INTO emails (id, workspace_id, idempotency_key, kind, related_id, to_address, subject, body, ics, status, next_attempt_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, workspaceId, key, kind, relatedId ?? null, to, subject, body, ics ?? null, status, sendAt && sendAt > now ? sendAt : now, now);
+  app.db.run(`INSERT INTO emails (id, workspace_id, idempotency_key, kind, related_id, to_address, subject, body, ics, status, next_attempt_at, created_at, channel)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, workspaceId, key, kind, relatedId ?? null, to, subject, body, ics ?? null, status, sendAt && sendAt > now ? sendAt : now, now, channel);
   return id;
 }
 
@@ -57,8 +85,19 @@ export async function deliverEmail(app, id) {
     WHERE id = ? AND status IN ('queued', 'scheduled') AND next_attempt_at <= ? AND (claimed_until IS NULL OR claimed_until < ?)`, now + 120000, id, now, now);
   if (!claim.changes) return app.db.get('SELECT status FROM emails WHERE id = ?', id)?.status;
   const message = app.db.get('SELECT * FROM emails WHERE id = ?', id);
+  let body = message.body;
+  if (body.includes(VIDEO_PLACEHOLDER)) {
+    const meeting = app.db.get('SELECT m.video_url, m.created_at FROM bookings b JOIN meetings m ON m.id = b.meeting_id WHERE b.id = ?', message.related_id);
+    // Give video-link creation a short head start before sending without it.
+    if (meeting && !meeting.video_url && now - meeting.created_at < 120000) {
+      app.db.run("UPDATE emails SET status = 'queued', next_attempt_at = ?, claimed_until = NULL, attempts = attempts - 1 WHERE id = ?", now + 15000, id);
+      return 'retrying';
+    }
+    body = body.replaceAll(VIDEO_PLACEHOLDER, meeting?.video_url || 'Your host will share the video link before the meeting.');
+  }
   try {
-    const result = await app.emailProvider.send({ to: message.to_address, subject: message.subject, body: message.body, ics: message.ics, idempotencyKey: message.idempotency_key });
+    const provider = message.channel === 'sms' ? app.smsProvider : app.emailProvider;
+    const result = await provider.send({ to: message.to_address, subject: message.subject, body, ics: message.ics, idempotencyKey: message.idempotency_key });
     app.db.run("UPDATE emails SET status = 'sent', sent_at = ?, provider_message_id = ?, last_error = NULL, claimed_until = NULL WHERE id = ?", app.now(), result?.id ?? null, id);
     return 'sent';
   } catch (error) {

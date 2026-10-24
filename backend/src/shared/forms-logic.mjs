@@ -5,18 +5,19 @@ export const FIELD_TYPES = {
   short_text: 'Short text',
   long_text: 'Long text',
   email: 'Email',
+  phone: 'Phone',
   single_choice: 'Single choice',
   multiple_choice: 'Multiple choice',
   date: 'Date',
   page_break: 'Page break'
 };
 export const CONDITION_OPS = { equals: 'is', not_equals: 'is not', contains: 'includes', answered: 'is answered', not_answered: 'is not answered' };
-const LIMITS = { short_text: 300, long_text: 5000, email: 254 };
+const LIMITS = { short_text: 300, long_text: 5000, email: 254, phone: 30 };
 const EMAIL = /^[^\s@<>()[\]\\,;:"]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 
 const isAnswered = value => Array.isArray(value) ? value.length > 0 : value != null && String(value).trim() !== '';
 
-function conditionHolds(condition, answers) {
+export function conditionHolds(condition, answers) {
   if (!condition) return true;
   const value = answers[condition.field];
   switch (condition.op) {
@@ -85,6 +86,7 @@ export function checkAnswer(field, raw) {
   if (!isAnswered(value)) return field.required ? { error: field.type.endsWith('choice') ? 'Choose an option.' : 'This question is required.' } : { value: field.type === 'multiple_choice' ? [] : '' };
   if (LIMITS[field.type] && value.length > LIMITS[field.type]) return { error: `Use ${LIMITS[field.type]} characters or fewer.` };
   if (field.type === 'email' && !EMAIL.test(value)) return { error: 'Enter a valid email address, like name@example.com.' };
+  if (field.type === 'phone' && !/^\+?[0-9][0-9 ().-]{5,25}$/.test(value)) return { error: 'Enter a phone number with country code, like +91 98765 43210.' };
   if (field.type === 'single_choice' && !field.options.some(option => option.id === value)) return { error: 'Choose from the listed options.' };
   if (field.type === 'date') {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(value + 'T00:00:00Z');

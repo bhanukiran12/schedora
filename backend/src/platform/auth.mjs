@@ -78,7 +78,7 @@ export function createWorkspaceRecord(app, ownerId, name) {
   const id = randomUUID();
   // Workspace slugs share the /meet/<workspace>/<event> namespace with host pages.
   let base = slugify(name).slice(0, 40);
-  if (['event-types', 'manage', 'new', 'bookings'].includes(base) || base.length < 2) base = `${base}-workspace`.replace(/^-/, '');
+  if (['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api'].includes(base) || base.length < 2) base = `${base}-workspace`.replace(/^-/, '');
   let slug = base;
   for (let attempt = 2; app.db.get('SELECT 1 FROM workspaces WHERE slug = ?', slug); attempt++) slug = `${base}-${attempt}`;
   const now = app.now();
@@ -89,6 +89,8 @@ export function createWorkspaceRecord(app, ownerId, name) {
 
 export async function signIn(app, body) {
   const address = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const { assertPasswordAllowed } = await import('./sso.mjs');
+  assertPasswordAllowed(app, address);
   const secret = typeof body.password === 'string' ? body.password : '';
   const user = address && app.db.get('SELECT id, password_hash FROM users WHERE email = ?', address);
   const ok = user ? await verifyPassword(secret, user.password_hash) : (await verifyPassword(secret, await getDummyHash()), false);

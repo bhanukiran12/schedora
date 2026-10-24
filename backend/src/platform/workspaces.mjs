@@ -1,5 +1,5 @@
 import { fail } from '../http.mjs';
-import { email as validEmail, integer, oneOf, text } from '../validate.mjs';
+import { email as validEmail, integer, invalid, oneOf, slug as validSlug, text } from '../validate.mjs';
 import { createWorkspaceRecord } from './auth.mjs';
 import { entitlementsFor } from '../billing/entitlements.mjs';
 
@@ -22,7 +22,13 @@ export const PERMISSIONS = {
   'flows.read': ALL,
   'flows.manage': ADMINS,
   'tasks.manage': ALL,
-  'emails.read': ALL
+  'emails.read': ALL,
+  'contacts.read': ALL,
+  'contacts.manage': ALL,
+  'contacts.delete': ADMINS,
+  'integrations.manage': ADMINS,
+  'developer.manage': ADMINS,
+  'audit.read': ADMINS
 };
 
 export const can = (role, permission) => PERMISSIONS[permission].includes(role);
@@ -31,11 +37,11 @@ export const can = (role, permission) => PERMISSIONS[permission].includes(role);
 // identifiers cannot be probed; members without the permission get 403.
 export function requireMember(app, user, workspaceId, permission) {
   if (!user) fail(401, 'unauthenticated', 'Sign in to continue.');
-  const row = typeof workspaceId === 'string' && app.db.get(`SELECT w.id, w.name, w.slug, w.retention_days, m.role
+  const row = typeof workspaceId === 'string' && app.db.get(`SELECT w.id, w.name, w.slug, w.retention_days, w.brand_color, w.logo, w.welcome_message, m.role
     FROM workspaces w JOIN memberships m ON m.workspace_id = w.id WHERE w.id = ? AND m.user_id = ?`, workspaceId, user.id);
   if (!row) fail(404, 'not_found', 'Workspace not found.');
   if (permission && !can(row.role, permission)) fail(403, 'forbidden', 'Your role does not allow this action.');
-  return { workspace: { id: row.id, name: row.name, slug: row.slug, retention_days: row.retention_days }, role: row.role };
+  return { workspace: { id: row.id, name: row.name, slug: row.slug, retention_days: row.retention_days, brand_color: row.brand_color, logo: row.logo, welcome_message: row.welcome_message }, role: row.role };
 }
 
 export function listWorkspaces(app, userId) {
@@ -50,10 +56,34 @@ export function createWorkspace(app, user, body) {
   return app.db.transaction(() => createWorkspaceRecord(app, user.id, name));
 }
 
+const RESERVED_SLUGS = ['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api'];
+const LOGO_MAX_BYTES = 200 * 1024;
+
 export function updateWorkspace(app, workspaceId, body) {
   const changes = {};
   if (body.name !== undefined) changes.name = text(body.name, 'name', { min: 1, max: 100 });
   if (body.retention_days !== undefined) changes.retention_days = integer(body.retention_days, 'retention_days', 30, 3650);
+  // Custom booking URL: /meet/<slug>
+  if (body.slug !== undefined) {
+    const value = validSlug(body.slug);
+    if (RESERVED_SLUGS.includes(value)) invalid('slug', 'This address is reserved. Choose another.');
+    if (app.db.get('SELECT 1 FROM workspaces WHERE slug = ? AND id <> ?', value, workspaceId)) invalid('slug', 'This address is already taken.');
+    changes.slug = value;
+  }
+  if (body.brand_color !== undefined) {
+    if (body.brand_color !== null && !/^#[0-9a-fA-F]{6}$/.test(body.brand_color)) invalid('brand_color', 'Use a hex color like #225C43.');
+    changes.brand_color = body.brand_color;
+  }
+  if (body.welcome_message !== undefined) changes.welcome_message = text(body.welcome_message, 'welcome_message', { max: 500, multiline: true });
+  // Logos are stored as small data URLs; SVG is refused because it can carry script.
+  if (body.logo !== undefined) {
+    if (body.logo !== null) {
+      const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.logo));
+      if (!match) invalid('logo', 'Upload a PNG, JPEG or WebP image.');
+      if (Buffer.from(match[2], 'base64').length > LOGO_MAX_BYTES) invalid('logo', 'Use an image under 200 KB.');
+    }
+    changes.logo = body.logo;
+  }
   for (const [column, value] of Object.entries(changes)) app.db.run(`UPDATE workspaces SET ${column} = ? WHERE id = ?`, value, workspaceId);
 }
 

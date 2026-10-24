@@ -2,7 +2,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, requireEntitlement } from '../billing/entitlements.mjs';
-import { answerText, definitionProblems, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
+import { answerText, conditionHolds, definitionProblems, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
+import { upsertContact } from '../platform/contacts.mjs';
+import { invalid, text } from '../validate.mjs';
 
 const pick = (object, keys) => Object.fromEntries(keys.filter(key => object[key] !== undefined).map(key => [key, object[key]]));
 
@@ -32,7 +34,7 @@ export function normalizeDefinition(input) {
 
 function present(row) {
   return {
-    id: row.id, slug: row.slug, draft: JSON.parse(row.draft), published_version: row.published_version,
+    id: row.id, slug: row.slug, draft: JSON.parse(row.draft), published_version: row.published_version, routing: row.routing ? JSON.parse(row.routing) : null,
     updated_at: row.updated_at, created_at: row.created_at, response_count: row.response_count ?? undefined,
     has_unpublished_changes: row.published_definition ? row.published_definition !== row.draft : row.published_version == null
   };
@@ -93,7 +95,7 @@ export function deleteForm(app, workspaceId, id) {
 }
 
 export function publishedForm(app, slug) {
-  const row = app.db.get(`SELECT f.id, f.workspace_id, f.slug, f.published_version, v.definition, w.name AS workspace_name
+  const row = app.db.get(`SELECT f.id, f.workspace_id, f.slug, f.published_version, f.routing, v.definition, w.name AS workspace_name
     FROM forms f JOIN form_versions v ON v.form_id = f.id AND v.version = f.published_version JOIN workspaces w ON w.id = f.workspace_id
     WHERE f.slug = ?`, String(slug));
   if (!row) fail(404, 'not_found', 'This form is not available.');
@@ -110,16 +112,18 @@ export function submitResponse(app, slug, body) {
   try {
     return app.db.transaction(() => {
       const existing = app.db.get('SELECT id, created_at FROM responses WHERE form_id = ? AND idempotency_key = ?', form.id, key);
-      if (existing) return { id: existing.id, created_at: existing.created_at, replay: true };
+      if (existing) return { id: existing.id, created_at: existing.created_at, replay: true, route: routeFor(app, form, answers) };
       requireEntitlement(app, form.workspace_id, 'forms');
       consumeQuota(app, form.workspace_id, 'responses');
       const id = randomUUID();
       const now = app.now();
-      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        id, form.workspace_id, form.id, form.published_version, JSON.stringify(answers), key, now);
+      const emailField = form.definition.fields.find(field => field.type === 'email' && answers[field.id]);
+      const contactId = emailField ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: typeof answers.name === 'string' ? answers.name : '' }) : null;
+      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, created_at, contact_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        id, form.workspace_id, form.id, form.published_version, JSON.stringify(answers), key, now, contactId);
       // The event carries identifiers only; Flow loads the answers it needs at run time.
       app.db.run("INSERT INTO outbox (id, workspace_id, type, subject_id, source_id, created_at) VALUES (?, ?, 'forms.response.created', ?, ?, ?)", randomUUID(), form.workspace_id, id, form.id, now);
-      return { id, created_at: now, replay: false };
+      return { id, created_at: now, replay: false, route: routeFor(app, form, answers) };
     });
   } finally { app.nudge?.(); }
 }
@@ -163,4 +167,63 @@ export function exportCsv(app, workspaceId, formId) {
     lines.push([row.id, new Date(row.created_at).toISOString(), ...columns.map(field => answerText(field, answers[field.id]))].map(csvCell).join(','));
   }
   return { filename: `${form.slug}-responses.csv`, body: '﻿' + lines.join('\r\n') + '\r\n' };
+}
+
+// ---- Routing (lead routing forms) -----------------------------------------------------------
+// After a response is saved, the first matching rule decides where the respondent goes: a booking
+// page pre-filled with their answers, an external URL or a message. Round-robin booking pages then
+// assign known leads to their contact owner.
+
+function normalizeAction(app, workspaceId, action, field) {
+  if (!action || !['event', 'url', 'message'].includes(action.type)) invalid(field, 'Choose a booking page, a URL or a message.');
+  if (action.type === 'event') {
+    if (!app.db.get('SELECT 1 FROM event_types WHERE id = ? AND workspace_id = ?', action.event_type_id ?? '', workspaceId)) invalid(field, 'Choose an event type from this workspace.');
+    return { type: 'event', event_type_id: action.event_type_id };
+  }
+  if (action.type === 'url') {
+    let url;
+    try { url = new URL(text(action.url, field, { min: 1, max: 2000 })); } catch { invalid(field, 'Enter a full https:// link.'); }
+    if (url.protocol !== 'https:') invalid(field, 'Links must use https.');
+    return { type: 'url', url: url.href };
+  }
+  return { type: 'message', message: text(action.message, field, { min: 1, max: 1000, multiline: true }) };
+}
+
+export function saveRouting(app, workspaceId, id, body) {
+  const form = getForm(app, workspaceId, id);
+  if (body.routing === null) {
+    app.db.run('UPDATE forms SET routing = NULL WHERE id = ?', id);
+    return getForm(app, workspaceId, id);
+  }
+  const routing = body.routing || {};
+  if (!Array.isArray(routing.rules) || routing.rules.length > 50) invalid('routing', 'Add up to 50 routing rules.');
+  const fieldIds = new Set(form.draft.fields.map(field => field.id));
+  const rules = routing.rules.map((rule, index) => {
+    const condition = rule?.condition;
+    if (!condition || !fieldIds.has(condition.field) || !['equals', 'not_equals', 'contains', 'answered', 'not_answered'].includes(condition.op)) invalid(`routing.rules.${index}`, 'Each rule needs a question and a condition.');
+    return { condition: { field: condition.field, op: condition.op, value: condition.value == null ? undefined : String(condition.value).slice(0, 300) }, action: normalizeAction(app, workspaceId, rule.action, `routing.rules.${index}.action`) };
+  });
+  const value = { rules, fallback: routing.fallback ? normalizeAction(app, workspaceId, routing.fallback, 'routing.fallback') : null };
+  app.db.run('UPDATE forms SET routing = ?, updated_at = ? WHERE id = ?', JSON.stringify(value), app.now(), id);
+  return getForm(app, workspaceId, id);
+}
+
+export function routeFor(app, form, answers) {
+  const routing = form.routing ? (typeof form.routing === 'string' ? JSON.parse(form.routing) : form.routing) : null;
+  if (!routing) return null;
+  const action = routing.rules.find(rule => conditionHolds(rule.condition, answers))?.action || routing.fallback;
+  if (!action) return null;
+  if (action.type !== 'event') return action;
+  const eventType = app.db.get(`SELECT e.slug, e.questions, w.slug AS workspace_slug FROM event_types e JOIN workspaces w ON w.id = e.workspace_id
+    WHERE e.id = ? AND e.published = 1`, action.event_type_id);
+  if (!eventType) return routing.fallback && routing.fallback.type !== 'event' ? routing.fallback : null;
+  const params = new URLSearchParams();
+  const email = form.definition.fields.find(field => field.type === 'email' && answers[field.id]);
+  if (typeof answers.name === 'string') params.set('name', answers.name);
+  if (email) params.set('email', answers[email.id]);
+  for (const question of JSON.parse(eventType.questions)) {
+    const answer = answers[question.id];
+    if (answer !== undefined) params.set('a_' + question.id, Array.isArray(answer) ? answer.join(',') : String(answer));
+  }
+  return { type: 'event', url: `/meet/${eventType.workspace_slug}/${eventType.slug}${params.toString() ? '?' + params : ''}` };
 }

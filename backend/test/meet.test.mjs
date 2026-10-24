@@ -64,9 +64,16 @@ test('the database itself rejects overlapping confirmed bookings', async () => {
     const { base, slots, type } = await bookable(env);
     const created = (await env.client().post(base + '/bookings', invitee(slots[0]), idem())).body.booking;
     const row = env.app.db.get('SELECT * FROM bookings WHERE id = ?', created.id);
-    assert.throws(() => env.app.db.run(`INSERT INTO bookings (id, reference, workspace_id, event_type_id, host_id, starts_at, ends_at, block_start, block_end, status, invitee_name, invitee_email, invitee_timezone, idempotency_key, request_hash, manage_token_hash, manage_expires_at, created_at)
-      VALUES (?, 'SCH-RAW', ?, ?, ?, ?, ?, ?, ?, 'confirmed', 'x', 'x@example.com', 'UTC', 'raw-key', 'h', 'tokenhash', 0, 0)`,
-      randomUUID(), row.workspace_id, type.id, row.host_id, row.starts_at + 600000, row.ends_at + 600000, row.starts_at + 600000, row.ends_at + 600000), /booking_overlap/);
+    // A second meeting for the same host overlapping by 10 minutes, written directly to the database.
+    const meetingId = randomUUID();
+    env.app.db.run("INSERT INTO meetings (id, workspace_id, event_type_id, starts_at, ends_at, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', 0)",
+      meetingId, row.workspace_id, type.id, row.starts_at + 600000, row.ends_at + 600000);
+    assert.throws(() => env.app.db.run('INSERT INTO meeting_hosts (meeting_id, host_id, starts_at, ends_at, block_start, block_end, active) VALUES (?, ?, ?, ?, ?, ?, 1)',
+      meetingId, row.host_id, row.starts_at + 600000, row.ends_at + 600000, row.starts_at + 600000, row.ends_at + 600000), /booking_overlap/);
+    // Reactivating a canceled overlapping host row is rejected too.
+    env.app.db.run('INSERT INTO meeting_hosts (meeting_id, host_id, starts_at, ends_at, block_start, block_end, active) VALUES (?, ?, ?, ?, ?, ?, 0)',
+      meetingId, row.host_id, row.starts_at + 600000, row.ends_at + 600000, row.starts_at + 600000, row.ends_at + 600000);
+    assert.throws(() => env.app.db.run('UPDATE meeting_hosts SET active = 1 WHERE meeting_id = ?', meetingId), /booking_overlap/);
   } finally { await env.close(); }
 });
 

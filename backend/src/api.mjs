@@ -1,24 +1,25 @@
 import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
 import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
-import { createEventType, deleteEventType, findPublishedEventType, getEventType, listEventTypes, updateEventType } from './meet/event-types.mjs';
-import { availableSlots, bookingByToken, cancelByToken, createBooking, hostCancel, listBookings, publicBooking, rescheduleByToken } from './meet/bookings.mjs';
-import { bookingIcs } from './meet/ics.mjs';
-import { connectCalendar, disconnectCalendar, getConnection, syncConnection } from './meet/calendar.mjs';
-import { createForm, deleteForm, deleteResponse, exportCsv, getForm, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { saveRouting, createForm, deleteForm, deleteResponse, exportCsv, getForm, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
 import { handleWebhook, testProviderEvent } from './billing/webhooks.mjs';
-import { addDays, isValidDate, localDate } from './time.mjs';
 import { isAllowedOrigin, publicConfig, releaseWarnings } from './config.mjs';
+import { registerMeetRoutes } from './api-meet.mjs';
+import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
+import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
+import { handleMcp } from './platform/mcp.mjs';
+import { audit, authenticateKey, createEndpoint, createKey, deleteEndpoint, listAudit, listEndpoints, listKeys, redeliver, revokeKey, updateEndpoint } from './platform/developer.mjs';
 
 export function createApi(app) {
   const router = createRouter();
-  const { get, post, patch, delete: del } = router;
+  const { get, post, patch, put, delete: del } = router;
 
   // Every private route resolves membership on the server; the workspace id in the URL is never trusted alone.
   const member = (ctx, permission) => {
+    if (ctx.apiKey && ctx.params.ws !== ctx.apiKey.workspaceId) fail(404, 'not_found', 'Workspace not found.');
     const access = requireMember(app, ctx.user, ctx.params.ws, permission);
     return { ...access, userId: ctx.user.id };
   };
@@ -68,7 +69,13 @@ export function createApi(app) {
   // ---- Workspaces ----
   post('/api/workspaces', async ctx => ({ status: 201, body: { id: createWorkspace(app, ctx.user, await ctx.json()), workspaces: listWorkspaces(app, ctx.user.id) } }));
   get('/api/workspaces/:ws', ctx => { const { workspace, role } = member(ctx, 'workspace.read'); return { ...workspace, role, entitlements: entitlementsFor(app, workspace.id) }; });
-  patch('/api/workspaces/:ws', async ctx => { const { workspace } = member(ctx, 'workspace.update'); updateWorkspace(app, workspace.id, await ctx.json()); return member(ctx).workspace; });
+  patch('/api/workspaces/:ws', async ctx => {
+    const actor = member(ctx, 'workspace.update');
+    const body = await ctx.json(400 * 1024);
+    updateWorkspace(app, actor.workspace.id, body);
+    audit(app, actor.workspace.id, actor.userId, 'workspace.updated', Object.keys(body).join(','));
+    return member(ctx).workspace;
+  });
   del('/api/workspaces/:ws', async ctx => { const { workspace } = member(ctx, 'workspace.delete'); deleteWorkspace(app, workspace.id, await ctx.json(), workspace); return { status: 204 }; });
   get('/api/workspaces/:ws/members', ctx => listMembers(app, member(ctx, 'workspace.read').workspace.id));
   post('/api/workspaces/:ws/members', async ctx => { const actor = member(ctx, 'members.manage'); addMember(app, actor, actor.workspace.id, await ctx.json()); return { status: 201, body: listMembers(app, actor.workspace.id) }; });
@@ -79,94 +86,90 @@ export function createApi(app) {
     return { status: 204 };
   });
 
-  // ---- Meet (host) ----
-  get('/api/workspaces/:ws/event-types', ctx => { const actor = member(ctx, 'meet.manage_own'); return listEventTypes(app, actor.workspace.id, actor); });
-  post('/api/workspaces/:ws/event-types', async ctx => { const actor = member(ctx, 'meet.manage_own'); return { status: 201, body: createEventType(app, actor.workspace.id, actor, await ctx.json()) }; });
-  get('/api/workspaces/:ws/event-types/:id', ctx => { const actor = member(ctx, 'meet.manage_own'); return getEventType(app, actor.workspace.id, ctx.params.id, actor); });
-  patch('/api/workspaces/:ws/event-types/:id', async ctx => { const actor = member(ctx, 'meet.manage_own'); return updateEventType(app, actor.workspace.id, actor, ctx.params.id, await ctx.json()); });
-  del('/api/workspaces/:ws/event-types/:id', ctx => { const actor = member(ctx, 'meet.manage_own'); deleteEventType(app, actor.workspace.id, actor, ctx.params.id); return { status: 204 }; });
-  get('/api/workspaces/:ws/bookings', ctx => { const actor = member(ctx, 'meet.manage_own'); return listBookings(app, actor.workspace.id, actor, ctx.query.get('scope') || 'upcoming'); });
-  post('/api/workspaces/:ws/bookings/:id/cancel', async ctx => { const actor = member(ctx, 'meet.manage_own'); hostCancel(app, actor.workspace.id, actor, ctx.params.id, await ctx.json()); return { status: 204 }; });
-  get('/api/workspaces/:ws/calendar', ctx => { const actor = member(ctx, 'meet.manage_own'); return { connection: getConnection(app, actor.workspace.id, ctx.user.id) }; });
-  post('/api/workspaces/:ws/calendar', async ctx => { const actor = member(ctx, 'meet.manage_own'); limit(ctx, 'calendar', 10); return { connection: await connectCalendar(app, actor.workspace.id, ctx.user.id, await ctx.json()) }; });
-  post('/api/workspaces/:ws/calendar/sync', async ctx => {
+  registerMeetRoutes(app, router, { member, limit });
+
+  // ---- OAuth integrations (calendars, video) ----
+  get('/api/workspaces/:ws/integrations/:provider/start', ctx => {
     const actor = member(ctx, 'meet.manage_own');
-    limit(ctx, 'calendar', 10);
-    const connection = getConnection(app, actor.workspace.id, ctx.user.id);
-    if (!connection) fail(404, 'not_found', 'No calendar is connected.');
-    await syncConnection(app, connection.id);
-    return { connection: getConnection(app, actor.workspace.id, ctx.user.id) };
+    if (ctx.apiKey) fail(403, 'forbidden', 'Connect integrations from the web app.');
+    return startOAuth(app, actor.workspace.id, actor.userId, ctx.params.provider);
   });
-  del('/api/workspaces/:ws/calendar', ctx => { const actor = member(ctx, 'meet.manage_own'); disconnectCalendar(app, actor.workspace.id, ctx.user.id); return { status: 204 }; });
-  get('/api/workspaces/:ws/emails', ctx => {
-    const actor = member(ctx, 'emails.read');
-    return app.db.all(`SELECT id, kind, to_address, subject, status, attempts, last_error, created_at, sent_at, next_attempt_at FROM emails WHERE workspace_id = ?
-      ORDER BY created_at DESC LIMIT 100`, actor.workspace.id);
+  del('/api/workspaces/:ws/integrations/:provider', ctx => {
+    const actor = member(ctx, 'meet.manage_own');
+    if (!PROVIDERS[ctx.params.provider]) fail(404, 'not_found', 'Unknown integration.');
+    disconnectIntegration(app, actor.workspace.id, actor.userId, ctx.params.provider);
+    return { status: 204 };
   });
-
-  // ---- Meet (public) ----
-  const publicEvent = ctx => {
-    const eventType = findPublishedEventType(app, ctx.params.wsSlug, ctx.params.slug);
-    if (!eventType) fail(404, 'not_found', 'This booking page is not available.');
-    return eventType;
-  };
-  const eventSummary = eventType => ({
-    title: eventType.title, description: eventType.description, location: eventType.location, duration_min: eventType.duration_min,
-    timezone: eventType.timezone, host_name: eventType.host_name, workspace_name: eventType.workspace_name, workspace_slug: eventType.workspace_slug, slug: eventType.slug
-  });
-  const slotsResponse = (eventType, ctx) => {
-    const from = ctx.query.get('from');
-    const days = Math.min(62, Number(ctx.query.get('days')) || 62);
-    const fromDate = isValidDate(from) ? addDays(from, -1) : undefined;
-    const toDate = fromDate ? addDays(from, days + 1) : undefined;
-    const available = entitlementsFor(app, eventType.workspace_id).meet.active;
-    return { timezone: eventType.timezone, slots: available ? availableSlots(app, eventType, { fromDate, toDate }).map(ms => new Date(ms).toISOString()) : [], accepting: available, today: localDate(app.now(), eventType.timezone) };
-  };
-  get('/api/public/meet/:wsSlug/:slug', ctx => eventSummary(publicEvent(ctx)), { public: true });
-  get('/api/public/meet/:wsSlug/:slug/slots', ctx => { limit(ctx, 'slots', 120); return slotsResponse(publicEvent(ctx), ctx); }, { public: true });
-  post('/api/public/meet/:wsSlug/:slug/bookings', async ctx => {
-    limit(ctx, 'booking', 20);
-    const eventType = publicEvent(ctx);
-    const body = await ctx.json();
-    if (body.website) fail(400, 'rejected', 'Submission rejected.');
+  get('/api/oauth/:provider/callback', async ctx => {
+    if (!PROVIDERS[ctx.params.provider]) fail(404, 'not_found', 'Unknown integration.');
     try {
-      const { booking, token, replay } = createBooking(app, eventType, body, ctx.request.headers['idempotency-key']);
-      return { status: replay ? 200 : 201, body: { booking: publicBooking(app, booking, eventType), manage_token: token, replay } };
+      const result = await finishOAuth(app, ctx.params.provider, ctx.query, ctx.user);
+      return { redirect: `/meet?tab=calendar&${result.ok ? 'connected=' + ctx.params.provider : 'error=denied'}` };
     } catch (error) {
-      // A lost race returns fresh options so the invitee can pick again without reloading.
-      if (error.code === 'slot_unavailable') error.details = { ...error.details, ...slotsResponse(eventType, ctx) };
-      throw error;
+      return { redirect: `/meet?tab=calendar&error=${encodeURIComponent(error.message.slice(0, 120))}` };
     }
   }, { public: true });
 
-  get('/api/public/bookings/:token', ctx => {
-    limit(ctx, 'manage', 60);
-    const { booking, eventType, expired } = bookingByToken(app, ctx.params.token);
-    return { booking: publicBooking(app, booking, eventType), expired, can_change: !expired && booking.status === 'confirmed' && Boolean(eventType.published) };
+  // ---- Single sign-on (OpenID Connect) ----
+  get('/api/workspaces/:ws/sso', ctx => getSsoConfig(app, member(ctx, 'workspace.delete').workspace.id));
+  put('/api/workspaces/:ws/sso', async ctx => {
+    const actor = member(ctx, 'workspace.delete');
+    const result = saveSsoConfig(app, actor.workspace.id, await ctx.json());
+    audit(app, actor.workspace.id, actor.userId, 'sso.updated', result.issuer);
+    return result;
+  });
+  get('/api/auth/sso/lookup', ctx => {
+    limit(ctx, 'login', 30);
+    const found = ssoWorkspaceFor(app, { email: ctx.query.get('email'), workspace: ctx.query.get('workspace') });
+    return { sso: Boolean(found), workspace: found?.slug ?? null };
   }, { public: true });
-  get('/api/public/bookings/:token/slots', ctx => {
-    limit(ctx, 'slots', 120);
-    const { eventType } = bookingByToken(app, ctx.params.token);
-    return slotsResponse(eventType, ctx);
+  get('/api/auth/sso/start', async ctx => {
+    limit(ctx, 'login', 20);
+    const found = ssoWorkspaceFor(app, { email: ctx.query.get('email'), workspace: ctx.query.get('workspace') });
+    if (!found) return { redirect: '/account?error=' + encodeURIComponent('Single sign-on is not set up for that workspace or email domain.') };
+    const { url, cookie } = await startSso(app, found.id);
+    ctx.setCookie(cookie);
+    return { redirect: url };
   }, { public: true });
-  get('/api/public/bookings/:token/ics', ctx => {
-    limit(ctx, 'manage', 60);
-    const { booking, eventType } = bookingByToken(app, ctx.params.token);
-    const ics = bookingIcs({ booking, eventType, hostName: eventType.host_name, method: booking.status === 'canceled' ? 'CANCEL' : 'PUBLISH', now: app.now() });
-    return { raw: ics, type: 'text/calendar; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${booking.reference}.ics"` } };
-  }, { public: true });
-  post('/api/public/bookings/:token/cancel', async ctx => { limit(ctx, 'manage', 20); return { booking: cancelByToken(app, ctx.params.token, await ctx.json()) }; }, { public: true });
-  post('/api/public/bookings/:token/reschedule', async ctx => {
-    limit(ctx, 'manage', 20);
-    const body = await ctx.json();
+  get('/api/auth/sso/callback', async ctx => {
     try {
-      const { booking, token } = rescheduleByToken(app, ctx.params.token, body);
-      return { booking, manage_token: token };
+      const { cookies } = await finishSso(app, ctx.request, ctx.query);
+      cookies.forEach(ctx.setCookie);
+      return { redirect: '/meet' };
     } catch (error) {
-      if (error.code === 'slot_unavailable') error.details = { ...error.details, ...slotsResponse(bookingByToken(app, ctx.params.token).eventType, ctx) };
-      throw error;
+      return { redirect: '/account?error=' + encodeURIComponent(error.message.slice(0, 160)) };
     }
   }, { public: true });
+
+  // ---- MCP server for AI tools (API key required) ----
+  post('/api/mcp', async ctx => {
+    if (!ctx.apiKey) fail(401, 'api_key_required', 'Use a workspace API key: Authorization: Bearer sch_...');
+    const result = handleMcp(app, ctx, await ctx.json(256 * 1024).catch(() => ({})));
+    return result === null || (Array.isArray(result) && !result.length) ? { status: 202 } : result;
+  }, { public: true });
+  get('/api/mcp', () => fail(405, 'method_not_allowed', 'This MCP server uses POST (stateless Streamable HTTP).'), { public: true });
+  get('/api/key', ctx => {
+    if (!ctx.apiKey) fail(401, 'api_key_required', 'Use a workspace API key.');
+    const workspace = app.db.get('SELECT id, name, slug FROM workspaces WHERE id = ?', ctx.apiKey.workspaceId);
+    return { user: ctx.user, workspace };
+  }, { public: true });
+
+  // ---- Developer platform: webhooks, API keys, audit log ----
+  get('/api/workspaces/:ws/webhooks', ctx => listEndpoints(app, member(ctx, 'developer.manage').workspace.id));
+  post('/api/workspaces/:ws/webhooks', async ctx => { const actor = member(ctx, 'developer.manage'); const result = createEndpoint(app, actor.workspace.id, await ctx.json()); audit(app, actor.workspace.id, actor.userId, 'webhook.created', result.url); return { status: 201, body: result }; });
+  patch('/api/workspaces/:ws/webhooks/:id', async ctx => updateEndpoint(app, member(ctx, 'developer.manage').workspace.id, ctx.params.id, await ctx.json()));
+  del('/api/workspaces/:ws/webhooks/:id', ctx => { const actor = member(ctx, 'developer.manage'); deleteEndpoint(app, actor.workspace.id, ctx.params.id); audit(app, actor.workspace.id, actor.userId, 'webhook.deleted', ctx.params.id); return { status: 204 }; });
+  post('/api/workspaces/:ws/webhooks/deliveries/:id/redeliver', ctx => { redeliver(app, member(ctx, 'developer.manage').workspace.id, ctx.params.id); return { status: 204 }; });
+  get('/api/workspaces/:ws/api-keys', ctx => { const actor = member(ctx, 'workspace.read'); return listKeys(app, actor.workspace.id, actor.userId); });
+  post('/api/workspaces/:ws/api-keys', async ctx => {
+    if (ctx.apiKey) fail(403, 'forbidden', 'API keys cannot create other API keys.');
+    const actor = member(ctx, 'workspace.read');
+    const result = createKey(app, actor.workspace.id, actor.userId, await ctx.json());
+    audit(app, actor.workspace.id, actor.userId, 'api_key.created', result.id);
+    return { status: 201, body: result };
+  });
+  del('/api/workspaces/:ws/api-keys/:id', ctx => { const actor = member(ctx, 'workspace.read'); revokeKey(app, actor.workspace.id, actor.userId, ctx.params.id); audit(app, actor.workspace.id, actor.userId, 'api_key.revoked', ctx.params.id); return { status: 204 }; });
+  get('/api/workspaces/:ws/audit', ctx => listAudit(app, member(ctx, 'audit.read').workspace.id));
 
   // ---- Forms ----
   get('/api/workspaces/:ws/forms', ctx => listForms(app, member(ctx, 'forms.manage').workspace.id));
@@ -174,6 +177,7 @@ export function createApi(app) {
   get('/api/workspaces/:ws/forms/:id', ctx => getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   patch('/api/workspaces/:ws/forms/:id', async ctx => saveDraft(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
+  put('/api/workspaces/:ws/forms/:id/routing', async ctx => saveRouting(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   post('/api/workspaces/:ws/forms/:id/publish', ctx => publishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.user.id, ctx.params.id));
   post('/api/workspaces/:ws/forms/:id/unpublish', ctx => unpublishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/workspaces/:ws/forms/:id/responses', ctx => {
@@ -262,15 +266,26 @@ export function createApi(app) {
     const ctx = { request, response, params: found?.params || {}, query: url.searchParams, ip: clientAddress(request, app.config.trustProxy, app.config.trustProxyHops), cookies: [] };
     ctx.setCookie = cookie => ctx.cookies.push(cookie);
     ctx.json = limitBytes => readJson(request, limitBytes);
+    ctx.raw = limitBytes => readBody(request, limitBytes);
     let status = 500;
     try {
       if (!found) fail(404, 'not_found', 'Not found.');
       if (found.methodNotAllowed) fail(405, 'method_not_allowed', 'Method not allowed.');
       const { route } = found;
-      ctx.session = loadSession(app, request);
-      ctx.user = ctx.session?.user || null;
+      // API keys (Authorization: Bearer sch_...) act as their user within one workspace, without cookies.
+      const key = authenticateKey(app, request.headers.authorization);
+      if (key?.invalid) fail(401, 'invalid_api_key', 'The API key is invalid or revoked.');
+      if (key) {
+        ctx.apiKey = key;
+        ctx.user = key.user;
+        const retry = app.rateLimit('apikey:' + key.workspaceId, 600, 60000);
+        if (retry) fail(429, 'rate_limited', 'API rate limit reached.', { retry_after: retry });
+      } else {
+        ctx.session = loadSession(app, request);
+        ctx.user = ctx.session?.user || null;
+      }
       const mutating = !['GET', 'HEAD'].includes(request.method);
-      if (mutating && !route.options.csrfExempt) {
+      if (mutating && !route.options.csrfExempt && !ctx.apiKey) {
         const origin = request.headers.origin;
         if (origin && !isAllowedOrigin(app.config, origin) && origin !== `${app.config.production ? 'https' : 'http'}://${request.headers.host}`) fail(403, 'bad_origin', 'Cross-site request blocked.');
         if (ctx.session && !route.options.public && request.headers['x-csrf-token'] !== ctx.session.csrf) fail(403, 'csrf', 'Your session expired. Reload the page and try again.');
@@ -278,6 +293,11 @@ export function createApi(app) {
       if (!route.options.public && !ctx.user) fail(401, 'unauthenticated', 'Sign in to continue.');
       const result = await route.handler(ctx);
       for (const cookie of ctx.cookies) response.appendHeader('Set-Cookie', cookie);
+      if (result && result.redirect) {
+        status = 302;
+        response.writeHead(302, { Location: result.redirect, 'Cache-Control': 'no-store' });
+        return response.end();
+      }
       if (result && result.raw !== undefined) {
         status = 200;
         return send(request, response, 200, result.type, result.raw, { 'Cache-Control': 'no-store', ...result.headers });
