@@ -1,6 +1,10 @@
 import { boot, html, mount, session } from './core.mjs';
 
-export function setTitle(title) { document.title = title; }
+export function setTitle(title) {
+  document.title = title;
+  const description = document.querySelector('meta[name="description"]');
+  if (description) description.content = 'Schedora brings appointment scheduling, forms and follow-up automation together with Meet, Forms and Flow.';
+}
 
 // Shown in place of private product screens for signed-out visitors.
 export function signInPrompt(ctx, { title, lead, product }) {
@@ -32,10 +36,10 @@ export async function home(ctx) {
       <span class="tag">MEET · FORMS · FLOW</span>
       <h1>Good things happen when you make time.</h1>
       <p class="lead">Three focused tools for scheduling, intake and follow-up. Use one, or connect all three under one account.</p>
-      <div class="actions"><a class="btn btn-primary" href="${boot.links.meet}">Try Meet</a>${session.user ? '' : html`<a class="btn" href="/account?mode=signup">Create a free evaluation account</a>`}</div>
+      <div class="actions"><a class="btn btn-primary" href="${boot.landings.meet}">Explore Meet</a>${session.user ? '' : html`<a class="btn" href="/account?mode=signup">Create a free evaluation account</a>`}</div>
     </section>
     <section class="product-grid" aria-label="Schedora products">
-      ${cards.map(([key, text, cta]) => html`<a class="product-card ${key}" href="${boot.links[key]}"><h2>${ctx.lockup(key, true)}</h2><p>${text}</p><span class="go">${cta} →</span></a>`)}
+      ${cards.map(([key, text]) => html`<a class="product-card ${key}" href="${boot.landings[key]}"><h2>${ctx.lockup(key, true)}</h2><p>${text}</p><span class="go">Explore ${key === 'meet' ? 'Meet' : key === 'forms' ? 'Forms' : 'Flow'} →</span></a>`)}
     </section>
     <section class="card card-plain home-connect">
       <h2>How they connect</h2>

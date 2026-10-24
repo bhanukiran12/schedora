@@ -6,10 +6,12 @@ import * as forms from './js/forms.mjs';
 import * as flow from './js/flow.mjs';
 import * as account from './js/account.mjs';
 import { loadStartupConfig } from './js/connection.mjs';
+import { productLanding } from './js/product-landing.mjs';
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = [
   [/^\/$/, pages.home],
+  [/^\/products\/(meet|forms|flow)$/, productLanding],
   [/^\/meet$/, meet.dashboard],
   [new RegExp(`^/meet/event-types/(new|${UUID.slice(1, -1)})$`), meet.editor],
   [/^\/meet\/manage\/([A-Za-z0-9_-]{20,100})$/, meet.manage],
@@ -38,7 +40,7 @@ const PRODUCTS = {
   forms: { name: 'Forms', logo: '/logo-forms.png' },
   flow: { name: 'Flow', logo: '/logo-flow.png' }
 };
-export const productFor = path => path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite';
+export const productFor = path => /^\/products\/(meet|forms|flow)$/.exec(path)?.[1] || (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite');
 export const lockup = (key, large = false) => html`<span class="lockup ${large ? 'lockup-lg' : ''}"><img src="${PRODUCTS[key].logo}" alt="" width="28" height="28"><span class="lockup-name">${PRODUCTS[key].name}${key === 'suite' ? '' : html`<small>by Schedora</small>`}</span></span>`;
 
 // ---- Theme ----
@@ -56,9 +58,9 @@ let currentPath = location.pathname;
 
 function renderHeader(product) {
   const links = boot.links;
-  const nav = [['suite', 'Suite', links.suite], ['meet', 'Meet', links.meet], ['forms', 'Forms', links.forms], ['flow', 'Flow', links.flow], ['billing', 'Plans', '/billing']];
+  const nav = [['suite', 'Suite', links.suite], ['meet', 'Meet', boot.landings.meet], ['forms', 'Forms', boot.landings.forms], ['flow', 'Flow', boot.landings.flow], ['billing', 'Plans', '/billing']];
   const current = currentPath === '/billing' ? 'billing' : product;
-  const home = product === 'suite' ? links.suite : links[product];
+  const home = product === 'suite' ? links.suite : boot.landings[product];
   mount($('#site-header'), html`<div class="container header-inner">
     <a class="lockup" href="${home}" aria-label="${PRODUCTS[product].name}${product === 'suite' ? '' : ' by Schedora'}, home">${lockup(product)}</a>
     <nav class="site-nav" aria-label="Products">${nav.map(([key, label, href]) => html`<a href="${href}" ${key === current ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
@@ -159,6 +161,7 @@ document.addEventListener('click', event => {
   if (link.target || link.hasAttribute('download') || link.dataset.external !== undefined) return;
   const url = new URL(link.href, location.href);
   if (url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
   if (document.body.dataset.dirty && !window.confirm('You have unsaved changes. Leave this page?')) { event.preventDefault(); return; }
   event.preventDefault();
   delete document.body.dataset.dirty;
@@ -183,6 +186,7 @@ async function start() {
   boot.links = onProductDomain
     ? { suite: `https://${boot.productDomain}/`, meet: `https://meet.${boot.productDomain}/`, forms: `https://forms.${boot.productDomain}/`, flow: `https://flow.${boot.productDomain}/` }
     : { suite: '/', meet: '/meet', forms: '/forms', flow: '/flow' };
+  boot.landings = Object.fromEntries(['meet', 'forms', 'flow'].map(key => [key, `${onProductDomain ? `https://${boot.productDomain}` : ''}/products/${key}`]));
   if (location.pathname === '/book' || location.pathname === '/form') { history.replaceState(null, '', location.pathname === '/book' ? '/meet' : '/forms'); currentPath = location.pathname; }
 }
 await start();
