@@ -1,0 +1,54 @@
+/* Quiet product surfaces; the ecosystem carries all three brand colours. */
+body { font-family: 'Inter', system-ui, sans-serif; }
+.product-header { background: #fff; border-top: 0; border-bottom: 1px solid #e6ebe7; }
+.product-header .header-inner { display: flex; justify-content: space-between; max-width: 1720px; min-height: 84px; padding: 14px 40px; gap: 20px; }
+.product-header .header-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: nowrap; gap: 28px; }
+.ecosystem-connection { display: inline-flex; gap: 9px; align-items: center; text-decoration: none; color: #263b31; font-size: 14px; font-weight: 500; min-height: 44px; }
+.ecosystem-connection > img { object-fit: contain; flex: 0 0 22px; }
+.ecosystem-colors { display: flex; height: 3px; gap: 3px; margin-top: 5px; }
+.ecosystem-colors i { display: block; flex: 1; border-radius: 2px; background: #225c43; }
+.ecosystem-colors i:nth-child(2) { background: #6541a5; }
+.ecosystem-colors i:nth-child(3) { background: #9a461d; }
+body[data-design="marketing"] > .site-header { border-image: linear-gradient(90deg, #225c43 0 33.33%, #6541a5 33.33% 66.66%, #9a461d 66.66% 100%) 1; border-bottom-width: 3px; }
+.container.product-landing { max-width: 1720px; padding-inline: 40px; }
+.product-landing .landing-hero { grid-template-columns: .85fr 1.15fr; gap: 64px; padding: 64px 0; }
+.product-landing .landing-eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+.product-landing .landing-hero h1 { font-size: clamp(40px, 4.4vw, 72px); font-weight: 600; line-height: 1.07; letter-spacing: -.045em; margin: 20px 0 24px; }
+.product-landing h1 em { font-style: normal; color: var(--accent); }
+.product-landing .lead { font-size: 19px; line-height: 1.65; max-width: 500px; }
+.product-landing .actions { gap: 24px; margin-top: 28px; }
+.landing-text-link { display: inline-flex; align-items: center; min-height: 44px; font-size: 14px; font-weight: 500; text-decoration: none; }
+.product-image { margin: 0; padding: 16px; background: var(--accent-tint); border-radius: 20px; min-width: 0; }
+.product-image > a { display: block; overflow: hidden; border-radius: 12px; border: 1px solid var(--line); background: #fff; }
+.product-image img { display: block; width: 100%; height: 480px; object-fit: cover; object-position: top; }
+.product-image figcaption { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 4px 0; font-size: 12px; color: #42574c; }
+.product-image figcaption a { font-weight: 600; text-decoration: none; }
+.landing-section { padding-block: 48px; }
+.landing-connected { background: #fff; }
+.landing-related > a { border-left: 3px solid #225c43; }
+.landing-related > a[href$="forms"] { border-left-color: #6541a5; }
+.landing-related > a[href$="flow"] { border-left-color: #9a461d; }
+@media (max-width: 1000px) {
+  .product-header .header-inner { padding-inline: 24px; }
+  .container.product-landing { padding-inline: 24px; }
+  .product-landing .landing-hero { gap: 32px; }
+  .product-image img { height: 420px; }
+}
+@media (max-width: 800px) {
+  .product-landing .landing-hero { grid-template-columns: 1fr; padding-block: 36px; }
+  .product-landing .lead { max-width: 620px; }
+  .product-image img { height: 420px; }
+}
+@media (max-width: 580px) {
+  .product-header .header-inner { padding: 12px 20px; min-height: 76px; flex-wrap: wrap; }
+  .product-header .header-tools { gap: 16px; flex-wrap: wrap; }
+  .product-header .product-open { display: none; }
+  .ecosystem-connection { font-size: 12px; gap: 7px; }
+  .ecosystem-connection > img { width: 18px; height: 18px; flex-basis: 18px; }
+  .product-header > .header-inner > .lockup .lockup-name { font-size: 22px; }
+  .container.product-landing { padding-inline: 20px; }
+  .product-image { padding: 10px; border-radius: 14px; }
+  .product-image img { height: 340px; }
+  .product-landing .landing-hero h1 { font-size: 42px; }
+  .product-landing .lead { font-size: 17px; }
+}

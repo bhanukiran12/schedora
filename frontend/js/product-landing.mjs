@@ -46,6 +46,7 @@ const products = {
 export function productLanding(ctx) {
   const key = ctx.params[0];
   const product = products[key];
+  const headline = { meet: html`Make room for your <em>next appointment.</em>`, forms: html`Good questions.<br><em>Clear answers.</em>`, flow: html`Keep the <em>next step</em> moving.` }[key];
   setTitle(`${product.name} by Schedora · ${product.eyebrow}`);
   const description = document.querySelector('meta[name="description"]');
   if (description) description.content = product.lead;
@@ -55,19 +56,14 @@ export function productLanding(ctx) {
   }
   mount(ctx.main, html`<div class="container product-landing">
     <section class="landing-hero">
-      <div>${ctx.lockup(key, true)}<p class="landing-eyebrow">${product.eyebrow}</p>
-        <h1>${product.title}</h1><p class="lead">${product.lead}</p>
-        <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="btn" href="/demo/${key}">Try interactive demo</a><a href="#how-it-works">How it works</a></div>
+      <div><p class="landing-eyebrow">${product.eyebrow}</p>
+        <h1>${headline}</h1><p class="lead">${key === 'meet' ? 'Your availability. One booking link. More time for the conversation.' : key === 'forms' ? 'Ask what matters. Collect clear answers. Start the next step.' : 'Turn bookings and responses into follow-up. Let your work keep moving.'}</p>
+        <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="landing-text-link" href="#product-demo">See it in action →</a></div>
         <p class="muted landing-note">One Schedora account. Your own ${product.name} workspace.</p>
       </div>
-      <div class="landing-preview" aria-label="Illustrative ${product.name} preview">
-        <div class="landing-preview-bar"><span>${product.name} by Schedora</span><span class="tag">Example</span></div>
-        <p class="landing-eyebrow">${product.preview[1]}</p><h2>${product.preview[0]}</h2>
-        <div class="landing-example ${key}">${product.preview.slice(2).map((text, index) => html`<div><span class="landing-step">${key === 'forms' ? String.fromCharCode(65 + index) : String(index + 1).padStart(2, '0')}</span><strong>${text}</strong></div>`)}</div>
-        <p class="muted landing-note">${key === 'meet' ? 'Times shown in your invitee’s time zone.' : key === 'forms' ? 'A few good questions can start something.' : 'From a new response to a useful next step.'}</p>
-      </div>
+      <figure class="product-image"><a href="/demo/${key}" aria-label="Explore the ${product.name} demo"><img src="/images/${key}-workspace.webp" width="926" height="1400" alt="${product.name} workspace preview showing ${key === 'meet' ? 'appointments, booking links and availability' : key === 'forms' ? 'forms and collected responses' : 'workflows and sample run history'}" fetchpriority="high"></a><figcaption>${product.name} workspace · Sample data <a href="/demo/${key}">Explore demo →</a></figcaption></figure>
     </section>
-    <section class="landing-section product-showcase" aria-labelledby="showcase-title"><div class="row-between"><div><p class="landing-eyebrow">${product.name.toUpperCase()} IN ACTION · INTERACTIVE PREVIEW</p><h2 id="showcase-title">${key === 'meet' ? 'A booking page that makes time feel simple.' : key === 'forms' ? 'Make answering feel like a conversation.' : 'Watch an event become a useful next step.'}</h2></div><a class="btn" href="/demo/${key}">Explore the full workspace →</a></div><div id="product-showcase"></div></section>
+    <section class="landing-section product-showcase" id="product-demo" aria-labelledby="showcase-title"><div class="row-between"><div><p class="landing-eyebrow">${product.name.toUpperCase()} IN ACTION · INTERACTIVE PREVIEW</p><h2 id="showcase-title">${key === 'meet' ? 'A booking page that makes time feel simple.' : key === 'forms' ? 'Make answering feel like a conversation.' : 'Watch an event become a useful next step.'}</h2></div><a class="btn" href="/demo/${key}">Explore the full workspace →</a></div><div id="product-showcase"></div></section>
     <section class="landing-section" id="features"><p class="landing-eyebrow">Made for your everyday</p><h2>${key === 'meet' ? 'Your availability. Your booking experience.' : key === 'forms' ? 'Your questions. A better way to answer.' : 'Your trigger. Your next step, handled.'}</h2>
       <div class="landing-features">${product.features.map(([title, text]) => html`<article><h3>${title}</h3><p>${text}</p></article>`)}</div>
     </section>
