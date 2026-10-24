@@ -335,6 +335,12 @@ dialog::backdrop { background: #0008; }
 .showcase-flow .tag { margin: 0; font-size: 11px; }
 #showcase-form { max-width: 480px; }
 #showcase-form .btn { margin-top: 20px; }
+@media (max-width: 480px) {
+  .showcase-flow > div { flex-wrap: wrap; gap: 10px; padding: 14px; }
+  .showcase-flow > div > div { flex: 1 1 120px; }
+  .showcase-flow h3 { font-size: 16px; }
+  .showcase-flow .tag { margin-left: 38px; }
+}
 @media (max-width: 800px) {
   .product-landing .landing-hero, .showcase-layout { grid-template-columns: 1fr; }
   .showcase-layout > aside, .showcase-layout > div { padding: 24px; }
