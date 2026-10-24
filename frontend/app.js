@@ -48,8 +48,8 @@ export const productFor = path => /^\/products\/(meet|forms|flow)$/.exec(path)?.
 export const lockup = (key, large = false) => html`<span class="lockup ${large ? 'lockup-lg' : ''}"><img src="${PRODUCTS[key].logo}" alt="" width="28" height="28"><span class="lockup-name">${PRODUCTS[key].name}${key === 'suite' ? '' : html`<small>by Schedora</small>`}</span></span>`;
 
 // ---- Theme ----
-const THEMES = ['system', 'light', 'dark'];
-let theme = THEMES.includes(storage.get('schedora.theme')) ? storage.get('schedora.theme') : 'system';
+const THEMES = ['light', 'dark'];
+let theme = THEMES.includes(storage.get('schedora.theme')) ? storage.get('schedora.theme') : 'light';
 function applyTheme() {
   if (theme === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
@@ -81,12 +81,12 @@ function renderHeader(product) {
       ${individual ? html`<details class="ecosystem-switcher"><summary><img src="/logo-schedora.png" width="18" height="18" alt="">Schedora apps<span aria-hidden="true">⌄</span></summary><nav aria-label="Schedora ecosystem"><a href="${links.suite}">${lockup('suite')}<small>The connected ecosystem</small></a>${['meet', 'forms', 'flow'].map(key => html`<a href="${boot.landings[key]}" ${product === key ? raw('aria-current="page"') : ''}>${lockup(key)}<small>${key === 'meet' ? 'Appointments & scheduling' : key === 'forms' ? 'Questions & responses' : 'Automation & follow-up'}</small></a>`)}</nav></details>` : ''}
       ${session.user && session.workspaces.length > 1 ? html`<label class="visually-hidden" for="workspace-switch">Workspace</label>
         <select id="workspace-switch">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name}</option>`)}</select>` : ''}
-      <button class="btn btn-small" type="button" id="theme-toggle" aria-label="Color theme: ${theme}. Activate to change."><span aria-hidden="true">◐</span><span class="theme-label">${theme[0].toUpperCase() + theme.slice(1)}</span></button>
+      <label class="visually-hidden" for="theme-toggle">Appearance</label><select class="theme-select" id="theme-toggle" aria-label="Appearance">${THEMES.map(choice => html`<option value="${choice}" ${choice === theme ? raw('selected') : ''}>${choice === 'light' ? 'Light' : 'Dark'}</option>`)}</select>
       <a class="btn btn-small" href="/account">${session.user ? 'Account' : 'Sign in'}</a>
       ${individual ? html`<a class="btn btn-small btn-primary product-open" href="${links[product]}">Open ${PRODUCTS[product].name} →</a>` : ''}
     </div></div>`);
-  $('#theme-toggle').onclick = () => {
-    theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  $('#theme-toggle').onchange = event => {
+    theme = event.target.value;
     storage.set('schedora.theme', theme);
     applyTheme();
     renderHeader(product);

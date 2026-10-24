@@ -1,6 +1,6 @@
 // Installable app shell. Pages load from the network first (fresh data, correct sign-in state)
 // and fall back to the cached shell offline. API responses are never cached.
-const CACHE = 'schedora-shell-v1';
+const CACHE = 'schedora-shell-v2';
 const SHELL = ['/', '/index.html', '/app.css', '/app.js', '/favicon.svg', '/logo-schedora.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {

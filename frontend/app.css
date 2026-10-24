@@ -315,6 +315,31 @@ dialog::backdrop { background: #0008; }
 .row > label:not(.check), .range > label:not(.check) { margin: 0; }
 .row > input:not([type="checkbox"]):not([type="radio"]), .row > select, .range > select, .range > input:not([type="checkbox"]):not([type="radio"]):not([type="time"]):not([type="date"]) { width: auto; flex: 1 1 180px; }
 .range > .check { margin: 0; }
+.theme-select { max-width: 90px !important; min-width: 76px; font-size: 13px; }
+.container.product-landing { max-width: 1600px; padding-inline: clamp(20px, 4vw, 64px); }
+.product-landing .landing-hero { grid-template-columns: .9fr 1.1fr; gap: clamp(28px, 5vw, 80px); padding-block: 52px; }
+.product-landing .landing-preview { padding: 36px; transform: none; }
+.product-landing .landing-hero h1 { font-size: clamp(36px, 4.2vw, 64px); }
+.product-showcase { margin-top: 12px; }
+.showcase-layout { display: grid; grid-template-columns: .8fr 1.2fr; margin-top: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.showcase-layout > aside { padding: 40px; background: var(--accent-tint); }
+.showcase-layout > div { padding: 40px; min-width: 0; }
+.showcase-layout h3 { font-size: 26px; font-weight: 550; margin: 20px 0; }
+.showcase-kicker { color: var(--accent); font-size: 12px; font-weight: 650; letter-spacing: .05em; }
+.showcase-days, .showcase-slots { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 28px; }
+.showcase-days .btn { font-size: 12px; padding-inline: 12px; }
+.showcase-feedback { font-size: 13px; color: var(--muted); margin-top: 24px; }
+.showcase-flow > div { display: flex; gap: 18px; align-items: center; padding: 18px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; }
+.showcase-flow > div > div { flex: 1; }
+.showcase-flow h3 { font-size: 18px; margin: 4px 0; }
+.showcase-flow .tag { margin: 0; font-size: 11px; }
+#showcase-form { max-width: 480px; }
+#showcase-form .btn { margin-top: 20px; }
+@media (max-width: 800px) {
+  .product-landing .landing-hero, .showcase-layout { grid-template-columns: 1fr; }
+  .showcase-layout > aside, .showcase-layout > div { padding: 24px; }
+  .product-landing .landing-preview { padding: 24px; }
+}
 .product-header { border-top: 3px solid var(--accent); }
 .product-header .header-inner { max-width: 1320px; gap: 20px; min-height: 78px; }
 .product-header > .header-inner > .lockup .lockup-name { color: var(--accent); font-size: 24px; }
