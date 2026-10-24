@@ -44,6 +44,7 @@ export async function api(method, path, body, headers = {}) {
   try {
     response = await fetch(path, {
       method, credentials: 'same-origin',
+      ...(method === 'GET' ? { signal: AbortSignal.timeout(25000) } : {}),
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(session.csrf ? { 'X-CSRF-Token': session.csrf } : {}), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined
     });

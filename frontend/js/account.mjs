@@ -1,5 +1,6 @@
 import { $, $$, api, applyMe, ask, badge, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle } from './pages.mjs';
+import * as settings from './settings.mjs';
 
 const safeNext = value => typeof value === 'string' && /^\/(?!\/)[^\s]*$/.test(value) ? value : '/meet';
 const PRODUCT_NAMES = { meet: 'Meet', forms: 'Forms', flow: 'Flow' };
@@ -32,7 +33,8 @@ export async function account(ctx) {
           <div><label for="member-role">Role</label><select id="member-role" name="role"><option value="member">Member: own event types, forms, tasks</option>${owner ? html`<option value="admin">Administrator: everything except billing and deletion</option>` : ''}</select></div></div>
           <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Add member</button></div></form>` : ''}
       </section>` : ''}
-    <section class="card card-plain"><h2>Danger zone</h2>
+    ${ws ? html`<div id="settings-extra" class="section-gap"></div>` : ''}
+    <section class="card card-plain section-gap"><h2>Danger zone</h2>
       ${owner ? html`<p>Deleting <strong>${ws.name}</strong> permanently removes its event types, appointments, forms, responses, flows and subscriptions records.</p><button class="btn btn-danger" id="delete-ws">Delete workspace</button><hr>` : ws ? html`<button class="btn btn-danger" id="leave-ws">Leave ${ws.name}</button><hr>` : ''}
       <p>Deleting your account also deletes every workspace where you are the only owner.</p><button class="btn btn-danger" id="delete-account">Delete my account</button>
     </section></div>`);
@@ -68,6 +70,7 @@ export async function account(ctx) {
     } catch (error) { mount($('#members'), errorBlock(error)); }
   }
   drawMembers();
+  settings.render(ctx, $('#settings-extra'));
 
   $('#delete-ws')?.addEventListener('click', async () => {
     const result = await ask({ title: `Delete ${ws.name}?`, body: 'This cannot be undone.', fields: html`<label for="confirm-name">Type the workspace name to confirm</label><input id="confirm-name" name="confirm" required autocomplete="off">`, confirm: 'Delete workspace', danger: true });
@@ -100,10 +103,27 @@ function signedOut(ctx) {
       <label for="su-workspace">Workspace name</label><span class="hint">Usually your business or team. You can rename it later.</span><input id="su-workspace" name="workspace" maxlength="100">
       <p class="hint">By creating an account you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>
       <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Create account</button></div></form></section>`;
+  const error = ctx.query.get('error');
   mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>${signup ? 'Create your Schedora account' : 'Sign in to Schedora'}</h1>
-    <div class="grid-2">${signup ? html`${signUpCard}${signInCard}` : html`${signInCard}${signUpCard}`}</div></div>`);
+    ${error ? notice('bad', html`<p>${error}</p>`) : ''}
+    <div class="grid-2">${signup ? html`${signUpCard}${signInCard}` : html`${signInCard}${signUpCard}`}</div>
+    <section class="card card-plain section-gap"><h2>Single sign-on</h2><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
+      <p class="hint">For organizations that have set up single sign-on.</p></section></div>`);
+  $('#sso').onsubmit = async event => {
+    event.preventDefault();
+    const email = $('#sso-email').value.trim();
+    const found = await api('GET', '/api/auth/sso/lookup?email=' + encodeURIComponent(email)).catch(() => ({ sso: false }));
+    if (found.sso) location.href = '/api/auth/sso/start?email=' + encodeURIComponent(email);
+    else toast('Single sign-on is not set up for that email domain. Sign in with your password.');
+  };
   const done = data => { applyMe(data); ctx.navigate(next, { replace: true }); };
-  handleSubmit($('#signin'), async data => done(await api('POST', '/api/auth/login', data)));
+  handleSubmit($('#signin'), async data => {
+    try { done(await api('POST', '/api/auth/login', data)); }
+    catch (failure) {
+      if (failure.code === 'sso_required') { location.href = '/api/auth/sso/start?email=' + encodeURIComponent(data.email); return; }
+      throw failure;
+    }
+  });
   handleSubmit($('#signup'), async data => done(await api('POST', '/api/auth/signup', data)));
 }
 

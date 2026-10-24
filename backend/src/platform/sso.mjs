@@ -17,6 +17,8 @@ export function getSsoConfig(app, workspaceId) {
 }
 
 const redirectUri = app => `${app.config.baseUrl}/api/auth/sso/callback`;
+// Sign-in may start on a product subdomain and return to BASE_URL, so share the cookie across them.
+const flowCookieScope = app => `${app.config.production ? '; Secure' : ''}${app.config.cookieDomain ? '; Domain=' + app.config.cookieDomain : ''}`;
 
 export function saveSsoConfig(app, workspaceId, body) {
   let issuer;
@@ -72,7 +74,7 @@ export async function startSso(app, workspaceId) {
     state: flow.state, nonce: flow.nonce, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256'
   });
   // The flow details (including the PKCE verifier) travel in an encrypted, HttpOnly cookie.
-  const cookie = `${FLOW_COOKIE}=${encodeURIComponent(encryptJson(app.config, flow))}; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=600${app.config.production ? '; Secure' : ''}`;
+  const cookie = `${FLOW_COOKIE}=${encodeURIComponent(encryptJson(app.config, flow))}; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=600${flowCookieScope(app)}`;
   return { url: `${metadata.authorization_endpoint}?${params}`, cookie };
 }
 
@@ -131,5 +133,5 @@ export async function finishSso(app, request, query) {
   }
   app.db.run('INSERT OR IGNORE INTO memberships (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)', flow.ws, user.id, config.default_role, app.now());
   const session = createSession(app, user.id);
-  return { cookies: [session.cookie, `${FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0`], workspaceId: flow.ws };
+  return { cookies: [session.cookie, `${FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0${flowCookieScope(app)}`], workspaceId: flow.ws };
 }

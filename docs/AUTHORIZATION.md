@@ -22,6 +22,14 @@ Every private API route resolves the caller's membership of the workspace in the
 | Create, edit, enable, pause, retry flows | ✓ | ✓ | | |
 | View and complete tasks | ✓ | ✓ | ✓ | |
 | View email delivery log | ✓ | ✓ | ✓ | |
+| View and edit contacts, notes, follow-ups | ✓ | ✓ | ✓ | |
+| Delete contacts | ✓ | ✓ | | |
+| Team event types (collective, round robin), managed templates, assign templates | ✓ | ✓ | | Members edit their copies except locked fields |
+| Workspace-wide workflows | ✓ | ✓ | | Members create workflows for event types they host |
+| Polls, transcripts, recaps, AI chat and meeting prep | ✓ | ✓ | ✓ | Members see their own polls and meetings |
+| Connect Stripe, webhooks, audit log | ✓ | ✓ | | |
+| Connect own calendars and video apps, create own API keys | ✓ | ✓ | ✓ | API keys act with the creator's role in one workspace |
+| Single sign-on settings | ✓ | | | |
 
 ## Public (no account)
 

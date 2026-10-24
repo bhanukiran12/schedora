@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Meet by Schedora",
+  "version": "1.0.0",
+  "description": "Copy your Meet booking links and create one-off links from any page.",
+  "action": { "default_popup": "popup.html", "default_title": "Meet by Schedora", "default_icon": { "128": "icon.png" } },
+  "icons": { "128": "icon.png" },
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": ["https://schedora.in/*", "https://*.schedora.in/*"],
+  "browser_specific_settings": { "gecko": { "id": "meet@schedora.in", "strict_min_version": "115.0" } }
+}

@@ -10,6 +10,7 @@ import { addDays, isValidDate, localDate } from '../time.mjs';
 // Authenticated with a workspace API key, so AI assistants act exactly as that member would.
 
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const WRITE_TOOLS = ['book_meeting', 'cancel_meeting'];
 
 const TOOLS = [
   { name: 'list_event_types', description: 'List the meeting types (event types) the member can book or manage, with their ids and booking links.', inputSchema: { type: 'object', properties: {} } },
@@ -24,7 +25,10 @@ const TOOLS = [
   { name: 'get_contact', description: 'Get a contact with meeting history, form responses, notes and tasks.', inputSchema: { type: 'object', properties: { contact_id: { type: 'string' } }, required: ['contact_id'] } }
 ];
 
-function runTool(app, ctx, actor, name, args = {}) {
+// Tools for the in-app assistant, which reads data but does not change it.
+export const READ_ONLY_TOOLS = TOOLS.filter(tool => !WRITE_TOOLS.includes(tool.name)).map(({ name, description, inputSchema }) => ({ name, description, input_schema: inputSchema }));
+
+export function runTool(app, actor, name, args = {}) {
   const ws = actor.workspace.id;
   switch (name) {
     case 'list_event_types':
@@ -79,7 +83,7 @@ export function handleMcp(app, ctx, message) {
     case 'tools/call': {
       try {
         const actor = { ...requireMember(app, ctx.user, ctx.apiKey.workspaceId), userId: ctx.user.id };
-        const result = runTool(app, ctx, actor, params.name, params.arguments);
+        const result = runTool(app, actor, params.name, params.arguments);
         return reply({ content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], structuredContent: Array.isArray(result) ? { items: result } : result });
       } catch (failure) {
         return reply({ content: [{ type: 'text', text: failure.message || 'Tool failed.' }], isError: true });

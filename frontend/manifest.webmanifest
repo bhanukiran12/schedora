@@ -1,0 +1,19 @@
+{
+  "name": "Schedora: Meet, Forms and Flow",
+  "short_name": "Schedora",
+  "description": "Scheduling, forms and automation that work together.",
+  "start_url": "/meet",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f7f2",
+  "theme_color": "#225c43",
+  "icons": [
+    { "src": "/logo-schedora.png", "sizes": "627x627", "type": "image/png", "purpose": "any" },
+    { "src": "/logo-meet.png", "sizes": "627x627", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Meetings", "url": "/meet?tab=meetings" },
+    { "name": "Forms", "url": "/forms" },
+    { "name": "Flow", "url": "/flow" }
+  ]
+}

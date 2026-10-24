@@ -48,6 +48,8 @@ Updated 24 October 2026. "Built and tested" means code exists and automated chec
 | 10 — Launch readiness | Partly done | Security headers and CSP, rate limits, retention and deletion, health and logs, operations runbook, deployment configuration | Legal operator details, formal security and accessibility review (WCAG 2.2 AA audit with assistive technology), load tests, monitoring and alerting, off-site backups, DNS/TLS, recorded recovery drill, support process |
 | 11 — Controlled beta and release | Not started | — | Pilot users, funnel and delivery measurement, pricing validation, release approval |
 
+**Meet feature expansion (after Sprint 11 scope):** meeting kinds, polls, workflows, contacts, routing, managed event types, analytics, payments, OAuth calendars and video, SSO, webhooks, API, MCP, PWA, browser extension and AI features are built; 57 automated tests and the browser journeys pass. Integrations marked "needs account" in the [parity matrix](docs/PARITY_MATRIX.md) still require live provider testing.
+
 Final release acceptance: items 1–5 are met in local automated tests; item 6 is met with the test payment provider only; items 7–10 are open.
 
 ## Research and reverse-engineering workstream

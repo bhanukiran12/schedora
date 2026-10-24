@@ -1,9 +1,11 @@
 import { $, api, boot, html, loadMe, mount, raw, selectWorkspace, session, storage, workspace } from './js/core.mjs';
 import * as pages from './js/pages.mjs';
 import * as meet from './js/meet.mjs';
+import * as team from './js/meet-team.mjs';
 import * as forms from './js/forms.mjs';
 import * as flow from './js/flow.mjs';
 import * as account from './js/account.mjs';
+import { loadStartupConfig } from './js/connection.mjs';
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = [
@@ -11,7 +13,12 @@ const routes = [
   [/^\/meet$/, meet.dashboard],
   [new RegExp(`^/meet/event-types/(new|${UUID.slice(1, -1)})$`), meet.editor],
   [/^\/meet\/manage\/([A-Za-z0-9_-]{20,100})$/, meet.manage],
-  [/^\/meet\/([a-z0-9-]{2,60})\/([a-z0-9-]{2,60})$/, meet.booking],
+  [/^\/meet\/pay\/([A-Za-z0-9_-]{20,100})$/, meet.pay],
+  [/^\/meet\/poll\/([a-z0-9-]{3,60})$/, team.publicPoll],
+  [new RegExp(`^/meet/contacts/${UUID}$`), team.contactPage],
+  [/^\/recap\/([A-Za-z0-9_-]{20,100})$/, ctx => team.publicRecap(ctx)],
+  [/^\/(?:embed\/)?meet\/([a-z0-9-]{2,60})\/([a-z0-9-]{2,60})$/, meet.booking],
+  [/^\/meet\/([a-z0-9-]{2,60})$/, meet.workspacePage],
   [/^\/forms$/, forms.dashboard],
   [new RegExp(`^/forms/${UUID}$`), forms.builder],
   [new RegExp(`^/forms/${UUID}/responses$`), forms.responses],
@@ -31,7 +38,7 @@ const PRODUCTS = {
   forms: { name: 'Forms', logo: '/logo-forms.png' },
   flow: { name: 'Flow', logo: '/logo-flow.png' }
 };
-export const productFor = path => path.startsWith('/meet') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite';
+export const productFor = path => path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite';
 export const lockup = (key, large = false) => html`<span class="lockup ${large ? 'lockup-lg' : ''}"><img src="${PRODUCTS[key].logo}" alt="" width="28" height="28"><span class="lockup-name">${PRODUCTS[key].name}${key === 'suite' ? '' : html`<small>by Schedora</small>`}</span></span>`;
 
 // ---- Theme ----
@@ -133,7 +140,7 @@ export async function render() {
     if (match) { view = handler; params = match.slice(1); break; }
   }
   const ctx = { main, params, query, path: currentPath, alive: () => token === renderToken, navigate, render, lockup };
-  if (boot.offline) mount(main, html`<div class="container page"><h1>Schedora is unreachable</h1><div class="notice notice-bad" role="alert"><p>We could not reach the Schedora service. Check your connection and try again in a moment.</p></div><a class="btn" href="${currentPath}">Try again</a></div>`);
+  if (boot.offline) mount(main, html`<div class="container page"><h1>Schedora is temporarily unavailable</h1><div class="notice notice-bad" role="alert"><p>The service may be starting up or temporarily unavailable. Please try again. No booking has been submitted.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
   else try {
     await view(ctx);
   } catch (error) {
@@ -166,7 +173,8 @@ window.addEventListener('beforeunload', event => { if (document.body.dataset.dir
 // navigation uses absolute, allowlisted subdomain links when served from the product domain.
 async function start() {
   const fallback = { productDomain: 'schedora.in', analytics: false, billingMode: 'open', operator: {}, providers: { email: 'outbox', calendar: 'ICS feed', billing: 'none' } };
-  try { Object.assign(boot, fallback, await api('GET', '/api/config')); } catch { Object.assign(boot, fallback, { offline: true }); }
+  mount($('#main'), html`<div class="container page" role="status"><h1>Connecting to Schedora…</h1><p>The service may take a moment to start.</p></div>`);
+  try { Object.assign(boot, fallback, await loadStartupConfig(() => api('GET', '/api/config')), { offline: false }); } catch { Object.assign(boot, fallback, { offline: true }); }
   const host = location.hostname;
   const subdomain = host.endsWith('.' + boot.productDomain) ? host.slice(0, -(boot.productDomain.length + 1)) : '';
   const productRoot = { meet: '/meet', book: '/meet', forms: '/forms', flow: '/flow' }[subdomain];
@@ -178,6 +186,8 @@ async function start() {
   if (location.pathname === '/book' || location.pathname === '/form') { history.replaceState(null, '', location.pathname === '/book' ? '/meet' : '/forms'); currentPath = location.pathname; }
 }
 await start();
+// Installable app (PWA). Skipped where service workers are unavailable.
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('/sw.js').catch(() => {});
 renderFooter();
 try { await loadMe(); } catch { /* signed-out experience still works */ }
 if (!consent()) consentBanner(false);

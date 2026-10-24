@@ -47,7 +47,7 @@
       ]
     },
     {
-      "source": "/((?!f/).*)",
+      "source": "/((?!f/|embed/).*)",
       "headers": [
         {
           "key": "Content-Security-Policy",
@@ -60,7 +60,7 @@
       ]
     },
     {
-      "source": "/f/(.*)",
+      "source": "/(f|embed)/(.*)",
       "headers": [
         {
           "key": "Content-Security-Policy",
@@ -69,7 +69,7 @@
       ]
     },
     {
-      "source": "/(app\\.js|app\\.css)",
+      "source": "/(app\\.js|app\\.css|sw\\.js|embed\\.js|manifest\\.webmanifest)",
       "headers": [
         {
           "key": "Cache-Control",

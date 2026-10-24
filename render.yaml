@@ -12,7 +12,7 @@ services:
     # For real data: use a paid plan with the disk below, or a hosted database (see docs/DEPLOYMENT.md).
     plan: free
     region: singapore
-    buildCommand: npm run check && npm run sync-shared -- --check
+    buildCommand: npm ci --omit=dev && npm run check && npm run sync-shared -- --check
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
@@ -26,6 +26,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "24"
+      - key: RELEASE_MODE
+        value: evaluation
       - key: NODE_ENV
         value: production
       - key: HOST
@@ -72,3 +74,39 @@ services:
         sync: false
       - key: LOG_LEVEL
         value: info
+      # Encrypts stored integration secrets (OAuth tokens, Stripe keys, SSO). Render generates
+      # a random 256-bit value; keep it stable, or connected integrations must be reconnected.
+      - key: APP_ENCRYPTION_KEY
+        generateValue: true
+      # Evaluation: paid event types use a simulated checkout until a workspace connects Stripe.
+      - key: ALLOW_TEST_PAYMENTS
+        value: "true"
+      - key: SMS_PROVIDER
+        value: outbox
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      # OAuth apps for calendars and video (redirect URI: <BASE_URL>/api/oauth/<provider>/callback)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false
+      - key: ZOOM_CLIENT_ID
+        sync: false
+      - key: ZOOM_CLIENT_SECRET
+        sync: false
+      # AI features (recaps, chat, briefs, Meet Assist drafts)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Meet Assist inbound email webhook secret and address
+      - key: INBOUND_EMAIL_SECRET
+        generateValue: true
+      - key: ASSIST_ADDRESS
+        value: assist@schedora.in

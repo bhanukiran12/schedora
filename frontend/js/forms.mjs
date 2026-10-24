@@ -148,8 +148,10 @@ export async function publicForm(ctx) {
   renderForm(root, form.definition, {
     mode,
     onSubmit: async answers => {
-      await api('POST', `/api/public/forms/${form.slug}/responses`, { answers, submission_id: submissionId });
-      mount(root, html`<div role="status" class="public-form"><h1 tabindex="-1">Thank you</h1><p>Your response was received and saved.</p></div>`);
+      const result = await api('POST', `/api/public/forms/${form.slug}/responses`, { answers, submission_id: submissionId });
+      // Routing forms send respondents on to a booking page, a link or a message.
+      if (result.route?.type === 'event' || result.route?.type === 'url') { (window.top === window ? location : window.top.location).href = result.route.url; return; }
+      mount(root, html`<div role="status" class="public-form"><h1 tabindex="-1">Thank you</h1><p>${result.route?.type === 'message' ? result.route.message : 'Your response was received and saved.'}</p></div>`);
       $('h1', root).focus();
     }
   });
@@ -212,6 +214,7 @@ export async function builder(ctx) {
       <a class="btn" href="/forms/${form.id}/responses">Responses</a><button class="btn btn-danger" id="delete-form">Delete</button></div>
     <div id="builder-notice" tabindex="-1"></div>
     <div id="share"></div>
+    <div id="routing"></div>
     <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true">Edit</button><button role="tab" data-view="preview" aria-selected="false">Preview</button></div>
     <div class="builder" data-view="edit">
       <section class="builder-edit" aria-label="Form editor"><div id="settings"></div><div id="fields"></div>
@@ -391,6 +394,51 @@ export async function builder(ctx) {
     });
   };
   bindShare();
+  renderRouting();
+  async function renderRouting() {
+    const eventTypes = await api('GET', wsPath('/event-types')).catch(() => []);
+    const rules = (form.routing?.rules || []).map(rule => ({ ...rule, condition: { ...rule.condition }, action: { ...rule.action } }));
+    let fallback = form.routing?.fallback ? { ...form.routing.fallback } : null;
+    const actionEditor = (action, key) => html`<select data-akind="${key}" aria-label="Then">${[['event', 'Go to a booking page'], ['url', 'Go to a link'], ['message', 'Show a message']].map(([value, label]) => html`<option value="${value}" ${action?.type === value ? raw('selected') : ''}>${label}</option>`)}</select>
+      ${action?.type === 'event' ? html`<select data-aevent="${key}" aria-label="Booking page">${eventTypes.filter(type => !type.managed_template).map(type => html`<option value="${type.id}" ${action.event_type_id === type.id ? raw('selected') : ''}>${type.title}</option>`)}</select>`
+        : html`<input data-avalue="${key}" aria-label="${action?.type === 'url' ? 'Link' : 'Message'}" value="${action?.type === 'url' ? action.url || '' : action?.message || ''}" placeholder="${action?.type === 'url' ? 'https://…' : 'Thanks! We will be in touch.'}">`}`;
+    const questions = draft.fields.filter(field => field.type !== 'page_break');
+    const draw = () => mount($('#routing'), html`<details class="card card-plain" ${form.routing ? raw('open') : ''}><summary><strong>Route respondents</strong> <span class="muted">(lead routing)</span></summary>
+      <p class="hint">After someone submits, send them to the right booking page based on their answers. Name and email answers pre-fill the booking form.</p>
+      ${rules.map((rule, index) => html`<div class="range">If <select data-rfield="${index}" aria-label="Question">${questions.map(field => html`<option value="${field.id}" ${field.id === rule.condition.field ? raw('selected') : ''}>${field.label.slice(0, 40)}</option>`)}</select>
+        <select data-rop="${index}" aria-label="Rule"><option value="equals" ${rule.condition.op === 'equals' ? raw('selected') : ''}>is</option><option value="not_equals" ${rule.condition.op === 'not_equals' ? raw('selected') : ''}>is not</option><option value="contains" ${rule.condition.op === 'contains' ? raw('selected') : ''}>includes</option></select>
+        <input data-rvalue="${index}" aria-label="Value (option key)" value="${rule.condition.value || ''}" placeholder="option key"> then ${actionEditor(rule.action, index)}
+        <button class="btn btn-small" type="button" data-rremove="${index}">Remove</button></div>`)}
+      <div class="range">Otherwise ${fallback ? actionEditor(fallback, 'fallback') : html`<span class="muted">show the thank-you message</span>`} <button class="btn-link" type="button" id="toggle-fallback">${fallback ? 'Remove' : 'Set a default'}</button></div>
+      <div class="actions"><button class="btn btn-small" type="button" id="add-rule">Add rule</button><button class="btn btn-small btn-primary" type="button" id="save-routing">Save routing</button>${form.routing ? html`<button class="btn btn-small" type="button" id="clear-routing">Turn off routing</button>` : ''}</div></details>`);
+    const actionAt = key => key === 'fallback' ? fallback : rules[Number(key)].action;
+    const setAction = (key, value) => { if (key === 'fallback') fallback = value; else rules[Number(key)].action = value; };
+    draw();
+    $('#routing').addEventListener('change', event => {
+      const { rfield, rop, akind, aevent } = event.target.dataset;
+      if (rfield !== undefined) rules[Number(rfield)].condition.field = event.target.value;
+      if (rop !== undefined) rules[Number(rop)].condition.op = event.target.value;
+      if (akind !== undefined) { setAction(akind, { type: event.target.value, event_type_id: eventTypes[0]?.id }); draw(); }
+      if (aevent !== undefined) actionAt(aevent).event_type_id = event.target.value;
+    });
+    $('#routing').addEventListener('input', event => {
+      const { rvalue, avalue } = event.target.dataset;
+      if (rvalue !== undefined) rules[Number(rvalue)].condition.value = event.target.value;
+      if (avalue !== undefined) { const action = actionAt(avalue); if (action.type === 'url') action.url = event.target.value; else action.message = event.target.value; }
+    });
+    $('#routing').addEventListener('click', async event => {
+      if (event.target.dataset.rremove !== undefined) { rules.splice(Number(event.target.dataset.rremove), 1); draw(); }
+      if (event.target.id === 'add-rule' && questions.length) { rules.push({ condition: { field: questions[0].id, op: 'equals', value: '' }, action: { type: 'event', event_type_id: eventTypes[0]?.id } }); draw(); }
+      if (event.target.id === 'toggle-fallback') { fallback = fallback ? null : { type: 'message', message: '' }; draw(); }
+      if (event.target.id === 'save-routing' || event.target.id === 'clear-routing') {
+        try {
+          form = await api('PUT', wsPath(`/forms/${form.id}/routing`), { routing: event.target.id === 'clear-routing' ? null : { rules, fallback } });
+          toast(event.target.id === 'clear-routing' ? 'Routing turned off.' : 'Routing saved.');
+          draw();
+        } catch (error) { reportError(error); }
+      }
+    });
+  }
   $('#delete-form').onclick = async () => {
     if (!(await ask({ title: 'Delete this form?', body: 'The form and all of its responses are permanently deleted.', confirm: 'Delete form and responses', danger: true }))) return;
     try { await api('DELETE', wsPath('/forms/' + form.id)); setDirty(false); toast('Form deleted.'); ctx.navigate('/forms', { replace: true }); }

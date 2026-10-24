@@ -6,20 +6,23 @@ import { findPublishedEventType } from './meet/event-types.mjs';
 // Serves the static frontend for local development and single-host deployments. In the split
 // deployment Vercel serves frontend/ with the same rules (frontend/vercel.json) and this is off.
 
-const TYPES = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
-const STATIC = /^\/(app\.js|app\.css|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs)$/;
+const TYPES = { '.webmanifest': 'application/manifest+json', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
+const STATIC = /^\/(app\.js|app\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs)$/;
 const LEGACY = { '/book': '/meet', '/form': '/forms' };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const PAGES = [
   /^\/$/, /^\/meet$/, /^\/forms$/, /^\/flow$/, /^\/privacy$/, /^\/terms$/, /^\/account$/, /^\/billing$/,
   new RegExp(`^/meet/event-types/(new|${UUID})$`), /^\/meet\/manage\/[A-Za-z0-9_-]{20,100}$/,
-  new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`)
+  new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`),
+  /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
 ];
 
 function resolvePage(app, path) {
   if (PAGES.some(pattern => pattern.test(path))) return { status: 200 };
-  const booking = /^\/meet\/([a-z0-9-]{2,60})\/([a-z0-9-]{2,60})$/.exec(path);
-  if (booking && findPublishedEventType(app, booking[1], booking[2])) return { status: 200 };
+  const booking = /^\/(embed\/)?meet\/([a-z0-9-]{2,60})\/([a-z0-9-]{2,60})$/.exec(path);
+  if (booking && findPublishedEventType(app, booking[2], booking[3])) return { status: 200, embeddable: Boolean(booking[1]) };
+  const workspacePage = /^\/meet\/([a-z0-9-]{2,60})$/.exec(path);
+  if (workspacePage && app.db.get('SELECT 1 FROM workspaces WHERE slug = ?', workspacePage[1])) return { status: 200 };
   const form = /^\/f\/([a-z0-9-]{3,60})$/.exec(path);
   if (form && app.db.get('SELECT 1 FROM forms WHERE slug = ? AND published_version IS NOT NULL', form[1])) return { status: 200, embeddable: true };
   return { status: 404 };

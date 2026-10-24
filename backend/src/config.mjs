@@ -10,12 +10,21 @@ export function loadConfig(env = process.env, overrides = {}) {
   if (production && billingProvider === 'test' && env.ALLOW_TEST_BILLING !== 'true') billingProvider = 'none';
   const config = {
     production,
+    releaseMode: env.RELEASE_MODE || 'evaluation',
+    persistentStorageConfirmed: env.PERSISTENT_STORAGE_CONFIRMED === 'true',
+    backupsConfirmed: env.BACKUPS_CONFIRMED === 'true',
+    emailDomainVerified: env.EMAIL_DOMAIN_VERIFIED === 'true',
+    providerSmokeConfirmed: env.PROVIDER_SMOKE_CONFIRMED === 'true',
+    monitoringConfirmed: env.MONITORING_CONFIRMED === 'true',
+    commercialBillingConfirmed: env.COMMERCIAL_BILLING_CONFIRMED === 'true',
     host: env.HOST || '127.0.0.1',
     port: Number(env.PORT || 3000),
     baseUrl,
     productDomain,
     databasePath: env.DATABASE_PATH || './data/schedora.db',
     trustProxy: env.TRUST_PROXY === 'true',
+    // Requests per minute per client address, across the whole site.
+    rateLimitPerMinute: Number(env.RATE_LIMIT_PER_MINUTE || 600),
     // Proxies in front of the app that append to X-Forwarded-For (Render = 1; Vercel rewrite + Render = 2).
     trustProxyHops: Math.max(1, Number(env.TRUST_PROXY_HOPS || 1)),
     // Local development serves the static frontend from ../frontend; on Render the API runs alone.
@@ -42,7 +51,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     microsoft: { clientId: env.MICROSOFT_CLIENT_ID || '', clientSecret: env.MICROSOFT_CLIENT_SECRET || '' },
     zoom: { clientId: env.ZOOM_CLIENT_ID || '', clientSecret: env.ZOOM_CLIENT_SECRET || '' },
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
-    aiModel: env.AI_MODEL || 'claude-sonnet-5-5',
+    aiModel: env.AI_MODEL || 'claude-opus-5-5',
     inboundEmailSecret: env.INBOUND_EMAIL_SECRET || '',
     assistAddress: env.ASSIST_ADDRESS || `assist@${productDomain}`,
     operator: {
@@ -61,6 +70,8 @@ export function loadConfig(env = process.env, overrides = {}) {
   config.allowedOriginPatterns = origins.filter(origin => origin.includes('*'))
     .map(origin => new RegExp('^' + origin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+') + '$', 'i'));
   if (!['open', 'enforced'].includes(config.billingMode)) throw new Error('BILLING_MODE must be open or enforced.');
+  if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
+  if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
   if (config.smsProvider === 'twilio' && (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioFrom)) throw new Error('SMS_PROVIDER=twilio needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.');
   return config;

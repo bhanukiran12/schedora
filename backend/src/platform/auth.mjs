@@ -78,7 +78,7 @@ export function createWorkspaceRecord(app, ownerId, name) {
   const id = randomUUID();
   // Workspace slugs share the /meet/<workspace>/<event> namespace with host pages.
   let base = slugify(name).slice(0, 40);
-  if (['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api'].includes(base) || base.length < 2) base = `${base}-workspace`.replace(/^-/, '');
+  if (['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api', 'contacts', 'embed'].includes(base) || base.length < 2) base = `${base}-workspace`.replace(/^-/, '');
   let slug = base;
   for (let attempt = 2; app.db.get('SELECT 1 FROM workspaces WHERE slug = ?', slug); attempt++) slug = `${base}-${attempt}`;
   const now = app.now();

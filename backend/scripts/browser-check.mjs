@@ -18,11 +18,12 @@ const shotsDir = shotsIndex > 0 ? process.argv[shotsIndex + 1] : null;
 if (shotsDir) mkdirSync(shotsDir, { recursive: true });
 
 const workDir = mkdtempSync(join(tmpdir(), 'schedora-browser-'));
-const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { workerIntervalMs: 500 }, log: () => {} });
+const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
 await app.start();
 await new Promise(resolve => app.server.close(resolve));
 await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${app.server.address().port}`;
+app.config.baseUrl = base; // links in emails and payment redirects point at this test server
 
 const port = 9300 + Math.floor(Math.random() * 500);
 const browser = spawn(browserPath, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${join(workDir, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
@@ -100,7 +101,11 @@ async function layoutCheck(name) {
 const steps = [];
 async function step(name, fn) {
   try { await fn(); steps.push(`✓ ${name}`); }
-  catch (error) { steps.push(`✗ ${name}: ${error.message}`); problems.push(`${name}: ${error.message}`); }
+  catch (error) {
+    const seen = await evaluate("location.pathname + ' | ' + (document.querySelector('#main')?.innerText || '').split(String.fromCharCode(10)).join(' ').slice(0, 160)").catch(() => '');
+    steps.push(`✗ ${name}: ${error.message}`);
+    problems.push(`${name}: ${error.message} [page: ${seen}]`);
+  }
 }
 
 try {
@@ -123,7 +128,7 @@ try {
     await fill('#title', 'Intro call'); await fill('#min_notice_hours', '0');
     await evaluate("document.querySelector('[name=published]').checked = true");
     await click('#event-form [type="submit"]');
-    await waitFor("/^\\/meet\\/event-types\\/[0-9a-f-]{36}$/.test(location.pathname)", 'saved event type');
+    await waitFor("/^\\/meet\\/event-types\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#slug')", 'saved event type');
     eventSlug = await evaluate("document.querySelector('#slug').value");
     if (eventSlug !== 'intro-call') throw new Error('unexpected slug ' + eventSlug);
   });
@@ -152,7 +157,7 @@ try {
     await waitFor("location.search.includes('done=rescheduled')", 'rescheduled');
   });
   await step('host sees booking and email delivery', async () => {
-    await open('/meet?tab=upcoming', "document.querySelector('.list, .empty')");
+    await open('/meet?tab=meetings', "document.querySelector('#tab-panel .list, #tab-panel .empty')");
     if (!(await text()).includes('Ravi Invitee')) throw new Error('booking not listed');
     await open('/meet?tab=emails', "document.querySelector('table')");
     await layoutCheck('email delivery');
@@ -203,7 +208,7 @@ try {
     await fill('#name', 'Prep task');
     await fill('#status', 'enabled');
     await click('#flow-form [type="submit"]');
-    await waitFor("/^\\/flow\\/[0-9a-f-]{36}$/.test(location.pathname)", 'saved flow');
+    await waitFor("/^\\/flow\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#simulate')", 'saved flow');
     await click('#simulate');
     await waitFor("document.querySelector('#simulation h2')", 'simulation');
   });
@@ -225,7 +230,62 @@ try {
     await click('[data-action="checkout"][data-plan="suite"]');
     await waitFor("document.body.innerText.includes('Suite plan')", 'subscription listed');
   });
-  await step('account page', async () => { await open('/account', "document.querySelector('#members .list')"); await layoutCheck('account'); });
+  await step('account page and settings', async () => {
+    await open('/account', "document.querySelector('#members .list') && document.querySelector('#brand-form')");
+    await layoutCheck('account');
+    await fill('#k-name', 'Laptop'); await click('#key-form [type="submit"]');
+    await waitFor("document.querySelector('#new-key input')?.value.startsWith('sch_')", 'new API key shown');
+  });
+  for (const tab of ['meetings', 'polls', 'contacts', 'workflows', 'analytics', 'integrations', 'insights']) {
+    await step(`Meet tab: ${tab}`, async () => { await open(`/meet?tab=${tab}`, "document.querySelector('#tab-panel') && !document.querySelector('#tab-panel > .loading')"); await layoutCheck(`meet ${tab}`); });
+  }
+  await step('poll: create, vote, view results', async () => {
+    await open('/meet?tab=polls', "document.querySelector('#new-poll')");
+    await click('#new-poll');
+    await fill('#poll-title', 'Planning');
+    await evaluate("{ const input = document.querySelector('[data-option]'); input.value = '2026-11-03T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await click('#add-option');
+    await evaluate("{ const input = document.querySelectorAll('[data-option]')[1]; input.value = '2026-11-04T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await click('#create-poll [type="submit"]');
+    await waitFor("document.querySelector('[data-open]')", 'poll listed');
+    const pollPath = await evaluate("new URL(document.querySelector('[data-copy]').dataset.copy).pathname");
+    await open(pollPath, "document.querySelector('#vote')");
+    await layoutCheck('public poll');
+    await evaluate("document.querySelector('#vote input[type=checkbox]').checked = true");
+    await fill('#v-name', 'Ana'); await fill('#v-email', 'ana@example.com');
+    await click('#vote [type="submit"]');
+    await waitFor("document.body.innerText.includes('Responded: Ana')", 'vote recorded');
+  });
+  await step('team round-robin event via editor', async () => {
+    await open('/meet/event-types/new?kind=round_robin', "document.querySelector('#event-form')");
+    await layoutCheck('event editor team');
+    await fill('#title', 'Team demo');
+    await click('#event-form [type="submit"]');
+    await waitFor("/^\\/meet\\/event-types\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#slug')", 'saved team event');
+  });
+  await step('public workspace page and embedded booking', async () => {
+    await open(`/meet/${workspaceSlug}`, "document.querySelector('.event-grid')");
+    await layoutCheck('workspace page');
+    await open(`/embed/meet/${workspaceSlug}/${eventSlug}`, "document.querySelector('.day[data-available]')");
+    if (!(await evaluate("document.body.dataset.embed === '1' && getComputedStyle(document.querySelector('.site-header')).display === 'none'"))) throw new Error('embed mode not applied');
+  });
+  await step('paid booking with test checkout', async () => {
+    await open('/meet/event-types/new', "document.querySelector('#event-form')");
+    await fill('#title', 'Paid session'); await fill('#min_notice_hours', '0'); await fill('#price', '499');
+    await evaluate("document.querySelector('[name=published]').checked = true");
+    await click('#event-form [type="submit"]');
+    await waitFor("/^\\/meet\\/event-types\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#slug')", 'saved paid event');
+    const paidSlug = await evaluate("document.querySelector('#slug').value");
+    await open(`/meet/${workspaceSlug}/${paidSlug}`, "document.querySelector('.day[data-available]')");
+    await evaluate("[...document.querySelectorAll('.day[data-available]')].pop().click()");
+    await click('.slot');
+    await fill('#name', 'Payer'); await fill('#email', 'payer@example.com');
+    await click('#invitee-form [type="submit"]');
+    await waitFor("location.pathname.startsWith('/meet/pay/') && document.querySelector('#simulate-pay')", 'test checkout');
+    await layoutCheck('test checkout');
+    await click('#simulate-pay');
+    await waitFor("document.body.innerText.includes('Payment received')", 'payment confirmed');
+  });
 } finally {
   socket.close();
   browser.kill();

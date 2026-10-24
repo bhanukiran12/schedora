@@ -1,4 +1,5 @@
 # Launch status
+Meet stabilization pass: production preflight and startup guard added; Google selected for the first calendar integration. Run npm run production-check in backend. See [Meet release checklist](docs/MEET_RELEASE.md). Local checks pass (60 tests, 69 syntax-checked files, shared logic synchronized); live provider verification and deployment remain blocked on configuration and operational evidence. Browser checks were not rerun in this pass.
 Updated 24 October 2026. The product runs end to end locally. It has not been deployed and must not take real customer bookings or payments until the blockers below are cleared.
 
 ## Ready
@@ -19,5 +20,7 @@ Updated 24 October 2026. The product runs end to end locally. It has not been de
 6. Formal accessibility audit (keyboard, screen reader, zoom) and security review.
 7. Load test of booking and form submission at expected peak.
 8. Controlled beta with real users.
+9. For each Meet integration you want live: Google and Microsoft OAuth apps (with their verification reviews), Zoom app, Twilio number, Anthropic API key, inbound email route for Meet Assist ([deployment guide](docs/DEPLOYMENT.md#connecting-providers-meet-features)).
+10. Move the database off the free plan's temporary disk (paid disk or hosted Postgres) before storing real bookings, contacts or transcripts.
 
 Release warnings for items 1–3 are logged each time the backend starts.

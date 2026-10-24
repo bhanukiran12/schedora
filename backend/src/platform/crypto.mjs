@@ -7,8 +7,10 @@ import { fail } from '../http.mjs';
 function key(config) {
   if (config.encryptionKey) {
     const buffer = Buffer.from(config.encryptionKey, 'base64');
-    if (buffer.length !== 32) throw new Error('APP_ENCRYPTION_KEY must be 32 bytes, base64-encoded.');
-    return buffer;
+    if (buffer.length === 32) return buffer;
+    // Any other high-entropy value (such as a platform-generated secret) is stretched to 32 bytes.
+    if (config.encryptionKey.length < 32) throw new Error('APP_ENCRYPTION_KEY is too short; use 32 random bytes, base64-encoded.');
+    return createHash('sha256').update(config.encryptionKey).digest();
   }
   if (config.production) fail(503, 'encryption_not_configured', 'Connecting integrations needs APP_ENCRYPTION_KEY on the server.');
   return createHash('sha256').update('schedora-development-only-key').digest();

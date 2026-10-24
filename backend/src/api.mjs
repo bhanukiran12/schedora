@@ -11,6 +11,8 @@ import { registerMeetRoutes } from './api-meet.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
 import { handleMcp } from './platform/mcp.mjs';
+import { chat, createRecap, createTranscript, deleteTranscript, getTranscript, handleInboundEmail, listTranscripts, meetingPrep, publicRecap, shareRecap, unshareRecap } from './ai/service.mjs';
+import { timingSafeEqual } from 'node:crypto';
 import { audit, authenticateKey, createEndpoint, createKey, deleteEndpoint, listAudit, listEndpoints, listKeys, redeliver, revokeKey, updateEndpoint } from './platform/developer.mjs';
 
 export function createApi(app) {
@@ -109,6 +111,44 @@ export function createApi(app) {
       return { redirect: `/meet?tab=calendar&error=${encodeURIComponent(error.message.slice(0, 120))}` };
     }
   }, { public: true });
+
+  // ---- AI: transcripts, recaps, chat, meeting prep, Meet Assist ----
+  get('/api/workspaces/:ws/transcripts', ctx => listTranscripts(app, member(ctx, 'meet.manage_own').workspace.id, ctx.query.get('q')));
+  post('/api/workspaces/:ws/transcripts', async ctx => { const actor = member(ctx, 'meet.manage_own'); return { status: 201, body: createTranscript(app, actor.workspace.id, actor.userId, await ctx.json(600 * 1024)) }; });
+  // For notetaker services (call-recording bots) that deliver transcripts with an API key.
+  post('/api/workspaces/:ws/notetaker/transcripts', async ctx => {
+    const actor = member(ctx, 'meet.manage_own');
+    const transcript = createTranscript(app, actor.workspace.id, actor.userId, await ctx.json(600 * 1024), 'notetaker');
+    let recap = null;
+    if (app.anthropic) { try { recap = await createRecap(app, actor.workspace.id, transcript.id); } catch { recap = null; } }
+    return { status: 201, body: { transcript_id: transcript.id, recap } };
+  });
+  get('/api/workspaces/:ws/transcripts/:id', ctx => getTranscript(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id));
+  get('/api/workspaces/:ws/transcripts/:id/download', ctx => {
+    const transcript = getTranscript(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id);
+    return { raw: transcript.content, type: 'text/plain; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="transcript-${transcript.id.slice(0, 8)}.txt"` } };
+  });
+  del('/api/workspaces/:ws/transcripts/:id', ctx => { deleteTranscript(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id); return { status: 204 }; });
+  post('/api/workspaces/:ws/transcripts/:id/recap', async ctx => { const actor = member(ctx, 'meet.manage_own'); limit(ctx, 'ai', 20); return { status: 201, body: await createRecap(app, actor.workspace.id, ctx.params.id) }; });
+  post('/api/workspaces/:ws/recaps/:id/share', async ctx => shareRecap(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id, await ctx.json()));
+  del('/api/workspaces/:ws/recaps/:id/share', ctx => { unshareRecap(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id); return { status: 204 }; });
+  get('/api/public/recaps/:token', async ctx => { limit(ctx, 'login', 20); return publicRecap(app, ctx.params.token, ctx.request.headers['x-recap-passcode']); }, { public: true });
+  post('/api/workspaces/:ws/ai/chat', async ctx => { const actor = member(ctx, 'meet.manage_own'); limit(ctx, 'ai', 30); return chat(app, actor, await ctx.json(256 * 1024)); });
+  get('/api/workspaces/:ws/bookings/:id/prep', async ctx => {
+    const actor = member(ctx, 'meet.manage_own');
+    const booking = app.db.get('SELECT meeting_id FROM bookings WHERE id = ? AND workspace_id = ?', ctx.params.id, actor.workspace.id);
+    const isHost = booking && app.db.get('SELECT 1 FROM meeting_hosts WHERE meeting_id = ? AND host_id = ?', booking.meeting_id, actor.userId);
+    if (!booking || (!isHost && !['owner', 'admin'].includes(actor.role))) fail(404, 'not_found', 'Appointment not found.');
+    if (ctx.query.get('ai') === '1') limit(ctx, 'ai', 20);
+    return meetingPrep(app, actor.workspace.id, ctx.params.id, ctx.query.get('ai') === '1');
+  });
+  // Inbound email webhook (from the email provider's inbound parsing), authenticated by a shared secret.
+  post('/api/assist/inbound', async ctx => {
+    const secret = String(ctx.request.headers['x-inbound-secret'] || '');
+    const expected = app.config.inboundEmailSecret;
+    if (!expected || secret.length !== expected.length || !timingSafeEqual(Buffer.from(secret), Buffer.from(expected))) fail(401, 'unauthorized', 'Invalid inbound secret.');
+    return handleInboundEmail(app, await ctx.json(256 * 1024));
+  }, { public: true, csrfExempt: true });
 
   // ---- Single sign-on (OpenID Connect) ----
   get('/api/workspaces/:ws/sso', ctx => getSsoConfig(app, member(ctx, 'workspace.delete').workspace.id));
