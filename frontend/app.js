@@ -62,18 +62,28 @@ let currentPath = location.pathname;
 
 function renderHeader(product) {
   const links = boot.links;
+  const individual = product !== 'suite';
+  $('#site-header').classList.toggle('product-header', individual);
   const nav = [['suite', 'Suite', links.suite], ['meet', 'Meet', boot.landings.meet], ['forms', 'Forms', boot.landings.forms], ['flow', 'Flow', boot.landings.flow], ['billing', 'Plans', '/billing']];
+  const productNavigation = {
+    meet: [['availability', 'Availability', '#features'], ['booking', 'Booking pages', '#how-it-works'], ['demo', 'Explore Meet', '/demo/meet']],
+    forms: [['builder', 'Form builder', '#features'], ['responses', 'Collect responses', '#how-it-works'], ['demo', 'Explore Forms', '/demo/forms']],
+    flow: [['automation', 'Automations', '#features'], ['connections', 'Connected workflows', '#how-it-works'], ['demo', 'Explore Flow', '/demo/flow']]
+  };
+  if (individual) nav.splice(0, nav.length, ...productNavigation[product].map(([key, label, href]) => [key, label, href.startsWith('#') ? boot.landings[product] + href : href]));
   if (currentPath === '/') nav.splice(0, nav.length, ['suite', 'Products', '#ecosystem'], ['why', 'Why Schedora', '#why-schedora'], ['pricing', 'Pricing', '#pricing'], ['roadmap', 'Our roadmap', '#roadmap']);
   const current = currentPath === '/billing' ? 'billing' : product;
   const home = product === 'suite' ? links.suite : boot.landings[product];
   mount($('#site-header'), html`<div class="container header-inner">
     <a class="lockup" href="${home}" aria-label="${PRODUCTS[product].name}${product === 'suite' ? '' : ' by Schedora'}, home">${lockup(product)}</a>
-    <nav class="site-nav" aria-label="Products">${nav.map(([key, label, href]) => html`<a href="${href}" ${key === current ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
+    <nav class="site-nav" aria-label="${individual ? PRODUCTS[product].name + ' navigation' : 'Products'}">${nav.map(([key, label, href]) => html`<a href="${href}" ${key === current ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
     <div class="header-tools">
+      ${individual ? html`<details class="ecosystem-switcher"><summary><img src="/logo-schedora.png" width="18" height="18" alt="">Schedora apps<span aria-hidden="true">⌄</span></summary><nav aria-label="Schedora ecosystem"><a href="${links.suite}">${lockup('suite')}<small>The connected ecosystem</small></a>${['meet', 'forms', 'flow'].map(key => html`<a href="${boot.landings[key]}" ${product === key ? raw('aria-current="page"') : ''}>${lockup(key)}<small>${key === 'meet' ? 'Appointments & scheduling' : key === 'forms' ? 'Questions & responses' : 'Automation & follow-up'}</small></a>`)}</nav></details>` : ''}
       ${session.user && session.workspaces.length > 1 ? html`<label class="visually-hidden" for="workspace-switch">Workspace</label>
         <select id="workspace-switch">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name}</option>`)}</select>` : ''}
       <button class="btn btn-small" type="button" id="theme-toggle" aria-label="Color theme: ${theme}. Activate to change."><span aria-hidden="true">◐</span><span class="theme-label">${theme[0].toUpperCase() + theme.slice(1)}</span></button>
       <a class="btn btn-small" href="/account">${session.user ? 'Account' : 'Sign in'}</a>
+      ${individual ? html`<a class="btn btn-small btn-primary product-open" href="${links[product]}">Open ${PRODUCTS[product].name} →</a>` : ''}
     </div></div>`);
   $('#theme-toggle').onclick = () => {
     theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
@@ -157,6 +167,7 @@ export async function render() {
   if (!ctx.alive()) return;
   if (!firstRender) (main.querySelector('h1') ? main : main).focus({ preventScroll: true });
   if (!firstRender) window.scrollTo(0, 0);
+  if (location.hash) { try { document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView(); } catch { /* Ignore malformed hash links. */ } }
   firstRender = false;
   countPage();
 }
@@ -173,7 +184,7 @@ document.addEventListener('click', event => {
   link.closest('dialog')?.close('cancel');
   delete document.body.dataset.dirty;
   if (url.pathname === location.pathname && url.search === location.search) return render();
-  navigate(url.pathname + url.search);
+  navigate(url.pathname + url.search + url.hash);
 });
 window.addEventListener('popstate', () => { currentPath = location.pathname; render(); });
 window.addEventListener('beforeunload', event => { if (document.body.dataset.dirty) event.preventDefault(); });

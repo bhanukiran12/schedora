@@ -315,6 +315,40 @@ dialog::backdrop { background: #0008; }
 .row > label:not(.check), .range > label:not(.check) { margin: 0; }
 .row > input:not([type="checkbox"]):not([type="radio"]), .row > select, .range > select, .range > input:not([type="checkbox"]):not([type="radio"]):not([type="time"]):not([type="date"]) { width: auto; flex: 1 1 180px; }
 .range > .check { margin: 0; }
+.product-header { border-top: 3px solid var(--accent); }
+.product-header .header-inner { max-width: 1320px; gap: 20px; min-height: 78px; }
+.product-header > .header-inner > .lockup .lockup-name { color: var(--accent); font-size: 24px; }
+.product-header > .header-inner > .lockup img { width: 32px; height: 32px; flex-basis: 32px; }
+.product-header .site-nav { gap: 18px; }
+.product-header .site-nav a { font-size: 13px; }
+.product-header .header-tools { gap: 8px; }
+.ecosystem-switcher { position: relative; font-size: 12px; }
+.ecosystem-switcher summary { display: flex; align-items: center; gap: 7px; cursor: pointer; min-height: 44px; padding: 8px; border-radius: 8px; color: var(--muted); list-style: none; white-space: nowrap; }
+.ecosystem-switcher summary::-webkit-details-marker { display: none; }
+.ecosystem-switcher summary:hover { background: var(--surface-2); }
+.ecosystem-switcher summary > img { width: 18px; height: 18px; object-fit: contain; }
+.ecosystem-switcher > nav { position: absolute; right: 0; top: calc(100% + 8px); width: 270px; max-width: calc(100vw - 32px); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px; z-index: 40; box-shadow: var(--shadow); }
+.ecosystem-switcher nav > a { display: block; padding: 10px 12px; border-radius: 8px; text-decoration: none; color: var(--ink); }
+.ecosystem-switcher nav > a:hover, .ecosystem-switcher nav > a[aria-current="page"] { background: var(--surface-2); }
+.ecosystem-switcher nav .lockup-name { font-size: 17px; color: var(--ink); }
+.ecosystem-switcher nav small { display: block; font-size: 11px; padding-left: 38px; }
+.ecosystem-switcher nav .lockup-name small { display: none; }
+@media (max-width: 1100px) {
+  .product-header .header-inner { grid-template-columns: auto 1fr; }
+  .product-header .header-tools { justify-content: flex-end; }
+  .product-header .site-nav { grid-row: 2; grid-column: 1 / -1; padding-bottom: 8px; justify-content: flex-start; }
+}
+@media (max-width: 580px) {
+  .product-header .header-inner { gap: 6px 12px; padding-top: 10px; }
+  .product-header .header-tools { flex-wrap: wrap; }
+  .product-header .product-open { display: none; }
+  .product-header .header-tools > .btn { font-size: 12px; padding-inline: 8px; }
+  .product-header .theme-label { display: none; }
+  .product-header .site-nav { gap: 14px; }
+  .product-header .site-nav a { font-size: 12px; }
+  .ecosystem-switcher summary { font-size: 11px; padding-inline: 2px; }
+  .ecosystem-switcher > nav { right: -52px; }
+}
 
 /* Individual product introductions share the suite's locked brand tokens. */
 .product-landing { padding-bottom: 64px; }

@@ -67,7 +67,7 @@ export function productLanding(ctx) {
         <p class="muted landing-note">${key === 'meet' ? 'Times shown in your invitee’s time zone.' : key === 'forms' ? 'A few good questions can start something.' : 'From a new response to a useful next step.'}</p>
       </div>
     </section>
-    <section class="landing-section"><p class="landing-eyebrow">Made for your everyday</p><h2>A little less busywork. A clearer next step.</h2>
+    <section class="landing-section" id="features"><p class="landing-eyebrow">Made for your everyday</p><h2>${key === 'meet' ? 'Your availability. Your booking experience.' : key === 'forms' ? 'Your questions. A better way to answer.' : 'Your trigger. Your next step, handled.'}</h2>
       <div class="landing-features">${product.features.map(([title, text]) => html`<article><h3>${title}</h3><p>${text}</p></article>`)}</div>
     </section>
     <section class="landing-section" id="how-it-works"><p class="landing-eyebrow">Simple from the start</p><h2>Make your first ${key === 'meet' ? 'appointment' : key === 'forms' ? 'form' : 'flow'} happen.</h2>
