@@ -57,7 +57,7 @@ export function productLanding(ctx) {
     <section class="landing-hero">
       <div>${ctx.lockup(key, true)}<p class="landing-eyebrow">${product.eyebrow}</p>
         <h1>${product.title}</h1><p class="lead">${product.lead}</p>
-        <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="btn" href="#how-it-works">How it works</a></div>
+        <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="btn" href="/demo/${key}">Try interactive demo</a><a href="#how-it-works">How it works</a></div>
         <p class="muted landing-note">One Schedora account. Your own ${product.name} workspace.</p>
       </div>
       <div class="landing-preview" aria-label="Illustrative ${product.name} preview">

@@ -4,6 +4,10 @@ export function setTitle(title) {
   document.title = title;
   const description = document.querySelector('meta[name="description"]');
   if (description) description.content = 'Schedora brings appointment scheduling, forms and follow-up automation together with Meet, Forms and Flow.';
+  const socialTitle = document.querySelector('meta[property="og:title"]');
+  const socialDescription = document.querySelector('meta[property="og:description"]');
+  if (socialTitle) socialTitle.content = title;
+  if (socialDescription && description) socialDescription.content = description.content;
 }
 
 // Shown in place of private product screens for signed-out visitors.

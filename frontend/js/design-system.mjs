@@ -1,0 +1,11 @@
+import { html } from './core.mjs';
+export const productNames = { suite: 'Schedora', meet: 'Meet', forms: 'Forms', flow: 'Flow' };
+const marks = { suite: 'SchedoraMark', meet: 'BookMark', forms: 'FormsMark', flow: 'FlowMark' };
+export const mark = (key, size = 'normal') => html`<span class="ds-mark ds-mark-${size}"><img src="/assets/figma/${marks[key]}.png" alt="" width="40" height="30"></span>`;
+export const brand = (key = 'suite') => html`<span class="ds-brand">${mark(key)}<span>${key === 'suite' ? 'schedora' : productNames[key]}</span></span>`;
+export const icon = name => html`<span class="ds-icon" aria-hidden="true"><img src="/assets/figma/${name}.svg" alt="" loading="lazy"></span>`;
+export const pill = (label, tone = '') => html`<span class="ds-pill ${tone}">${label}</span>`;
+export const button = (label, href, primary = false) => html`<a class="btn ${primary ? 'btn-primary' : ''}" href="${href}">${label}</a>`;
+export const spark = () => html`<span class="ds-spark" aria-hidden="true">${[2, 4, 3, 6, 5, 7, 9].map(n => html`<i class="bar-${n}"></i>`)}</span>`;
+export const metric = (label, value, context, tone = '') => html`<article class="ds-metric ${tone}"><p>${label}</p><div><strong>${value}</strong>${spark()}</div><small>${context}</small></article>`;
+export const panel = (title, content, action = '') => html`<section class="ds-panel"><div class="ds-panel-head"><h2>${title}</h2>${action}</div>${content}</section>`;

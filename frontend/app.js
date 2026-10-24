@@ -7,10 +7,14 @@ import * as flow from './js/flow.mjs';
 import * as account from './js/account.mjs';
 import { loadStartupConfig } from './js/connection.mjs';
 import { productLanding } from './js/product-landing.mjs';
+import { ecosystemHome } from './js/ecosystem.mjs';
+const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = [
-  [/^\/$/, pages.home],
+  [/^\/$/, ecosystemHome],
+  [/^\/demo(?:\/.*)?$/, previewView('studio')],
+  [/^\/start(?:\/.*)?$/, previewView('onboarding')],
   [/^\/products\/(meet|forms|flow)$/, productLanding],
   [/^\/meet$/, meet.dashboard],
   [new RegExp(`^/meet/event-types/(new|${UUID.slice(1, -1)})$`), meet.editor],
@@ -59,6 +63,7 @@ let currentPath = location.pathname;
 function renderHeader(product) {
   const links = boot.links;
   const nav = [['suite', 'Suite', links.suite], ['meet', 'Meet', boot.landings.meet], ['forms', 'Forms', boot.landings.forms], ['flow', 'Flow', boot.landings.flow], ['billing', 'Plans', '/billing']];
+  if (currentPath === '/') nav.splice(0, nav.length, ['suite', 'Products', '#ecosystem'], ['why', 'Why Schedora', '#why-schedora'], ['pricing', 'Pricing', '#pricing'], ['roadmap', 'Our roadmap', '#roadmap']);
   const current = currentPath === '/billing' ? 'billing' : product;
   const home = product === 'suite' ? links.suite : boot.landings[product];
   mount($('#site-header'), html`<div class="container header-inner">
@@ -132,6 +137,7 @@ export async function render() {
   const main = $('#main');
   const query = new URLSearchParams(location.search);
   const product = productFor(currentPath);
+  document.body.dataset.design = currentPath.startsWith('/demo') ? 'workspace' : currentPath.startsWith('/start') ? 'onboarding' : currentPath === '/' ? 'marketing' : '';
   document.body.dataset.product = product === 'suite' ? 'meet' : product;
   if (query.get('embed') === '1' && currentPath.startsWith('/f/')) document.body.dataset.embed = '1';
   renderHeader(product);
@@ -142,7 +148,7 @@ export async function render() {
     if (match) { view = handler; params = match.slice(1); break; }
   }
   const ctx = { main, params, query, path: currentPath, alive: () => token === renderToken, navigate, render, lockup };
-  if (boot.offline) mount(main, html`<div class="container page"><h1>Schedora is temporarily unavailable</h1><div class="notice notice-bad" role="alert"><p>The service may be starting up or temporarily unavailable. Please try again. No booking has been submitted.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
+  if (boot.offline && !['workspace', 'onboarding', 'marketing'].includes(document.body.dataset.design) && !currentPath.startsWith('/products/')) mount(main, html`<div class="container page"><h1>Schedora is temporarily unavailable</h1><div class="notice notice-bad" role="alert"><p>The service may be starting up or temporarily unavailable. Please try again. No booking has been submitted.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
   else try {
     await view(ctx);
   } catch (error) {
@@ -164,6 +170,7 @@ document.addEventListener('click', event => {
   if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
   if (document.body.dataset.dirty && !window.confirm('You have unsaved changes. Leave this page?')) { event.preventDefault(); return; }
   event.preventDefault();
+  link.closest('dialog')?.close('cancel');
   delete document.body.dataset.dirty;
   if (url.pathname === location.pathname && url.search === location.search) return render();
   navigate(url.pathname + url.search);
@@ -177,7 +184,8 @@ window.addEventListener('beforeunload', event => { if (document.body.dataset.dir
 async function start() {
   const fallback = { productDomain: 'schedora.in', analytics: false, billingMode: 'open', operator: {}, providers: { email: 'outbox', calendar: 'ICS feed', billing: 'none' } };
   mount($('#main'), html`<div class="container page" role="status"><h1>Connecting to Schedora…</h1><p>The service may take a moment to start.</p></div>`);
-  try { Object.assign(boot, fallback, await loadStartupConfig(() => api('GET', '/api/config')), { offline: false }); } catch { Object.assign(boot, fallback, { offline: true }); }
+  if (/^\/(demo|start)(\/|$)/.test(location.pathname)) Object.assign(boot, fallback, { offline: false });
+  else try { Object.assign(boot, fallback, await loadStartupConfig(() => api('GET', '/api/config')), { offline: false }); } catch { Object.assign(boot, fallback, { offline: true }); }
   const host = location.hostname;
   const subdomain = host.endsWith('.' + boot.productDomain) ? host.slice(0, -(boot.productDomain.length + 1)) : '';
   const productRoot = { meet: '/meet', book: '/meet', forms: '/forms', flow: '/flow' }[subdomain];
@@ -193,7 +201,7 @@ await start();
 // Installable app (PWA). Skipped where service workers are unavailable.
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('/sw.js').catch(() => {});
 renderFooter();
-try { await loadMe(); } catch { /* signed-out experience still works */ }
+if (!/^\/(demo|start)(\/|$)/.test(location.pathname)) try { await loadMe(); } catch { /* signed-out experience still works */ }
 if (!consent()) consentBanner(false);
 await render();
 export { api, workspace };
