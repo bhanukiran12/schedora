@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { openDatabase } from './db.mjs';
+import { openPostgres } from './postgres.mjs';
 import { loadConfig, releaseWarnings } from './config.mjs';
 import { createRateLimiter, send, clientAddress } from './http.mjs';
 import { createApi } from './api.mjs';
@@ -16,7 +17,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 // Builds the application. Tests pass an in-memory database, fixed clock and fake providers.
 export function createApp(options = {}) {
   const config = options.config || loadConfig(process.env, options.configOverrides);
-  const db = options.db || openDatabase(options.databasePath ?? config.databasePath);
+  const db = options.db || (config.databaseUrl && !options.databasePath ? openPostgres(config.databaseUrl, { ca: config.databaseCa }) : openDatabase(options.databasePath ?? config.databasePath));
   const app = {
     config,
     db,
@@ -68,6 +69,7 @@ export function createApp(options = {}) {
   });
   app.server.requestTimeout = 30000;
   app.server.headersTimeout = 20000;
+  app.server.keepAliveTimeout = 65000;
 
   app.start = () => new Promise(resolve => {
     for (const warning of releaseWarnings(config)) app.log('warn', 'release_warning', { warning });

@@ -58,5 +58,5 @@ export function consumeQuota(app, workspaceId, metric) {
     if (used >= QUOTAS[metric].monthly) fail(429, 'quota_exceeded', 'This workspace has reached its monthly allowance. The owner can review usage on the Plans page.');
   }
   app.db.run(`INSERT INTO usage_counters (workspace_id, period, metric, count) VALUES (?, ?, ?, 1)
-    ON CONFLICT (workspace_id, period, metric) DO UPDATE SET count = count + 1`, workspaceId, period, metric);
+    ON CONFLICT (workspace_id, period, metric) DO UPDATE SET count = usage_counters.count + 1`, workspaceId, period, metric);
 }

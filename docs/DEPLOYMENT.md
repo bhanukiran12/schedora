@@ -4,6 +4,8 @@ Updated 24 October 2026. Nothing below has been deployed yet; these are the step
 
 ## Architecture
 
+Storage update: DATABASE_URL now selects the Supabase session pooler adapter. See [Supabase storage](SUPABASE.md) for certificate verification, schema initialization, limits, and PostgreSQL backup procedures. Older SQLite-only setup notes below apply only when DATABASE_URL is absent. Supabase persistence does not prevent Render's free worker from sleeping.
+
 ```
 Browser ── https://schedora.in, meet./forms./flow.schedora.in ──▶ Vercel (frontend/, static)
                                      │  /api/* rewrite (same origin for the browser)

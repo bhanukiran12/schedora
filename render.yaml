@@ -28,6 +28,8 @@ services:
         value: "24"
       - key: RELEASE_MODE
         value: evaluation
+      - key: DATABASE_URL
+        sync: false
       - key: NODE_ENV
         value: production
       - key: HOST

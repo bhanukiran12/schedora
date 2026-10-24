@@ -1,9 +1,18 @@
 import { createApp } from '../src/app.mjs';
+import { randomUUID } from 'node:crypto';
+import { openPostgres } from '../src/postgres.mjs';
+import { loadConfig } from '../src/config.mjs';
 
 export const START = Date.UTC(2026, 9, 24, 6, 0); // Saturday 24 October 2026, 06:00 UTC
 
 // Boots the real HTTP server on an in-memory database with a controllable clock and fake providers.
-export async function setup({ config = {} } = {}) {
+export async function setup({ config = {}, db } = {}) {
+  const testSchema = !db && process.env.RUN_POSTGRES_TESTS === 'true' ? 'schedora_test_' + randomUUID().replaceAll('-', '') : null;
+  if (testSchema) {
+    const settings = loadConfig();
+    if (!settings.databaseUrl) throw new Error('DATABASE_URL is required for opt-in PostgreSQL tests.');
+    db = openPostgres(settings.databaseUrl, { ca: settings.databaseCa, schemaName: testSchema });
+  }
   const clock = { now: START };
   const sent = [];
   const emailProvider = {
@@ -17,13 +26,17 @@ export async function setup({ config = {} } = {}) {
   };
   const feeds = new Map();
   const app = createApp({
+    ...(db ? { db } : {}),
     databasePath: ':memory:', now: () => clock.now, emailProvider, log: () => {},
     fetchCalendar: async url => { const feed = feeds.get(url); if (feed instanceof Error) throw feed; if (!feed) throw new Error('unknown feed'); return feed; },
     configOverrides: { billingMode: 'open', billingProvider: 'test', billingWebhookSecret: 'whsec_test', baseUrl: 'http://localhost:3000', ...config }
   });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${app.server.address().port}`;
-  return { app, clock, sent, emailProvider, feeds, base, client: () => client(base), close: () => app.stop() };
+  return { app, clock, sent, emailProvider, feeds, base, client: () => client(base), close: async () => {
+    await app.stop();
+    if (testSchema) { try { db.exec('DROP SCHEMA "' + testSchema + '" CASCADE'); } finally { db.close(); } }
+  } };
 }
 
 export function client(base) {

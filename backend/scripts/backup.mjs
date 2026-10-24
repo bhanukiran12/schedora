@@ -19,6 +19,7 @@ export function backup(source, directory) {
 }
 
 if (process.argv[1]?.endsWith('backup.mjs')) {
+  if (loadConfig().databaseUrl && !process.argv[2]) throw new Error('PostgreSQL is configured. Use pg_dump for the schedora schema; SQLite backup is not a PostgreSQL backup.');
   const source = process.argv[2] || loadConfig().databasePath;
   console.log('Backup written and verified: ' + backup(source, process.argv[3] || './backups'));
 }

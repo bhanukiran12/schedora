@@ -16,6 +16,7 @@ export function restore(backupFile, target) {
 }
 
 if (process.argv[1]?.endsWith('restore.mjs')) {
+  if (loadConfig().databaseUrl) throw new Error('PostgreSQL is configured. Restore a reviewed PostgreSQL backup into an isolated database using pg_restore.');
   const [backupFile, target = loadConfig().databasePath] = process.argv.slice(2);
   if (!backupFile) { console.error('Usage: npm run restore -- <backup-file> [database-path]'); process.exit(1); }
   console.log('Restored into ' + restore(backupFile, target) + '. The previous file was kept beside it. Start the server to apply any newer migrations.');

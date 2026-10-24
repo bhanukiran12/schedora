@@ -9,7 +9,7 @@ From backend, run `npm run production-check` with the intended deployment enviro
 
 Required production settings:
 - NODE_ENV=production; BASE_URL=https://schedora.in.
-- DATABASE_PATH is an absolute path on a mounted persistent volume; PERSISTENT_STORAGE_CONFIRMED=true only after restart/redeploy persistence is tested.
+- DATABASE_URL uses the Supabase session pooler, or DATABASE_PATH is an absolute path on a mounted persistent volume. PERSISTENT_STORAGE_CONFIRMED=true only after restart/redeploy persistence is tested. See [Supabase storage](SUPABASE.md).
 - APP_ENCRYPTION_KEY is stable and at least 32 characters. Back up the key separately and securely; do not regenerate it on deployments.
 - EMAIL_PROVIDER=http with HTTPS EMAIL_HTTP_URL, EMAIL_HTTP_TOKEN, and EMAIL_FROM. The endpoint must accept the documented JSON relay contract and honor Idempotency-Key. EMAIL_DOMAIN_VERIFIED=true only after sender DNS and inbox checks.
 - GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET from the owner's Google OAuth app. Callback is BASE_URL + /api/oauth/google/callback. Connect the host's Google account from Meet after deployment.
@@ -35,7 +35,7 @@ Use a separate database, Google test users and an email sandbox or authorized in
 Record date, build SHA, test accounts, provider event/message IDs, result and remaining defects. Exclude tokens and personal invitee data from evidence committed to Git.
 
 ## Deployment decision
-Current render.yaml is explicitly evaluation-only. Use a persistent disk on a continuously running instance or implement a hosted database adapter before real bookings. Do not collect production data on temporary free-service storage. A paid hosting change requires owner selection; this checklist does not provision or purchase anything.
+Current render.yaml is explicitly evaluation-only. DATABASE_URL now selects persistent Supabase PostgreSQL; without it SQLite still needs a persistent disk. A free sleeping backend still delays workers and reminders even with persistent PostgreSQL. A paid hosting change requires owner selection; this checklist does not provision or purchase anything.
 
 Remaining launch work: real provider tests, subscription payment adapter/prices, password recovery/email verification assessment, security and assistive-technology review, peak-load test, alerts, backup automation and a controlled beta.
 

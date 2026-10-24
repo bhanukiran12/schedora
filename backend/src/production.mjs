@@ -5,7 +5,7 @@ export function meetReadiness(config) {
   const require = (condition, message) => { if (!condition) failures.push(message); };
   require(config.production, 'NODE_ENV must be production.');
   require(new URL(config.baseUrl).protocol === 'https:', 'BASE_URL must use HTTPS.');
-  require(isAbsolute(config.databasePath) && config.databasePath !== ':memory:', 'DATABASE_PATH must be an absolute persistent database path.');
+  require(Boolean(config.databaseUrl) || (isAbsolute(config.databasePath) && config.databasePath !== ':memory:'), 'Configure DATABASE_URL or an absolute persistent DATABASE_PATH.');
   require(config.persistentStorageConfirmed, 'Confirm the database is on a persistent volume with PERSISTENT_STORAGE_CONFIRMED=true.');
   require(config.backupsConfirmed, 'Complete an off-site backup and restore drill, then set BACKUPS_CONFIRMED=true.');
   require(config.emailProvider === 'http' && Boolean(config.emailHttpToken), 'Connect a real HTTP email provider.');

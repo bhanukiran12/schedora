@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // All configuration comes from the server environment. No secret is ever sent to the browser.
@@ -22,6 +23,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     baseUrl,
     productDomain,
     databasePath: env.DATABASE_PATH || './data/schedora.db',
+    databaseUrl: env.DATABASE_URL || '',
+    databaseCa: env.DATABASE_CA_CERT || (env.DATABASE_URL?.includes('.pooler.supabase.com') ? readFileSync(new URL('../certs/supabase-ca.crt', import.meta.url), 'utf8') : ''),
     trustProxy: env.TRUST_PROXY === 'true',
     // Requests per minute per client address, across the whole site.
     rateLimitPerMinute: Number(env.RATE_LIMIT_PER_MINUTE || 600),

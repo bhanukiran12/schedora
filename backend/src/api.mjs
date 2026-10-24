@@ -35,7 +35,7 @@ export function createApi(app) {
     let database = 'ok';
     try { app.db.get('SELECT 1'); } catch { database = 'error'; }
     const pending = app.db.get("SELECT (SELECT COUNT(*) FROM outbox WHERE dispatched_at IS NULL) AS events, (SELECT COUNT(*) FROM emails WHERE status IN ('queued','sending')) AS emails, (SELECT COUNT(*) FROM flow_runs WHERE status IN ('queued','retrying')) AS runs");
-    return { status: database === 'ok' ? 'ok' : 'degraded', database, worker: { last_tick_at: app.worker?.state.lastTickAt ?? null, error: app.worker?.state.lastError ?? null }, pending, release_warnings: releaseWarnings(app.config).length };
+      return { status: database === 'ok' ? 'ok' : 'degraded', database, storage: app.db.dialect || 'sqlite', worker: { last_tick_at: app.worker?.state.lastTickAt ?? null, error: app.worker?.state.lastError ?? null }, pending, release_warnings: releaseWarnings(app.config).length };
   }, { public: true });
 
   get('/api/config', () => publicConfig(app.config), { public: true });

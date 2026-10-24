@@ -3,6 +3,7 @@
 Meet (scheduling), Forms (forms and intake) and Flow (automation) under one account and workspace. Make time for what matters.
 
 ## Documentation
+- [Supabase persistent storage](docs/SUPABASE.md): DATABASE_URL now selects PostgreSQL through the session pooler.
 - [Meet production release checklist](docs/MEET_RELEASE.md) · run `npm run production-check` in backend before release.
 - [Product vision](VISION.md) · [Product requirements](PRD.md) · [Product design](PRODUCT_DESIGN.md) · [Brand](BRAND.md)
 - [Sprint roadmap and implementation status](SPRINT_ROADMAP.md) · [Launch status](LAUNCH.md)
