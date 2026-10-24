@@ -238,6 +238,9 @@ export async function syncMeetingCalendars(app, limit = 20) {
         await deleteEvent(app, row.external_ref, integrations);
         app.db.run("UPDATE meeting_hosts SET external_ref = 'deleted', sync_error = NULL WHERE meeting_id = ? AND host_id = ?", row.meeting_id, row.host_id);
       }
+      // Our calendar writes change free/busy too. Refresh in this worker pass instead of
+      // retaining an old appointment's busy block until the normal 15-minute poll.
+      app.db.run("UPDATE calendar_connections SET last_synced_at = NULL WHERE workspace_id = ? AND user_id = ? AND provider IN ('google', 'microsoft')", row.workspace_id, row.host_id);
     } catch (error) {
       app.db.run('UPDATE meeting_hosts SET sync_error = ? WHERE meeting_id = ? AND host_id = ?', String(error.message).slice(0, 300), row.meeting_id, row.host_id);
     }

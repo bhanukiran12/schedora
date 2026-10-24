@@ -22,7 +22,9 @@ function fakeGoogle(env) {
     if (url === 'https://www.googleapis.com/calendar/v3/freeBusy') {
       const range = JSON.parse(init.body);
       assert.ok(Date.parse(range.timeMax) - Date.parse(range.timeMin) <= 30 * 86400000, 'busy checks use bounded date windows');
-      return json({ calendars: { primary: state.busyError ? { errors: [{ reason: 'notFound' }] } : { busy: [{ start: '2026-10-26T10:00:00Z', end: '2026-10-26T11:00:00Z' }] } } });
+      const busy = [{ start: '2026-10-26T10:00:00Z', end: '2026-10-26T11:00:00Z' },
+        ...[...state.events.values()].map(event => ({ start: event.start.dateTime, end: event.end.dateTime }))];
+      return json({ calendars: { primary: state.busyError ? { errors: [{ reason: 'notFound' }] } : { busy } } });
     }
     if (url.startsWith('https://www.googleapis.com/calendar/v3/calendars/primary/events') && init.method === 'POST') {
       const body = JSON.parse(String(init.body));
@@ -85,10 +87,14 @@ test('Google: OAuth connect, busy times, calendar events with Meet links, cleanu
     const confirmation = env.sent.find(message => message.subject.startsWith('Confirmed'));
     assert.match(confirmation.body, /Location: https:\/\/meet\.google\.com\/abc-defg-hij/);
     assert.equal((await env.client().get('/api/public/bookings/' + booked.manage_token)).body.booking.location.display, 'https://meet.google.com/abc-defg-hij');
+    assert.equal((await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections[0].busy_count, 2, 'creating the Google event refreshes busy times immediately');
 
     await env.client().post(`/api/public/bookings/${booked.manage_token}/cancel`, {});
     await env.app.worker.tick();
     assert.ok(!google.state.events.has(eventId), 'calendar event removed after cancellation');
+    assert.equal((await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections[0].busy_count, 1, 'cancellation removes the cached appointment block without waiting 15 minutes');
+    const freed = (await env.client().get(`/api/public/meet/${ws.slug}/${type.slug}/slots`)).body.slots;
+    assert.ok(freed.includes(MON9), 'the canceled slot is bookable again after the worker pass');
 
     google.state.busyError = true;
     await host.post(`/api/workspaces/${ws.id}/calendar/sync`);
