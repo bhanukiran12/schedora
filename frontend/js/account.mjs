@@ -129,9 +129,11 @@ function signedOut(ctx) {
 
 export async function billing(ctx) {
   setTitle('Plans and billing · Schedora');
+  const catalog = await api('GET', '/api/billing/plans');
+  const priceText = price => price ? `${new Intl.NumberFormat('en-IN', { style: 'currency', currency: price.currency }).format(price.amount_cents / 100)} / month` : 'Not yet published';
   const comparison = html`<div class="table-wrap"><table><caption class="visually-hidden">Product access by plan</caption>
     <thead><tr><th scope="col">Plan</th><th scope="col">Meet</th><th scope="col">Forms</th><th scope="col">Flow</th><th scope="col">Price</th></tr></thead><tbody>
-    ${[['Meet', 1, 0, 0], ['Forms', 0, 1, 0], ['Flow', 0, 0, 1], ['Suite', 1, 1, 1]].map(([name, ...access]) => html`<tr><th scope="row">${name}</th>${access.map(value => html`<td>${value ? '✓ Included' : '—'}</td>`)}<td class="muted">Not yet published</td></tr>`)}
+    ${catalog.map(plan => html`<tr><th scope="row">${plan.name}</th>${['meet','forms','flow'].map(product => html`<td>${plan.products.includes(product) ? '✓ Included' : '—'}</td>`)}<td>${priceText(plan.price)}</td></tr>`)}
     </tbody></table></div>
     <p class="muted">Prices will be shown once they are approved. Our goal is a lower price than comparable paid plans elsewhere, measured against the same features and usage, without cutting reliability or privacy.</p>`;
   if (!session.user || !workspace()) {
@@ -163,10 +165,15 @@ export async function billing(ctx) {
           <button class="btn btn-small" data-action="renew" data-sub="${subscription.id}">Simulate renewal</button>
           <button class="btn btn-small" data-action="payment_failed" data-sub="${subscription.id}">Simulate failed payment</button>
           ${subscription.cancel_at_period_end ? '' : html`<button class="btn btn-small" data-action="cancel" data-sub="${subscription.id}">Cancel at period end</button>`}
-          <button class="btn btn-small btn-danger" data-action="end" data-sub="${subscription.id}">End now</button>` : ''}</div></li>`)}</ul>` : html`<p class="muted">No subscriptions.</p>`}
+          <button class="btn btn-small btn-danger" data-action="end" data-sub="${subscription.id}">End now</button>` : ''}
+          ${owner && subscription.provider === 'razorpay' ? html`<button class="btn btn-small" data-billing-refresh="${subscription.id}">Refresh payment status</button>${!subscription.cancel_at_period_end && subscription.status !== 'canceled' ? html`<button class="btn btn-small" data-billing-cancel="${subscription.id}">Cancel renewal</button>` : ''}` : ''}</div></li>`)}</ul>` : html`<p class="muted">No subscriptions.</p>`}
+      ${owner && data.provider === 'razorpay' ? html`<h3>Subscribe with Razorpay</h3><p>Review the recurring amount and billing schedule before authorizing payment at Razorpay.</p>
+        <div class="grid-2">${data.plans.map(plan => html`<div class="card"><h3>${plan.name}</h3><p>${priceText(plan.price)}</p>${plan.price ? html`<p class="hint">Up to ${plan.price.cycles} monthly payments. Cancel renewal before your next billing date.</p>` : ''}<button class="btn" data-subscribe="${plan.id}" ${!plan.checkout_available ? raw('disabled') : ''}>Subscribe to ${plan.name}</button></div>`)}</div>
+        ${data.plans.some(plan => plan.checkout_available) ? '' : notice('info', html`<p>Subscription checkout is being configured. No payment can be taken yet.</p>`)}
+        ${(data.checkouts || []).map(checkout => html`<p>${checkout.plan} checkout: ${checkout.status}. ${checkout.status === 'open' && checkout.checkout_url ? html`<a class="btn" href="${checkout.checkout_url}">Continue authorization at Razorpay</a><button class="btn" data-checkout-refresh="${checkout.id}">Refresh checkout status</button>` : 'Payment setup is pending review. Contact support before starting another checkout.'}</p>`)}` : ''}
       ${owner && testMode ? html`<h3 class="label">Start a subscription (test provider)</h3>${notice('warn', html`<p>No payment provider is connected. These buttons send signed test events through the same verified webhook path a real provider will use. No money moves.</p>`)}
         <div class="row">${data.plans.map(plan => html`<button class="btn" data-action="checkout" data-plan="${plan.id}">Start ${plan.name}</button>`)}</div>` : ''}
-      ${!owner ? html`<p class="hint">Only the workspace owner can change subscriptions.</p>` : !testMode ? html`<p class="hint">Online checkout opens once a payment provider is connected.</p>` : ''}
+      ${!owner ? html`<p class="hint">Only the workspace owner can change subscriptions.</p>` : !testMode && data.provider !== 'razorpay' ? html`<p class="hint">Online checkout opens once a payment provider is connected.</p>` : ''}
     </section>
     <section><h2>Compare plans</h2>${comparison}</section></div>`);
   $$('[data-width]').forEach(bar => { bar.style.width = bar.dataset.width + '%'; });
@@ -177,5 +184,23 @@ export async function billing(ctx) {
       await loadMe();
       ctx.render();
     } catch (error) { toast(error.message); }
+  });
+  $$('[data-subscribe]').forEach(button => {
+    const key = crypto.randomUUID();
+    button.onclick = async () => {
+      button.disabled = true;
+      try { const result = await api('POST', wsPath('/billing/checkout'), { plan: button.dataset.subscribe }, { 'Idempotency-Key': key }); location.href = result.url; }
+      catch (error) { toast(error.message); button.disabled = false; }
+    };
+  });
+  $$('[data-billing-refresh]').forEach(button => button.onclick = async () => {
+    try { await api('POST', wsPath(`/billing/subscriptions/${button.dataset.billingRefresh}/refresh`)); await loadMe(); ctx.render(); } catch (error) { toast(error.message); }
+  });
+  $$('[data-checkout-refresh]').forEach(button => button.onclick = async () => {
+    try { await api('POST', wsPath(`/billing/checkouts/${button.dataset.checkoutRefresh}/refresh`)); await loadMe(); ctx.render(); } catch (error) { toast(error.message); }
+  });
+  $$('[data-billing-cancel]').forEach(button => button.onclick = async () => {
+    if (!(await ask({ title: 'Cancel renewal?', body: 'Automatic renewal will stop. Your paid access continues until the current period ends.', confirm: 'Cancel renewal' }))) return;
+    try { await api('POST', wsPath(`/billing/subscriptions/${button.dataset.billingCancel}/cancel`)); await loadMe(); ctx.render(); } catch (error) { toast(error.message); }
   });
 }

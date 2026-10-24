@@ -34,6 +34,17 @@ async function initialize(schema) {
       await client.query('CREATE TRIGGER meeting_hosts_no_overlap BEFORE INSERT OR UPDATE ON meeting_hosts FOR EACH ROW EXECUTE FUNCTION prevent_host_overlap()');
       await client.query("INSERT INTO schema_migrations VALUES ('postgres_v1', $1)", [Date.now()]);
     }
+    // Additive migration for databases initialized before platform checkout support.
+    await client.query(`CREATE TABLE IF NOT EXISTS billing_checkouts (
+      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL, plan TEXT NOT NULL CHECK (plan IN ('meet','forms','flow','suite')),
+      provider_plan_id TEXT NOT NULL, provider_subscription_id TEXT UNIQUE,
+      amount_cents BIGINT NOT NULL CHECK (amount_cents > 0), currency TEXT NOT NULL,
+      billing_cycles BIGINT NOT NULL CHECK (billing_cycles > 0), status TEXT NOT NULL,
+      checkout_url TEXT, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+      UNIQUE (workspace_id, request_key))`);
+    await client.query('CREATE INDEX IF NOT EXISTS billing_checkouts_workspace ON billing_checkouts(workspace_id)');
+    await client.query("INSERT INTO schema_migrations (name, applied_at) VALUES ('postgres_v2_billing_checkouts', $1) ON CONFLICT DO NOTHING", [Date.now()]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   await client.query('SET search_path TO "' + schemaName + '"');

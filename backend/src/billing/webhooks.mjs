@@ -77,6 +77,7 @@ export function applyBillingEvent(app, provider, event) {
 }
 
 export function handleWebhook(app, rawBody, signatureHeader) {
+  if (app.config.billingProvider !== 'test') fail(404, 'not_found', 'Use the configured provider webhook endpoint.');
   verifySignature(app.config.billingWebhookSecret, rawBody, signatureHeader, app.now());
   let event;
   try { event = JSON.parse(rawBody); } catch { fail(400, 'invalid_json', 'Invalid JSON.'); }

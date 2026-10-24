@@ -2,6 +2,7 @@ import { fail } from '../http.mjs';
 import { PLANS, PRODUCTS, QUOTAS, RENEWAL_TOLERANCE_MS } from './plans.mjs';
 
 export function subscriptionGrantsAccess(subscription, now) {
+  if (subscription.cancel_at_period_end && subscription.current_period_end != null && subscription.current_period_end <= now) return false;
   if (subscription.status === 'active' || subscription.status === 'trialing') {
     return subscription.current_period_end == null || subscription.current_period_end + RENEWAL_TOLERANCE_MS > now;
   }

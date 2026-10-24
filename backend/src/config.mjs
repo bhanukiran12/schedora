@@ -38,6 +38,11 @@ export function loadConfig(env = process.env, overrides = {}) {
     billingMode: env.BILLING_MODE || (production ? 'enforced' : 'open'),
     billingProvider,
     billingWebhookSecret: env.BILLING_WEBHOOK_SECRET || (billingProvider === 'test' ? randomBytes(32).toString('hex') : ''),
+    razorpayBilling: {
+      keyId: env.BILLING_RAZORPAY_KEY_ID || '', keySecret: env.BILLING_RAZORPAY_KEY_SECRET || '',
+      checkoutEnabled: env.BILLING_CHECKOUT_ENABLED === 'true',
+      plans: JSON.parse(env.BILLING_RAZORPAY_PLANS || '{}')
+    },
     emailProvider: env.EMAIL_PROVIDER || 'outbox',
     emailHttpUrl: env.EMAIL_HTTP_URL || '',
     emailHttpToken: env.EMAIL_HTTP_TOKEN || '',
@@ -73,6 +78,7 @@ export function loadConfig(env = process.env, overrides = {}) {
   config.allowedOriginPatterns = origins.filter(origin => origin.includes('*'))
     .map(origin => new RegExp('^' + origin.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+') + '$', 'i'));
   if (!['open', 'enforced'].includes(config.billingMode)) throw new Error('BILLING_MODE must be open or enforced.');
+  if (!['none', 'test', 'razorpay'].includes(config.billingProvider)) throw new Error('Unsupported BILLING_PROVIDER.');
   if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
   if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');

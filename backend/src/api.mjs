@@ -6,6 +6,7 @@ import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryR
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
 import { handleWebhook, testProviderEvent } from './billing/webhooks.mjs';
+import { subscriptionCatalog, subscriptionCheckout, subscriptionWebhook, refreshSubscription, refreshCheckout, cancelSubscription } from './billing/razorpay.mjs';
 import { isAllowedOrigin, publicConfig, releaseWarnings } from './config.mjs';
 import { registerMeetRoutes } from './api-meet.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
@@ -256,17 +257,41 @@ export function createApi(app) {
   patch('/api/workspaces/:ws/tasks/:id', async ctx => { updateTask(app, member(ctx, 'tasks.manage').workspace.id, ctx.params.id, await ctx.json()); return { status: 204 }; });
 
   // ---- Billing ----
+  get('/api/billing/plans', () => subscriptionCatalog(app), { public: true });
   get('/api/workspaces/:ws/billing', ctx => {
     const { workspace, role } = member(ctx, 'billing.read');
     return {
       mode: app.config.billingMode, provider: app.config.billingProvider, role, grace_days: GRACE_DAYS,
-      plans: Object.entries(PLANS).map(([id, plan]) => ({ id, ...plan, price: null })),
+      plans: subscriptionCatalog(app),
       quotas: QUOTAS,
       entitlements: entitlementsFor(app, workspace.id),
       usage: usageFor(app, workspace.id),
-      subscriptions: app.db.all('SELECT id, plan, status, current_period_end, cancel_at_period_end, grace_until, created_at FROM subscriptions WHERE workspace_id = ? ORDER BY created_at DESC', workspace.id)
+      subscriptions: app.db.all('SELECT id, provider, plan, status, current_period_end, cancel_at_period_end, grace_until, created_at FROM subscriptions WHERE workspace_id = ? ORDER BY created_at DESC', workspace.id),
+      checkouts: role === 'owner' ? app.db.all("SELECT id, plan, status, checkout_url, created_at FROM billing_checkouts WHERE workspace_id = ? AND status IN ('creating','open','uncertain') ORDER BY created_at DESC", workspace.id) : []
     };
   });
+  post('/api/workspaces/:ws/billing/checkout', async ctx => {
+    const actor = member(ctx, 'billing.manage');
+    limit(ctx, 'billing-checkout', 6);
+    const body = await ctx.json();
+    return subscriptionCheckout(app, actor.workspace.id, body.plan, ctx.request.headers['idempotency-key']);
+  });
+  post('/api/workspaces/:ws/billing/subscriptions/:id/refresh', async ctx => {
+    const actor = member(ctx, 'billing.manage'); limit(ctx, 'billing-refresh', 20);
+    return { result: await refreshSubscription(app, actor.workspace.id, ctx.params.id) };
+  });
+  post('/api/workspaces/:ws/billing/checkouts/:id/refresh', async ctx => {
+    const actor = member(ctx, 'billing.manage'); limit(ctx, 'billing-refresh', 20);
+    return { result: await refreshCheckout(app, actor.workspace.id, ctx.params.id) };
+  });
+  post('/api/workspaces/:ws/billing/subscriptions/:id/cancel', async ctx => {
+    const actor = member(ctx, 'billing.manage'); limit(ctx, 'billing-cancel', 6);
+    return cancelSubscription(app, actor.workspace.id, ctx.params.id);
+  });
+  post('/api/billing/razorpay/webhook', async ctx => {
+    const raw = (await ctx.raw(256 * 1024)).toString('utf8');
+    return { result: await subscriptionWebhook(app, raw, ctx.request.headers['x-razorpay-signature']) };
+  }, { public: true, csrfExempt: true });
   // Test provider only: simulates checkout and lifecycle events through the signed webhook path.
   post('/api/workspaces/:ws/billing/test-events', async ctx => {
     const { workspace } = member(ctx, 'billing.manage');

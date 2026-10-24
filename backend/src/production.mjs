@@ -1,4 +1,5 @@
 import { isAbsolute } from 'node:path';
+import { subscriptionCatalog } from './billing/razorpay.mjs';
 
 export function meetReadiness(config) {
   const failures = [];
@@ -17,6 +18,8 @@ export function meetReadiness(config) {
   require(typeof config.encryptionKey === 'string' && config.encryptionKey.length >= 32, 'Configure a stable APP_ENCRYPTION_KEY of at least 32 characters.');
   require(!config.allowTestPayments && config.billingProvider !== 'test', 'Disable simulated payments and test billing.');
   require(Boolean(config.billingProvider && config.billingProvider !== 'none' && config.billingWebhookSecret), 'Connect a live subscription billing adapter and webhook secret.');
+  require(config.billingProvider === 'razorpay' && /^rzp_live_[A-Za-z0-9]+$/.test(config.razorpayBilling?.keyId || '') && Boolean(config.razorpayBilling?.keySecret), 'Configure live Razorpay platform billing credentials.');
+  require(subscriptionCatalog({ config }).every(plan => plan.checkout_available), 'Enable approved Razorpay subscription checkout and configure prices for Meet, Forms, Flow and Suite.');
   require(config.billingMode === 'enforced', 'BILLING_MODE must be enforced for a paid release.');
   require(config.providerSmokeConfirmed, 'Complete real calendar/email booking lifecycle tests, then set PROVIDER_SMOKE_CONFIRMED=true.');
   require(Boolean(config.google?.clientId && config.google?.clientSecret), 'Configure the selected Google Calendar/Meet OAuth app.');

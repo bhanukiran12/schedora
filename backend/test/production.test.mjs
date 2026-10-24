@@ -11,7 +11,9 @@ const valid = () => loadConfig({
   OPERATOR_JURISDICTION: 'Test jurisdiction', APP_ENCRYPTION_KEY: 'x'.repeat(44),
   PROVIDER_SMOKE_CONFIRMED: 'true', MONITORING_CONFIRMED: 'true', COMMERCIAL_BILLING_CONFIRMED: 'true',
   GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret',
-  BILLING_PROVIDER: 'external-adapter', BILLING_WEBHOOK_SECRET: 'test-webhook-secret'
+  BILLING_PROVIDER: 'razorpay', BILLING_WEBHOOK_SECRET: 'test-webhook-secret',
+  BILLING_RAZORPAY_KEY_ID: 'rzp_live_fixture123', BILLING_RAZORPAY_KEY_SECRET: 'fake-fixture-secret', BILLING_CHECKOUT_ENABLED: 'true',
+  BILLING_RAZORPAY_PLANS: JSON.stringify(Object.fromEntries(['meet','forms','flow','suite'].map(id => [id, { id: 'plan_' + id, amount_cents: 10000, currency: 'INR', cycles: 12 }])))
 });
 
 test('evaluation defaults cannot pass the Meet production gate', () => {
