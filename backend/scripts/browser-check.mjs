@@ -326,6 +326,21 @@ try {
     await waitFor("document.body.innerText.includes('Waiting for the host')", 'waiting for host');
     await open('/meet', "document.querySelector('.tabs')");
   });
+  await step('video: pending media permission cannot submit the prejoin page as a GET', async () => {
+    const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', { source: "navigator.mediaDevices.getUserMedia = () => new Promise(() => {});" });
+    const before = problems.length;
+    try {
+      await open(roomPath, "document.querySelector('#join-form')");
+      await fill('#display-name', 'Pending permission');
+      await click('#toggle-camera');
+      await click('#toggle-mic');
+      await click('#join-form [type="submit"]');
+      await waitFor("document.querySelector('#video-room') || document.body.innerText.includes('could not be reached')", 'join without media permission');
+      if (await evaluate("location.search.includes('display_name')")) throw new Error('prejoin submitted the name in the URL');
+      await waitFor("document.body.innerText.includes('could not be reached') || document.body.innerText.includes('Connection lost')", 'connection failure state', 20000);
+      problems.splice(before, problems.length - before, ...problems.slice(before).filter(problem => !expectedConnectionNoise.test(problem)));
+    } finally { await send('Page.removeScriptToEvaluateOnNewDocument', { identifier }); }
+  });
   await step('video: credits, calculator and simulated recharge', async () => {
     await open('/billing', "document.querySelector('#credits-title')");
     await fill('#calc-people', '3'); await fill('#calc-minutes', '45');

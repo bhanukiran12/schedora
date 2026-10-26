@@ -122,7 +122,7 @@ async function prejoin(ctx, flow) {
   if (!ctx.alive()) return;
   if (!LK) return stateScreen(ctx, info, 'unavailable', html`<p class="hint">The meeting software could not be loaded. Check your connection and reload.</p>`);
   if (!LK.isBrowserSupported()) return stateScreen(ctx, info, 'unsupported');
-  const preview = { video: null, audio: null, camera: true, microphone: true, disposed: false };
+  const preview = { video: null, audio: null, camera: true, microphone: true, disposed: false, joining: false };
   const stopPreview = () => { preview.video?.stop(); preview.audio?.stop(); preview.video = preview.audio = null; };
   active = { dispose: () => { preview.disposed = true; stopPreview(); } };
 
@@ -156,19 +156,23 @@ async function prejoin(ctx, flow) {
     preview.video?.stop(); preview.video = null;
     if (!preview.camera) { $('#preview-off').hidden = false; return; }
     try {
-      preview.video = await LK.createLocalVideoTrack({ deviceId: $('#camera-select').value || undefined, resolution: preset(LK, info.video.max_video_height).resolution });
-      if (preview.disposed) { preview.video.stop(); return; }
+      const track = await LK.createLocalVideoTrack({ deviceId: $('#camera-select').value || undefined, resolution: preset(LK, info.video.max_video_height).resolution });
+      if (preview.disposed || !preview.camera) { track.stop(); return; }
+      preview.video?.stop();
+      preview.video = track;
       preview.video.attach($('#preview'));
       $('#preview-off').hidden = true;
-    } catch (error) { preview.camera = false; deviceProblem(error, 'camera'); $('#preview-off').hidden = false; syncToggles(); }
+    } catch (error) { if (preview.disposed) return; preview.camera = false; deviceProblem(error, 'camera'); $('#preview-off').hidden = false; syncToggles(); }
   }
   async function startMic() {
     preview.audio?.stop(); preview.audio = null;
     if (!preview.microphone) return;
     try {
-      preview.audio = await LK.createLocalAudioTrack({ deviceId: $('#mic-select').value || undefined, echoCancellation: true, noiseSuppression: true });
-      if (preview.disposed) preview.audio.stop();
-    } catch (error) { preview.microphone = false; deviceProblem(error, 'microphone'); syncToggles(); }
+      const track = await LK.createLocalAudioTrack({ deviceId: $('#mic-select').value || undefined, echoCancellation: true, noiseSuppression: true });
+      if (preview.disposed || !preview.microphone) { track.stop(); return; }
+      preview.audio?.stop();
+      preview.audio = track;
+    } catch (error) { if (preview.disposed) return; preview.microphone = false; deviceProblem(error, 'microphone'); syncToggles(); }
   }
   function deviceProblem(error, device) {
     const denied = error?.name === 'NotAllowedError' || /permission/i.test(error?.message || '');
@@ -194,20 +198,19 @@ async function prejoin(ctx, flow) {
   $('#toggle-mic').onclick = async () => { preview.microphone = !preview.microphone; syncToggles(); await startMic(); };
   $('#camera-select').onchange = startCamera;
   $('#mic-select').onchange = startMic;
-  await Promise.all([startCamera(), startMic()]);
-  if (preview.disposed) return;
-  await listDevices();
-
   $('#join-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (preview.disposed || preview.joining) return;
     const name = $('#display-name').value.trim();
     if (!name) { mount($('#join-status'), notice('bad', html`<p>Enter your name.</p>`)); $('#display-name').focus(); return; }
+    preview.joining = true;
     $('#join-button').setAttribute('aria-disabled', 'true');
     mount($('#join-status'), html`<p class="muted" role="status">Joining…</p>`);
     try {
       const admission = await flow.join({ display_name: name });
       if (!ctx.alive() || preview.disposed) return;
       const tracks = { video: preview.video, audio: preview.audio };
+      preview.disposed = true;
       preview.video = preview.audio = null; // ownership moves to the meeting
       await meeting(ctx, flow, LK, admission, tracks);
     } catch (error) {
@@ -219,8 +222,10 @@ async function prejoin(ctx, flow) {
         : error.code === 'room_full' || error.code === 'workspace_limit' || error.code === 'capacity_limit' || error.code === 'entitlement_required' || error.code === 'removed_from_meeting' ? html`<p>${error.message}</p>`
           : error.code === 'too_early' ? html`<p>This meeting is not open yet.</p>` : html`<p>${error.message}</p>`;
       mount($('#join-status'), notice('bad', message));
-    }
+    } finally { preview.joining = false; }
   });
+  await Promise.all([startCamera(), startMic()]);
+  if (!preview.disposed) await listDevices();
 }
 
 function waitForHost(ctx, flow) {
@@ -259,11 +264,15 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     publishDefaults: { simulcast: true, videoEncoding: preset(LK, maxHeight).encoding, screenShareEncoding: { maxBitrate: 1500000, maxFramerate: 15 }, dtx: true }
   });
   const state = { disposed: false, ended: null, pollTimer: null, host: admission.role === 'host' };
+  const remoteAudio = new Map();
+  const detachAudio = entry => { entry.track.detach(entry.element); entry.element.remove(); };
   const dispose = () => {
     if (state.disposed) return;
     state.disposed = true;
     clearInterval(state.pollTimer);
     room.removeAllListeners();
+    for (const entry of remoteAudio.values()) detachAudio(entry);
+    remoteAudio.clear();
     tracks.video?.stop(); tracks.audio?.stop();
     room.disconnect(true).catch(() => {});
   };
@@ -273,9 +282,11 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     <header class="video-bar"><div><strong>${flow.info.title}</strong> <span id="connection" class="muted" aria-live="polite">Connecting…</span></div>
       <div id="room-alerts" aria-live="assertive"></div></header>
     <section class="video-grid" id="grid" aria-label="Participants' video"></section>
+    <div id="remote-audio"></div>
     <aside class="video-people card card-plain" id="people-panel" hidden aria-label="People in this meeting"><h2>People</h2><ul class="list" id="people"></ul>
       ${state.host ? html`<button class="btn btn-small" id="copy-invite">Copy guest link</button>` : ''}</aside>
     <nav class="video-controls" aria-label="Meeting controls">
+      <button class="btn" id="enable-audio" hidden>Enable meeting audio</button>
       <button class="btn" id="mic" aria-pressed="false">Mute</button>
       <button class="btn" id="cam" aria-pressed="false">Stop video</button>
       <button class="btn" id="share" aria-pressed="false">Share screen</button>
@@ -312,7 +323,21 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     if (state.disposed) return;
     const participants = [room.localParticipant, ...room.remoteParticipants.values()];
     const seen = new Set();
+    const heard = new Set();
     for (const participant of participants) {
+      if (!participant.isLocal) for (const publication of participant.audioTrackPublications.values()) {
+        const track = publication.track;
+        if (!track) continue;
+        heard.add(publication.trackSid);
+        const previous = remoteAudio.get(publication.trackSid);
+        if (previous?.track === track) continue;
+        if (previous) detachAudio(previous);
+        const element = track.attach();
+        element.autoplay = true;
+        element.muted = false;
+        $('#remote-audio')?.append(element);
+        remoteAudio.set(publication.trackSid, { track, element });
+      }
       const camera = participant.getTrackPublication(LK.Track.Source.Camera);
       const screen = participant.getTrackPublication(LK.Track.Source.ScreenShare);
       const tile = tileFor(participant);
@@ -324,6 +349,8 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       if (screen?.track) { const screenTile = tileFor(participant, 'screen'); seen.add(participant.identity + ':screen'); screen.track.attach(screenTile.querySelector('video')); }
     }
     for (const [key, tile] of tiles) if (!seen.has(key)) { tile.querySelectorAll('video').forEach(video => { video.srcObject = null; }); tile.remove(); tiles.delete(key); }
+    for (const [key, entry] of remoteAudio) if (!heard.has(key)) { detachAudio(entry); remoteAudio.delete(key); }
+    if ($('#enable-audio')) $('#enable-audio').hidden = room.canPlaybackAudio;
     $('#grid')?.setAttribute('data-count', String(Math.min(9, tiles.size)));
     const local = room.localParticipant;
     setPressed('#mic', !local.isMicrophoneEnabled, local.isMicrophoneEnabled ? 'Mute' : 'Unmute');
@@ -371,6 +398,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   }
 
   room
+    .on(LK.RoomEvent.AudioPlaybackStatusChanged, refresh)
     .on(LK.RoomEvent.ParticipantConnected, refresh).on(LK.RoomEvent.ParticipantDisconnected, refresh)
     .on(LK.RoomEvent.TrackSubscribed, refresh).on(LK.RoomEvent.TrackUnsubscribed, refresh)
     .on(LK.RoomEvent.TrackMuted, refresh).on(LK.RoomEvent.TrackUnmuted, refresh)
@@ -390,6 +418,10 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     });
 
   $('#leave').onclick = () => { room.disconnect(true); };
+  $('#enable-audio').onclick = async () => {
+    try { await room.startAudio(); refresh(); }
+    catch { alertBox(notice('warn', html`<p>Meeting audio is blocked. Allow sound in this browser and try again.</p>`)); }
+  };
   $('#mic').onclick = async () => { try { await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled); } catch (error) { alertBox(notice('warn', html`<p>${micError(error)}</p>`)); } refresh(); };
   $('#cam').onclick = async () => { try { await room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled, { resolution: preset(LK, maxHeight).resolution }); } catch (error) { alertBox(notice('warn', html`<p>${micError(error, 'camera')}</p>`)); } refresh(); };
   $('#share').onclick = async () => {
@@ -415,6 +447,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   admission.token = null; // reconnects use the provider's own refreshed token
   if (state.disposed || !ctx.alive()) { dispose(); return; }
   connection('Connected');
+  await room.startAudio().catch(() => {});
   try {
     if (tracks.audio) await room.localParticipant.publishTrack(tracks.audio);
     if (tracks.video) await room.localParticipant.publishTrack(tracks.video, { simulcast: true });
