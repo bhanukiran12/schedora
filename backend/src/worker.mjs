@@ -4,6 +4,9 @@ import { syncDueCalendars } from './meet/calendar.mjs';
 import { expireHolds } from './meet/bookings.mjs';
 import { deliverWebhooks } from './platform/developer.mjs';
 import { syncMeetingCalendars } from './platform/oauth.mjs';
+import { videoTick } from './video/rooms.mjs';
+import { expireLots } from './video/credits.mjs';
+import { reconcileRecharges } from './video/recharge.mjs';
 
 const DAY = 86400000;
 
@@ -21,11 +24,15 @@ export function applyRetention(app) {
       app.db.run('DELETE FROM flow_runs WHERE workspace_id = ? AND created_at < ? AND status IN (\'succeeded\', \'failed\')', workspace.id, cutoff);
       app.db.run('DELETE FROM transcripts WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff);
       app.db.run('DELETE FROM poll_votes WHERE poll_id IN (SELECT id FROM polls WHERE workspace_id = ? AND created_at < ?)', workspace.id, cutoff);
+      app.db.run("UPDATE video_participants SET display_name = 'Removed after retention period' WHERE workspace_id = ? AND created_at < ? AND status IN ('left', 'removed', 'expired')", workspace.id, cutoff);
     }
     removed.emails = app.db.run("DELETE FROM emails WHERE created_at < ? AND status IN ('sent', 'failed', 'canceled')", now - 30 * DAY).changes;
     app.db.run('DELETE FROM sessions WHERE expires_at < ?', now);
     app.db.run('DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM webhook_deliveries WHERE status IN ('delivered', 'failed') AND created_at < ?", now - 30 * DAY);
+    // Video: provider event and operation records are kept 30 days; participant names follow workspace retention.
+    app.db.run('DELETE FROM video_provider_events WHERE processed_at IS NOT NULL AND processed_at < ?', now - 30 * DAY);
+    app.db.run("DELETE FROM video_provider_ops WHERE status = 'done' AND updated_at < ?", now - 30 * DAY);
   });
   return removed;
 }
@@ -50,6 +57,9 @@ export function createWorker(app, { intervalMs = 2000 } = {}) {
         await deliverDueEmails(app);
         await deliverWebhooks(app);
         await syncDueCalendars(app);
+        await videoTick(app);
+        expireLots(app);
+        await reconcileRecharges(app);
         if (app.now() - lastRetention > 3600000) { applyRetention(app); lastRetention = app.now(); }
       } while (again);
       state.lastTickAt = app.now();

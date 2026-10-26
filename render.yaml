@@ -112,3 +112,38 @@ services:
         generateValue: true
       - key: ASSIST_ADDRESS
         value: assist@schedora.in
+      # Schedora Meet native video (LiveKit). OFF until the production gates in docs/MEET_VIDEO.md
+      # are met; scheduling works without it. The webhook URL is <API>/api/meet-video/webhooks/<deployment>.
+      - key: MEET_VIDEO_PROVIDER
+        value: none
+      - key: MEET_VIDEO_ENABLED
+        value: "false"
+      - key: MEET_VIDEO_KILL_SWITCH
+        value: "off"
+      - key: MEET_VIDEO_DEPLOYMENT
+        value: livekit-cloud
+      - key: LIVEKIT_HOSTING
+        value: cloud
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: MEET_VIDEO_WEBHOOK_CONFIRMED
+        sync: false
+      - key: MEET_VIDEO_SMOKE_CONFIRMED
+        sync: false
+      # Commercial values (credits per plan, credit packs) need owner approval; leave unset until then.
+      - key: MEET_VIDEO_ALLOWANCES
+        sync: false
+      - key: MEET_VIDEO_PACKS
+        sync: false
+      - key: MEET_VIDEO_CATALOG_VERSION
+        sync: false
+      - key: MEET_VIDEO_RECHARGE_ENABLED
+        value: "false"
+      - key: MEET_VIDEO_COST_PER_PARTICIPANT_MINUTE_MICROS
+        sync: false
+      - key: MEET_VIDEO_MONTHLY_COST_BUDGET_MICROS
+        sync: false

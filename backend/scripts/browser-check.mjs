@@ -26,7 +26,7 @@ const base = `http://127.0.0.1:${app.server.address().port}`;
 app.config.baseUrl = base; // links in emails and payment redirects point at this test server
 
 const port = 9300 + Math.floor(Math.random() * 500);
-const browser = spawn(browserPath, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${join(workDir, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', 'about:blank'], { stdio: 'ignore' });
+const browser = spawn(browserPath, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${join(workDir, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'], { stdio: 'ignore' });
 let target;
 for (let attempt = 0; attempt < 50 && !target; attempt++) {
   await new Promise(resolve => setTimeout(resolve, 200));
@@ -236,7 +236,7 @@ try {
     await fill('#k-name', 'Laptop'); await click('#key-form [type="submit"]');
     await waitFor("document.querySelector('#new-key input')?.value.startsWith('sch_')", 'new API key shown');
   });
-  for (const tab of ['meetings', 'polls', 'contacts', 'workflows', 'analytics', 'integrations', 'insights']) {
+  for (const tab of ['meetings', 'video', 'polls', 'contacts', 'workflows', 'analytics', 'integrations', 'insights']) {
     await step(`Meet tab: ${tab}`, async () => { await open(`/meet?tab=${tab}`, "document.querySelector('#tab-panel') && !document.querySelector('#tab-panel > .loading')"); await layoutCheck(`meet ${tab}`); });
   }
   await step('poll: create, vote, view results', async () => {
@@ -285,6 +285,58 @@ try {
     await layoutCheck('test checkout');
     await click('#simulate-pay');
     await waitFor("document.body.innerText.includes('Payment received')", 'payment confirmed');
+  });
+  // Schedora Meet video with the fake provider: real prejoin, devices (fake camera/microphone),
+  // headers and cleanup. The fake provider has no media server, so connecting must fail cleanly.
+  const expectedConnectionNoise = /livekit|websocket|ws:\/\/127\.0\.0\.1:7880|Refused to connect|signal|could not establish|connection/i;
+  let roomPath;
+  await step('video: instant meeting prejoin with camera preview', async () => {
+    await open('/meet?tab=video', "document.querySelector('#instant')");
+    await fill('#instant-title', 'Browser check meeting');
+    await click('#instant [type="submit"]');
+    await waitFor("location.pathname.startsWith('/meet/room/') && document.querySelector('#join-form')", 'prejoin');
+    roomPath = await evaluate('location.pathname');
+    await waitFor("document.querySelector('#preview')?.srcObject?.getVideoTracks().length === 1", 'camera preview', 10000);
+    const headers = await evaluate("fetch(location.href).then(r => [r.headers.get('permissions-policy'), r.headers.get('referrer-policy'), r.headers.get('content-security-policy')].join(' | '))");
+    if (!/camera=\(self\)/.test(headers) || !/no-referrer/.test(headers) || !/media-src/.test(headers)) throw new Error('meeting headers missing: ' + headers);
+    const strict = await evaluate("fetch('/meet').then(r => r.headers.get('permissions-policy'))");
+    if (!/camera=\(\)/.test(strict)) throw new Error('camera allowed outside meetings');
+    await layoutCheck('video prejoin');
+    await click('#toggle-camera');
+    await waitFor("!document.querySelector('#preview-off').hidden && document.querySelector('#toggle-camera').getAttribute('aria-pressed') === 'false'", 'camera off');
+    await click('#toggle-camera');
+    await waitFor("document.querySelector('#preview')?.srcObject?.getVideoTracks()[0]?.readyState === 'live'", 'camera back on', 10000);
+  });
+  await step('video: join reaches the provider and fails cleanly without a media server', async () => {
+    const before = problems.length;
+    await fill('#display-name', 'Asha');
+    await click('#join-form [type="submit"]');
+    await waitFor("document.body.innerText.includes('could not be reached') || document.body.innerText.includes('Connection lost')", 'connection failure state', 20000);
+    if (await evaluate("Boolean(document.querySelector('#preview'))")) throw new Error('prejoin still mounted');
+    problems.splice(before, problems.length - before, ...problems.slice(before).filter(problem => !expectedConnectionNoise.test(problem)));
+    await layoutCheck('video connection failed');
+  });
+  await step('video: guest link waits for the host; leaving releases devices', async () => {
+    const invitePath = roomPath.replace('/meet/room/', '/api/meet-video/rooms/') + '/invites';
+    const url = await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const response = await fetch(${JSON.stringify(invitePath)}, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: '{}' }); return (await response.json()).url; })()`);
+    await open(new URL(url).pathname, "document.querySelector('#join-form')");
+    await layoutCheck('guest prejoin');
+    await fill('#display-name', 'Guest');
+    await click('#join-form [type="submit"]');
+    await waitFor("document.body.innerText.includes('Waiting for the host')", 'waiting for host');
+    await open('/meet', "document.querySelector('.tabs')");
+  });
+  await step('video: credits, calculator and simulated recharge', async () => {
+    await open('/billing', "document.querySelector('#credits-title')");
+    await fill('#calc-people', '3'); await fill('#calc-minutes', '45');
+    await click('#calculator [type="submit"]');
+    await waitFor("document.querySelector('#calc-result').innerText.includes('135 participant-minutes')", 'calculator result');
+    await click('[data-buy="small"]');
+    await waitFor("document.querySelector('[data-test-pay]')", 'pending purchase');
+    await click('[data-test-pay]');
+    await waitFor("[...document.querySelectorAll('.credit-figure')][1]?.innerText === '500'", 'purchased credits shown');
+    await waitFor("document.querySelector('#ledger tr')", 'ledger rows');
+    await layoutCheck('billing credits');
   });
 } finally {
   socket.close();

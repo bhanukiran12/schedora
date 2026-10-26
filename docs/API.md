@@ -29,6 +29,11 @@ All endpoints are under `https://schedora.in/api`. Request and response bodies a
 | `POST /notetaker/transcripts` | For call-recording services: `{title, content, booking_reference?}`; creates a recap when AI is configured |
 | `GET/POST /forms`, `PUT /forms/{id}/routing`, `GET /forms/{id}/responses(.csv)` | Forms, routing and responses |
 | `GET/POST /flows`, `GET /runs`, `GET /tasks` | Flow automations |
+| `GET /meet-video/rooms?scope=current\|past` · `POST /meet-video/rooms` | Schedora Meet video rooms; `POST` starts an instant meeting (session only) |
+| `GET /meet-video/wallet`, `GET /meet-video/wallet/ledger?before=&limit=`, `GET /meet-video/wallet/usage`, `GET /meet-video/calculator?participants=&minutes=` | Meet credits (owners and admins) |
+| `POST /meet-video/recharges` (`Idempotency-Key`), `POST /meet-video/recharges/{id}/refresh` | Buy Meet credits (owner, web app only) |
+
+Video room actions use the room's opaque id, not the workspace id: `GET /api/meet-video/rooms/{id}`, `POST …/join`, `…/end`, `…/participants/{participant}/remove`, `…/invites`. Guests use `GET/POST /api/public/meet-video/join/{attendance token}`. Join responses contain a short-lived provider token in a `no-store` JSON body; never put it in a URL or log. Provider webhooks: `POST /api/meet-video/webhooks/{deployment}` (signature verified against the raw body).
 
 Public endpoints (no key): `GET /api/public/meet/{workspace}/{event}/slots`, `POST /api/public/meet/{workspace}/{event}/bookings` (requires an `Idempotency-Key` header), and `/api/public/bookings/{manage token}` for invitees.
 

@@ -44,6 +44,22 @@ Planning hypothesis from the roadmap: at least 20% lower than the comparable pai
 
 Trial length (if any), regional currency and tax handling, refund policy, payment provider, annual discount, behavior at quota (block vs. overage), and data access after cancellation (current build: data kept, new activity blocked).
 
+## 4a. Schedora Meet video credits (inputs needed)
+
+1 credit = 1 participant-minute (hosts included). Monthly allowance credits expire at period end; purchased credits carry forward. Values below are configuration (`MEET_VIDEO_ALLOWANCES`, `MEET_VIDEO_PACKS`, `MEET_VIDEO_CATALOG_VERSION`); none are approved and production ships with none. See docs/MEET_VIDEO.md §5 and §7.
+
+| Input | Meet plan | Suite plan | Trial | Notes |
+| --- | --- | --- | --- | --- |
+| Monthly allowance (credits) | | | | Annual plans receive the same allowance each month |
+
+| Pack | Credits | Price (INR, incl. tax?) | Provider cost estimate at that volume | Margin |
+| --- | --- | --- | --- | --- |
+| Small | | | | |
+| Medium | | | | |
+| Large | | | | |
+
+Also decide: refund policy for partly used packs (build: unspent credits reversed proportionally, used credits recorded as uncollectable), and the operational monthly provider-cost budget.
+
 ## 5. Approval
 
 Owner: ____________  Date: ____________  Decision: ____________

@@ -2,6 +2,7 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { fail } from '../http.mjs';
 import { decryptJson, encryptJson } from './crypto.mjs';
 import { locationDisplay } from '../meet/event-types.mjs';
+import { meetingHostUrl } from '../video/rooms.mjs';
 
 // OAuth integrations: Google (Calendar + Meet), Microsoft 365 (Outlook calendar + Teams) and Zoom.
 // Calendars supply busy times and receive each booking as an event; video providers create the
@@ -172,7 +173,9 @@ function hostIntegrations(app, workspaceId, hostId) {
 }
 
 async function createEvent(app, meeting, host, attendees, location, integrations) {
-  const description = `Booked with Meet by Schedora.${location?.display ? '\nLocation: ' + location.display : ''}`;
+  // Schedora Meet: only the host's signed-in link goes on the calendar; attendees get their own links by email.
+  const hostLink = location?.type === 'schedora_meet' ? meetingHostUrl(app, meeting.id) : null;
+  const description = `Booked with Meet by Schedora.${location?.display ? '\nLocation: ' + location.display : ''}${hostLink ? '\nHost link (Schedora sign-in required): ' + hostLink : ''}`;
   const result = { ref: null, videoUrl: null };
   if (location?.type === 'zoom' && integrations.zoom) {
     const zoom = await api(app, integrations.zoom, 'https://api.zoom.us/v2/users/me/meetings', {

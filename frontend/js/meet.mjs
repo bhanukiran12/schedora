@@ -6,6 +6,7 @@ import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { inputFor, readAnswer } from './forms.mjs';
 import { checkAnswer, FIELD_TYPES } from '/shared/forms-logic.mjs';
 import * as team from './meet-team.mjs';
+import { videoTab } from './meet-video.mjs';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const KINDS = {
@@ -14,7 +15,7 @@ const KINDS = {
   collective: ['Collective', 'Several hosts meet one invitee; only times when all are free.'],
   round_robin: ['Round robin', 'Meetings are shared out across a team.']
 };
-const LOCATION_LABELS = { video: 'Video link', google_meet: 'Google Meet (auto link)', zoom: 'Zoom (auto link)', teams: 'Microsoft Teams (auto link)', in_person: 'In person', phone_host_calls: 'Phone: host calls invitee', phone_invitee_calls: 'Phone: invitee calls host', custom: 'Custom' };
+const LOCATION_LABELS = { video: 'Video link', google_meet: 'Google Meet (auto link)', zoom: 'Zoom (auto link)', teams: 'Microsoft Teams (auto link)', in_person: 'In person', phone_host_calls: 'Phone: host calls invitee', phone_invitee_calls: 'Phone: invitee calls host', custom: 'Custom', schedora_meet: 'Schedora Meet (built-in video)' };
 const NEEDS_VALUE = ['video', 'in_person', 'phone_invitee_calls', 'custom'];
 const QUESTION_TYPES = ['short_text', 'long_text', 'phone', 'email', 'single_choice', 'multiple_choice', 'date'];
 const money = (cents, currency) => new Intl.NumberFormat(undefined, { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
@@ -33,7 +34,7 @@ export function applyBrand(color) {
 // ---------------------------------------------------------------------------------------------
 // Host dashboard
 
-const TABS = [['types', 'Event types'], ['meetings', 'Meetings'], ['polls', 'Polls'], ['contacts', 'Contacts'], ['workflows', 'Workflows'],
+const TABS = [['types', 'Event types'], ['meetings', 'Meetings'], ['video', 'Video'], ['polls', 'Polls'], ['contacts', 'Contacts'], ['workflows', 'Workflows'],
   ['analytics', 'Analytics'], ['integrations', 'Calendars & apps'], ['insights', 'Notes & AI'], ['emails', 'Delivery']];
 
 export async function dashboard(ctx) {
@@ -51,7 +52,7 @@ export async function dashboard(ctx) {
     <nav class="tabs" aria-label="Meet sections">${TABS.map(([key, label]) => html`<a href="/meet?tab=${key}" ${key === tab ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
     <section id="tab-panel" aria-live="polite">${loading()}</section></div>`);
   const panel = $('#tab-panel');
-  const views = { types: eventTypesTab, meetings: meetingsTab, polls: team.pollsTab, contacts: team.contactsTab, workflows: team.workflowsTab, analytics: team.analyticsTab, integrations: team.integrationsTab, insights: team.insightsTab, emails: emailsTab };
+  const views = { types: eventTypesTab, meetings: meetingsTab, video: videoTab, polls: team.pollsTab, contacts: team.contactsTab, workflows: team.workflowsTab, analytics: team.analyticsTab, integrations: team.integrationsTab, insights: team.insightsTab, emails: emailsTab };
   try { await views[tab](ctx, panel); }
   catch (error) { if (ctx.alive()) mount(panel, errorBlock(error)); }
 }
@@ -93,6 +94,7 @@ async function meetingsTab(ctx, panel) {
         <div id="prep-${booking.id}"></div>
       </div>
       <div class="row">${badge(booking.status)}${booking.payment_status !== 'none' ? badge(booking.payment_status === 'paid' ? 'active' : 'pending', 'Payment ' + booking.payment_status) : ''}${booking.email ? badge(booking.email.status, 'Email ' + booking.email.status) : ''}
+        ${booking.video_room_url && scope === 'upcoming' ? html`<a class="btn btn-small btn-primary" href="${booking.video_room_url}" data-external>Join video</a>` : ''}
         ${scope === 'upcoming' ? html`<button class="btn btn-small" data-prep="${booking.id}">Prepare</button><button class="btn btn-small btn-danger" data-cancel="${booking.id}">Cancel</button>` : ''}
         ${booking.contact_id ? html`<a class="btn btn-small" href="/meet/contacts/${booking.contact_id}">Contact</a>` : ''}</div></div></li>`)}</ul>`
       : html`<div class="empty section-gap">${{ upcoming: 'No upcoming meetings yet. Share a booking link to get started.', past: 'No past meetings.', canceled: 'No canceled meetings.' }[scope]}</div>`}`);
@@ -224,7 +226,7 @@ export async function editor(ctx) {
         </div>
       </section>
       <section class="card card-plain"><h2>Location</h2><p class="hint">Offer one or more options; invitees choose when there are several.</p><div id="locations"></div>
-        <div class="row"><select id="new-location" aria-label="Location type">${Object.entries(LOCATION_LABELS).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select><button class="btn btn-small" type="button" id="add-location" ${lockAttr('locations')}>Add location</button></div>
+        <div class="row"><select id="new-location" aria-label="Location type">${Object.entries(LOCATION_LABELS).filter(([key]) => key !== 'schedora_meet' || boot.video?.enabled).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select><button class="btn btn-small" type="button" id="add-location" ${lockAttr('locations')}>Add location</button></div>
       </section>
       <section class="card card-plain"><h2>Availability</h2>
         <label for="timezone">Time zone</label><span class="hint">Weekly hours are in this time zone. Invitees see times converted to theirs, including daylight-saving changes.</span>
@@ -312,7 +314,7 @@ export async function editor(ctx) {
   // Locations
   const renderLocations = () => mount($('#locations'), state.locations.length ? html`${state.locations.map((location, index) => html`<div class="range">
       <strong class="location-label">${LOCATION_LABELS[location.type]}</strong>
-      ${NEEDS_VALUE.includes(location.type) ? html`<input aria-label="${LOCATION_LABELS[location.type]} details" data-location="${index}" value="${location.value || ''}" placeholder="${location.type === 'video' ? 'https://…' : location.type === 'phone_invitee_calls' ? '+91 …' : 'Details'}" ${lockAttr('locations')}>` : html`<span class="muted">${['google_meet', 'zoom', 'teams'].includes(location.type) ? 'A unique link is created for each booking (connect the app first).' : 'The invitee enters a phone number.'}</span>`}
+      ${NEEDS_VALUE.includes(location.type) ? html`<input aria-label="${LOCATION_LABELS[location.type]} details" data-location="${index}" value="${location.value || ''}" placeholder="${location.type === 'video' ? 'https://…' : location.type === 'phone_invitee_calls' ? '+91 …' : 'Details'}" ${lockAttr('locations')}>` : html`<span class="muted">${location.type === 'schedora_meet' ? 'A private video room with its own link for each attendee. Connected time uses Meet credits.' : ['google_meet', 'zoom', 'teams'].includes(location.type) ? 'A unique link is created for each booking (connect the app first).' : 'The invitee enters a phone number.'}</span>`}
       <button class="btn btn-small" type="button" data-remove-location="${index}" ${lockAttr('locations')}>Remove</button></div>`)}` : html`<p class="muted">No location. Add one so invitees know where to meet.</p>`);
   renderLocations();
   $('#add-location').onclick = () => { state.locations.push({ type: $('#new-location').value, value: '' }); renderLocations(); markDirty(); };
@@ -677,6 +679,7 @@ export async function booking(ctx) {
       <p>${booking.event.title} with ${booking.event.host_name} is confirmed and saved.</p>
       <dl class="confirm-facts"><dt>When</dt><dd>${fmtFull(booking.starts_at, booking.invitee_timezone)}</dd><dt>Time zone</dt><dd>${booking.invitee_timezone.replace(/_/g, ' ')}</dd>
         <dt>Where</dt><dd>${booking.location?.display || 'The host will share the location'}</dd><dt>Reference</dt><dd>${booking.reference}</dd></dl>
+      ${booking.video?.join_url ? html`<p><a class="btn btn-primary" href="${booking.video.join_url}" data-external ${embed ? raw('target="_blank" rel="noopener"') : ''}>Join video meeting</a> <span class="hint">Opens a few minutes before the start time. The link is also in your confirmation email.</span></p>` : ''}
       ${event.confirmation_message ? html`<p>${event.confirmation_message}</p>` : ''}
       <p>A confirmation email ${booking.email?.status === 'sent' ? 'was sent' : 'is being sent'} to <strong>${booking.invitee_email}</strong>. It includes links to reschedule or cancel.</p>
       ${token ? html`<div class="actions"><a class="btn" href="/api/public/bookings/${token}/ics" download>Add to calendar (.ics)</a><a class="btn" href="/meet/manage/${token}" ${embed ? raw('target="_blank" rel="noopener"') : ''}>Reschedule or cancel</a></div>` : ''}</div>`);
@@ -727,6 +730,7 @@ export async function manage(ctx) {
       ${booking.payment ? html`<dt>Appointment payment</dt><dd>${money(booking.payment.amount_cents, booking.payment.currency)} · ${booking.payment.status}</dd>` : ''}</dl>
     ${booking.status === 'canceled' && booking.payment?.status === 'paid' ? notice('warn', html`<p>A payment was received for this canceled appointment. Contact the host to review your refund. This time has not been rebooked.</p>`) : ''}
     ${status}
+    ${booking.video?.join_url ? html`<div class="actions"><a class="btn btn-primary" href="${booking.video.join_url}" data-external>Join video meeting</a></div><p class="hint">The meeting opens a few minutes before the start time.</p>` : ''}
     ${data.can_change ? html`<div class="actions" id="manage-actions"><button class="btn btn-primary" id="reschedule">Reschedule</button><button class="btn btn-danger" id="cancel">Cancel appointment</button>
       <a class="btn" href="/api/public/bookings/${token}/ics" download>Add to calendar</a></div><div id="reschedule-panel"></div>` : ''}
   </div></div>`);

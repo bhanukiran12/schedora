@@ -10,6 +10,14 @@ export function postgresQuery(sql) {
   return result;
 }
 
+// Tables of migration 005 (Schedora Meet video and credits), created by the postgres_v4 upgrade.
+export const VIDEO_TABLES = ['video_rooms', 'video_invites', 'video_participants', 'video_usage_intervals', 'video_provider_events', 'video_provider_ops',
+  'credit_accounts', 'credit_lots', 'credit_reservations', 'credit_allocations', 'credit_ledger', 'video_usage_records', 'credit_recharge_orders', 'credit_payment_events'];
+
+export function postgresUpgrade(tables, indexes, extra = []) {
+  return [...postgresSchema(tables, indexes).slice(0, -1), ...extra];
+}
+
 export function postgresSchema(tables, indexes) {
   const foreignKeys = [];
   const statements = tables.map(table => {

@@ -9,6 +9,8 @@ import { handleWebhook, testProviderEvent } from './billing/webhooks.mjs';
 import { subscriptionCatalog, subscriptionCheckout, subscriptionWebhook, refreshSubscription, refreshCheckout, cancelSubscription } from './billing/razorpay.mjs';
 import { isAllowedOrigin, publicConfig, releaseWarnings } from './config.mjs';
 import { registerMeetRoutes } from './api-meet.mjs';
+import { registerVideoRoutes } from './api-video.mjs';
+import { videoHealth } from './video/rooms.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
 import { handleMcp } from './platform/mcp.mjs';
@@ -37,7 +39,7 @@ export function createApi(app) {
     let database = 'ok';
     try { app.db.get('SELECT 1'); } catch { database = 'error'; }
     const pending = app.db.get("SELECT (SELECT COUNT(*) FROM outbox WHERE dispatched_at IS NULL) AS events, (SELECT COUNT(*) FROM emails WHERE status IN ('queued','sending')) AS emails, (SELECT COUNT(*) FROM flow_runs WHERE status IN ('queued','retrying')) AS runs");
-      return { status: database === 'ok' ? 'ok' : 'degraded', database, storage: app.db.dialect || 'sqlite', worker: { last_tick_at: app.worker?.state.lastTickAt ?? null, error: app.worker?.state.lastError ?? null }, pending, release_warnings: releaseWarnings(app.config).length };
+      return { status: database === 'ok' ? 'ok' : 'degraded', database, storage: app.db.dialect || 'sqlite', worker: { last_tick_at: app.worker?.state.lastTickAt ?? null, error: app.worker?.state.lastError ?? null }, pending, video: { enabled: app.config.video.enabled, kill_switch: app.config.video.killSwitch, ...videoHealth(app) }, release_warnings: releaseWarnings(app.config).length };
   }, { public: true });
 
   get('/api/config', () => publicConfig(app.config), { public: true });
@@ -127,6 +129,7 @@ export function createApi(app) {
   });
 
   registerMeetRoutes(app, router, { member, limit });
+  registerVideoRoutes(app, router, { member, limit });
 
   // ---- OAuth integrations (calendars, video) ----
   get('/api/workspaces/:ws/integrations/:provider/start', ctx => {

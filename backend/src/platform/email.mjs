@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { bookingJoinUrl, isNativeVideo } from '../video/rooms.mjs';
 
 const MAX_ATTEMPTS = 6;
 const backoff = attempts => Math.min(3600000, 30000 * 2 ** (attempts - 1));
@@ -86,6 +87,8 @@ export async function deliverEmail(app, id) {
   if (!claim.changes) return app.db.get('SELECT status FROM emails WHERE id = ?', id)?.status;
   const message = app.db.get('SELECT * FROM emails WHERE id = ?', id);
   let body = message.body;
+  const nativeVideo = body.includes(VIDEO_PLACEHOLDER) && isNativeVideo(app.db.get('SELECT location FROM bookings WHERE id = ?', message.related_id)?.location);
+  if (nativeVideo) body = body.replaceAll(VIDEO_PLACEHOLDER, bookingJoinUrl(app, message.related_id) || 'Your host will share the video link before the meeting.');
   if (body.includes(VIDEO_PLACEHOLDER)) {
     const meeting = app.db.get('SELECT m.video_url, m.created_at FROM bookings b JOIN meetings m ON m.id = b.meeting_id WHERE b.id = ?', message.related_id);
     // Give video-link creation a short head start before sending without it.

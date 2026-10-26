@@ -11,6 +11,8 @@ import { oauthBusy } from './platform/oauth.mjs';
 import { createAnthropic } from './ai/service.mjs';
 import { assertPublicHost, fetchFeed } from './meet/calendar.mjs';
 import { createWorker } from './worker.mjs';
+import { createProviders } from './video/provider.mjs';
+import { meetingCsp } from './video/config.mjs';
 
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
@@ -22,6 +24,7 @@ export function createApp(options = {}) {
     config,
     db,
     csp: CSP,
+    meetingCsp: null,
     now: options.now || (() => Date.now()),
     emailProvider: options.emailProvider || createEmailProvider(config),
     smsProvider: options.smsProvider || createSmsProvider(config),
@@ -36,6 +39,9 @@ export function createApp(options = {}) {
       process.stdout.write(JSON.stringify({ time: new Date().toISOString(), level, message, ...fields }) + '\n');
     })
   };
+  app.meetingCsp = meetingCsp(config, CSP);
+  // Video providers by deployment id; tests inject fakes with options.videoProviders.
+  app.video = { providers: createProviders(config, options.videoProviders) };
   app.payments = createPayments(app, (url, init) => app.fetchProvider(url, init));
   app.oauthBusy = (connection, range) => oauthBusy(app, connection, range);
   app.anthropic = options.anthropic !== undefined ? options.anthropic : createAnthropic(config);

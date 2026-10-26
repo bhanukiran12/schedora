@@ -8,7 +8,7 @@ import { definitionProblems } from '../shared/forms-logic.mjs';
 export const KINDS = ['one_on_one', 'group', 'collective', 'round_robin'];
 export const LOCATION_TYPES = {
   video: 'Video link', in_person: 'In person', phone_host_calls: 'Host calls the invitee', phone_invitee_calls: 'Invitee calls the host',
-  custom: 'Custom', google_meet: 'Google Meet', zoom: 'Zoom', teams: 'Microsoft Teams'
+  custom: 'Custom', google_meet: 'Google Meet', zoom: 'Zoom', teams: 'Microsoft Teams', schedora_meet: 'Schedora Meet'
 };
 const AUTO_VIDEO = ['google_meet', 'zoom', 'teams'];
 const NEEDS_VALUE = ['video', 'in_person', 'phone_invitee_calls', 'custom'];
@@ -22,6 +22,7 @@ export const LOCKABLE = ['title', 'description', 'locations', 'duration_min', 'q
 export function locationDisplay(location) {
   if (!location) return '';
   if (AUTO_VIDEO.includes(location.type)) return `${LOCATION_TYPES[location.type]} (link sent with confirmation)`;
+  if (location.type === 'schedora_meet') return 'Schedora Meet video (join link sent with confirmation)';
   if (location.type === 'phone_host_calls') return 'Phone call: the host will call you';
   if (location.type === 'phone_invitee_calls') return `Phone call: ${location.value}`;
   return location.value || LOCATION_TYPES[location.type];

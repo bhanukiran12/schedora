@@ -7,7 +7,7 @@ types.setTypeParser(20, value => {
   if (!Number.isSafeInteger(number)) throw new Error('Database integer exceeds JavaScript safe range.');
   return number;
 });
-const { port, state, connectionString, ca, schemaName } = workerData;
+const { port, state, connectionString, ca, schemaName, upgrades = [] } = workerData;
 const signal = new Int32Array(state);
 let client;
 async function initialize(schema) {
@@ -50,6 +50,12 @@ async function initialize(schema) {
       email TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (provider, subject), UNIQUE (provider, user_id))`);
     await client.query('CREATE TABLE IF NOT EXISTS auth_login_flows (state_hash TEXT PRIMARY KEY, expires_at BIGINT NOT NULL)');
     await client.query("INSERT INTO schema_migrations (name, applied_at) VALUES ('postgres_v3_google_signin', $1) ON CONFLICT DO NOTHING", [Date.now()]);
+    // Versioned upgrades (for example postgres_v4_meet_video), applied once inside this transaction.
+    for (const upgrade of upgrades) {
+      if ((await client.query('SELECT 1 FROM schema_migrations WHERE name = $1', [upgrade.name])).rowCount) continue;
+      for (const statement of upgrade.statements) await client.query(statement);
+      await client.query('INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)', [upgrade.name, Date.now()]);
+    }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   await client.query('SET search_path TO "' + schemaName + '"');

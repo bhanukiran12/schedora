@@ -30,6 +30,10 @@ Every private API route resolves the caller's membership of the workspace in the
 | Connect Stripe, webhooks, audit log | ✓ | ✓ | | |
 | Connect own calendars and video apps, create own API keys | ✓ | ✓ | ✓ | API keys act with the creator's role in one workspace |
 | Single sign-on settings | ✓ | | | |
+| Start instant video meetings; join instant meetings of the workspace | ✓ | ✓ | ✓ | Video needs an active Meet or Suite entitlement; API keys cannot mint browser tokens |
+| Host a scheduled video meeting (end for everyone, remove people, guest links) | ✓ | ✓ | ✓ | Members: only meetings they are an active booking host of, or instant rooms they created. Owners/admins: all |
+| View Meet credits, ledger, usage, calculator | ✓ | ✓ | | |
+| Buy Meet credits | ✓ | | | Server-owned package catalog; `Idempotency-Key` required |
 
 ## Public (no account)
 
@@ -38,6 +42,7 @@ Every private API route resolves the caller's membership of the workspace in the
 | View a booking page and its free times | Published event type, active Meet entitlement |
 | Book | Same, plus an `Idempotency-Key` header and server-side revalidation of the slot |
 | View, cancel, reschedule, download .ics | Manage token from the confirmation (stored only as a SHA-256 hash; expires when the appointment starts) |
+| Join a Schedora Meet video meeting | Attendance link (`/meet/join/…`): separate from the manage token, one per booking (seats = invitee + guests) or a host-created guest link; only its SHA-256 is stored. Works from the join window to the room's end; stops on cancellation, rescheduling, host removal or meeting end. Shows no booking personal data |
 | View and submit a form | Published form version, active Forms entitlement |
 | Billing webhook | Valid HMAC signature within 5 minutes |
 

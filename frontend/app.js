@@ -5,6 +5,7 @@ import * as team from './js/meet-team.mjs';
 import * as forms from './js/forms.mjs';
 import * as flow from './js/flow.mjs';
 import * as account from './js/account.mjs';
+import * as video from './js/meet-video.mjs';
 import { loadStartupConfig } from './js/connection.mjs';
 import { productLanding } from './js/product-landing.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
@@ -20,6 +21,8 @@ const routes = [
   [new RegExp(`^/meet/event-types/(new|${UUID.slice(1, -1)})$`), meet.editor],
   [/^\/meet\/manage\/([A-Za-z0-9_-]{20,100})$/, meet.manage],
   [/^\/meet\/pay\/([A-Za-z0-9_-]{20,100})$/, meet.pay],
+  [/^\/meet\/room\/([A-Za-z0-9_-]{20,30})$/, video.hostRoom],
+  [/^\/meet\/join\/([A-Za-z0-9_-]{40,60})$/, video.guestRoom],
   [/^\/meet\/poll\/([a-z0-9-]{3,60})$/, team.publicPoll],
   [new RegExp(`^/meet/contacts/${UUID}$`), team.contactPage],
   [/^\/recap\/([A-Za-z0-9_-]{20,100})$/, ctx => team.publicRecap(ctx)],
@@ -130,6 +133,7 @@ export function navigate(path, { replace = false } = {}) {
 
 export async function render() {
   const token = ++renderToken;
+  video.leaveMeeting(); // releases camera, microphone and the connection before any other view renders
   const main = $('#main');
   const query = new URLSearchParams(location.search);
   const product = productFor(currentPath);
@@ -164,6 +168,8 @@ document.addEventListener('click', event => {
   if (link.target || link.hasAttribute('download') || link.dataset.external !== undefined) return;
   const url = new URL(link.href, location.href);
   if (url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  // Meeting pages carry their own camera/microphone and CSP headers, so entering or leaving one is a full page load.
+  if (document.body.dataset.meetingPage || /^\/meet\/(room|join)\//.test(url.pathname)) return;
   if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
   if (document.body.dataset.dirty && !window.confirm('You have unsaved changes. Leave this page?')) { event.preventDefault(); return; }
   event.preventDefault();

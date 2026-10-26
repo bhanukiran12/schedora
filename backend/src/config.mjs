@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { loadVideoConfig, publicVideoConfig } from './video/config.mjs';
 
 // All configuration comes from the server environment. No secret is ever sent to the browser.
 export function loadConfig(env = process.env, overrides = {}) {
@@ -69,6 +70,7 @@ export function loadConfig(env = process.env, overrides = {}) {
       jurisdiction: env.OPERATOR_JURISDICTION || ''
     },
     workerIntervalMs: Number(env.WORKER_INTERVAL_MS || 2000),
+    video: loadVideoConfig(env, production),
     ...overrides
   };
   // Origins allowed to send state-changing requests. ALLOWED_ORIGINS adds comma-separated entries;
@@ -104,7 +106,8 @@ export function publicConfig(config) {
       google: Boolean(config.google.clientId), microsoft: Boolean(config.microsoft.clientId), zoom: Boolean(config.zoom.clientId),
       ai: Boolean(config.anthropicApiKey), testPayments: !config.production || config.allowTestPayments
     },
-    assistAddress: config.assistAddress
+    assistAddress: config.assistAddress,
+    video: publicVideoConfig(config)
   };
 }
 
@@ -116,5 +119,8 @@ export function releaseWarnings(config) {
   if (config.billingProvider !== 'test' && !config.billingWebhookSecret) warnings.push('No payment provider webhook secret is configured.');
   if (config.billingMode === 'open') warnings.push('Billing mode is open: every workspace has evaluation access to all products.');
   if (config.production && !config.encryptionKey) warnings.push('APP_ENCRYPTION_KEY is not set: integrations (calendars, Stripe, SSO) cannot be connected.');
+  if (config.video?.enabled && config.video.provider === 'fake') warnings.push('Schedora Meet video uses the fake provider; no real meeting can connect.');
+  for (const reason of config.video?.blocked || []) warnings.push('Schedora Meet video is off: ' + reason);
+  if (config.video?.killSwitch !== 'off') warnings.push(`Schedora Meet video kill switch is ${config.video?.killSwitch}.`);
   return warnings;
 }

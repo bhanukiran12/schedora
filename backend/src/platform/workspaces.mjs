@@ -56,7 +56,7 @@ export function createWorkspace(app, user, body) {
   return app.db.transaction(() => createWorkspaceRecord(app, user.id, name));
 }
 
-const RESERVED_SLUGS = ['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api', 'contacts', 'embed'];
+const RESERVED_SLUGS = ['event-types', 'manage', 'new', 'bookings', 'pay', 'poll', 'polls', 'route', 'u', 'api', 'contacts', 'embed', 'room', 'join'];
 const LOGO_MAX_BYTES = 200 * 1024;
 
 export function updateWorkspace(app, workspaceId, body) {

@@ -2,6 +2,7 @@ import { randomUUID, createHash, createHmac, timingSafeEqual } from 'node:crypto
 import { fail } from '../http.mjs';
 import { PLANS } from './plans.mjs';
 import { applyBillingEvent } from './webhooks.mjs';
+import { rechargeWebhook } from '../video/recharge.mjs';
 
 const cfg = app => app.config.razorpayBilling || {};
 const subscriptionLocks = new WeakMap();
@@ -13,7 +14,7 @@ function serialized(app, id, operation) {
   locks.set(id, task);
   return task.finally(() => { if (locks.get(id) === task) locks.delete(id); });
 }
-const configured = app => app.config.billingProvider === 'razorpay' && /^rzp_(live|test)_[A-Za-z0-9]+$/.test(cfg(app).keyId || '') && Boolean(cfg(app).keySecret && app.config.billingWebhookSecret);
+export const configured = app => app.config.billingProvider === 'razorpay' && /^rzp_(live|test)_[A-Za-z0-9]+$/.test(cfg(app).keyId || '') && Boolean(cfg(app).keySecret && app.config.billingWebhookSecret);
 function planConfig(app, id) {
   const plan = cfg(app).plans?.[id];
   return PLANS[id] && plan && /^plan_[A-Za-z0-9]+$/.test(plan.id || '') &&
@@ -33,7 +34,7 @@ function checkoutUrl(value) {
   if (url.protocol !== 'https:' || !['rzp.io', 'rzp.in', 'razorpay.com'].some(host => url.hostname === host || url.hostname.endsWith('.' + host))) fail(502, 'billing_provider_error', 'Invalid Razorpay checkout URL.');
   return url.href;
 }
-async function request(app, path, body) {
+export async function request(app, path, body) {
   if (!configured(app)) fail(503, 'billing_not_configured', 'Razorpay subscription billing is not configured.');
   const config = cfg(app);
   const response = await app.fetchProvider('https://api.razorpay.com/v1/' + path, {
@@ -132,6 +133,9 @@ export async function subscriptionWebhook(app, raw, signature) {
   if (!/^[a-f0-9]{64}$/.test(signature || '') || !timingSafeEqual(expected, Buffer.from(signature, 'hex'))) fail(400, 'invalid_signature', 'Invalid Razorpay billing signature.');
   let event;
   try { event = JSON.parse(raw); } catch { fail(400, 'invalid_event', 'Invalid webhook JSON.'); }
+  // Meet credit purchases (payment links, refunds, disputes) share this verified endpoint.
+  const recharge = await rechargeWebhook(app, event);
+  if (recharge !== null) return recharge;
   if (!['subscription.authenticated','subscription.activated','subscription.charged','subscription.pending','subscription.halted','subscription.cancelled','subscription.completed','subscription.expired','subscription.paused','subscription.resumed','subscription.updated'].includes(event.event)) return 'ignored';
   const id = event.payload?.subscription?.entity?.id;
   if (!/^sub_[A-Za-z0-9]+$/.test(id || '') || !Number.isInteger(event.created_at) || event.created_at > Math.floor(app.now() / 1000) + 300) fail(400, 'invalid_event', 'Missing or invalid subscription timestamp.');

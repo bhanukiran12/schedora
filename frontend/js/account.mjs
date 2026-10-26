@@ -1,6 +1,7 @@
 import { $, $$, api, applyMe, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
+import { creditsSection } from './meet-video.mjs';
 
 const safeNext = value => typeof value === 'string' && /^\/(?!\/)[^\s]*$/.test(value) ? value : '/meet';
 const PRODUCT_NAMES = { meet: 'Meet', forms: 'Forms', flow: 'Flow' };
@@ -174,6 +175,7 @@ export async function billing(ctx) {
     <section class="card card-plain"><h2>Usage this month</h2>${Object.entries(data.usage).map(([metric, usage]) => html`<div><div class="row-between"><span>${metric.replace('_', ' ')}</span><span>${usage.used}${usage.limit ? ` of ${usage.limit}` : ''}</span></div>
       ${usage.limit ? html`<div class="meter" role="meter" aria-label="${metric.replace('_', ' ')} used" aria-valuemin="0" aria-valuemax="${usage.limit}" aria-valuenow="${usage.used}"><span data-width="${Math.min(100, Math.round(usage.used / usage.limit * 100))}"></span></div>` : ''}</div>`)}
       <p class="hint">Allowances reset on the first day of each month (UTC). Allowances shown are proposed fair-use limits.</p></section>
+    ${boot.video?.enabled ? html`<div id="video-credits"></div>` : ''}
     <section class="card card-plain"><h2>Subscriptions</h2>
       ${data.subscriptions.length ? html`<ul class="list">${data.subscriptions.map(subscription => html`<li class="row-between"><div><div class="list-title">${PRODUCT_NAMES[subscription.plan] || 'Suite'} plan</div>
         <div class="meta">${subscription.current_period_end ? html`<span>${subscription.cancel_at_period_end ? 'Ends' : 'Renews'} ${fmtDateTime(subscription.current_period_end)}</span>` : ''}${subscription.grace_until ? html`<span>Grace until ${fmtDateTime(subscription.grace_until)}</span>` : ''}</div></div>
@@ -193,6 +195,7 @@ export async function billing(ctx) {
     </section>
     <section><h2>Compare plans</h2>${comparison}</section></div>`);
   $$('[data-width]').forEach(bar => { bar.style.width = bar.dataset.width + '%'; });
+  if ($('#video-credits')) creditsSection(ctx, $('#video-credits'));
   $$('[data-action]').forEach(button => button.onclick = async () => {
     try {
       const result = await api('POST', wsPath('/billing/test-events'), { action: button.dataset.action, plan: button.dataset.plan, subscription: button.dataset.sub });

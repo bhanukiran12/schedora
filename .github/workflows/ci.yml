@@ -24,6 +24,8 @@ jobs:
         run: npm run check
       - name: Shared forms logic is in sync
         run: npm run sync-shared -- --check
+      - name: Vendored LiveKit browser SDK matches the pinned version
+        run: npm run vendor-livekit -- --check
       - name: Unit, API and integration tests
         run: npm test
       - name: Browser journeys and responsive layout

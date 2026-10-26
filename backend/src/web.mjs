@@ -2,19 +2,20 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { send } from './http.mjs';
 import { findPublishedEventType } from './meet/event-types.mjs';
+import { MEETING_PAGE, MEETING_PERMISSIONS } from './video/config.mjs';
 
 // Serves the static frontend for local development and single-host deployments. In the split
 // deployment Vercel serves frontend/ with the same rules (frontend/vercel.json) and this is off.
 
 const TYPES = { '.webmanifest': 'application/manifest+json', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
-const STATIC = /^\/(app\.js|app\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs)$/;
+const STATIC = /^\/(app\.js|app\.css|design\.css|product-minimal\.css|suite-theme\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs|vendor\/livekit-client\.esm\.mjs)$/;
 const LEGACY = { '/book': '/meet', '/form': '/forms' };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const PAGES = [
   /^\/$/, /^\/meet$/, /^\/forms$/, /^\/flow$/, /^\/privacy$/, /^\/terms$/, /^\/account$/, /^\/billing$/,
   new RegExp(`^/meet/event-types/(new|${UUID})$`), /^\/meet\/manage\/[A-Za-z0-9_-]{20,100}$/,
   new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`),
-  /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
+  /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/room\/[A-Za-z0-9_-]{20,30}$/, /^\/meet\/join\/[A-Za-z0-9_-]{40,60}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
 ];
 
 function resolvePage(app, path) {
@@ -48,11 +49,15 @@ export function createWeb(app) {
 }
 
 export function securityHeaders(app, request, response) {
+  // Only the meeting pages may use the camera, microphone and screen capture, or connect to the
+  // video provider. They also send no referrer, because their URLs carry attendance credentials.
+  const meeting = MEETING_PAGE.test(String(request.url || '').split('?')[0]);
   response.setHeader('X-Content-Type-Options', 'nosniff');
-  response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  response.setHeader('Referrer-Policy', meeting ? 'no-referrer' : 'strict-origin-when-cross-origin');
+  response.setHeader('Permissions-Policy', meeting ? MEETING_PERMISSIONS : 'camera=(), microphone=(), geolocation=(), payment=()');
   response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  response.setHeader('Content-Security-Policy', app.csp);
+  response.setHeader('Content-Security-Policy', meeting ? app.meetingCsp : app.csp);
+  if (meeting) response.setHeader('X-Robots-Tag', 'noindex, nofollow');
   if (isSecure(app, request)) response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 }
 

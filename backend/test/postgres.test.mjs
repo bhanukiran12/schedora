@@ -54,3 +54,42 @@ test('Supabase persists auth and bookings across reconnects; tenant and overlap 
     db.close();
   }
 });
+
+test('PostgreSQL upgrade for Schedora Meet video creates every table once with portable SQL', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { postgresUpgrade, VIDEO_TABLES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const tables = template.all("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
+  template.close();
+  assert.ok(VIDEO_TABLES.every(name => tables.some(table => table.name === name)), 'every video table is in migration 005');
+  const statements = postgresUpgrade(tables.filter(table => VIDEO_TABLES.includes(table.name)), indexes.filter(index => VIDEO_TABLES.includes(index.tbl_name)));
+  assert.equal(statements.filter(sql => /^CREATE TABLE/.test(sql)).length, VIDEO_TABLES.length);
+  assert.ok(statements.every(sql => !/\bINTEGER\b|COLLATE NOCASE|AUTOINCREMENT|users_email_lower/.test(sql)));
+  assert.ok(statements.some(sql => /ALTER TABLE "credit_lots" ADD FOREIGN KEY \(workspace_id\) REFERENCES workspaces\(id\) ON DELETE CASCADE/.test(sql)));
+});
+
+test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
+  const { reconcileWallet } = await import('../src/video/credits.mjs');
+  const config = loadConfig();
+  const schemaName = 'schedora_test_' + randomUUID().replaceAll('-', '');
+  const db = openPostgres(config.databaseUrl, { ca: config.databaseCa, schemaName });
+  let env;
+  try {
+    env = await setup({ db });
+    env.app.config.video = { ...env.app.config.video, allowances: { evaluation: 50 }, guestPolicy: 'open', maxParticipants: 20 };
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'PgVideo');
+    const room = (await owner.post(`/api/workspaces/${ws.id}/meet-video/rooms`, {})).body;
+    const link = await owner.post(`/api/meet-video/rooms/${room.public_id}/invites`, { seats: 15 });
+    const token = link.body.url.split('/meet/join/')[1];
+    const results = await Promise.all(Array.from({ length: 10 }, (_, index) => env.client().post('/api/public/meet-video/join/' + token, { display_name: 'G' + index })));
+    assert.equal(results.filter(result => result.status === 200).length, 5);
+    assert.deepEqual(reconcileWallet(env.app, ws.id), []);
+    assert.throws(() => db.run('UPDATE credit_ledger SET units = 0'), /credit_ledger_immutable/);
+  } finally {
+    if (env) await env.close();
+    db.exec('DROP SCHEMA "' + schemaName + '" CASCADE');
+    db.close();
+  }
+});

@@ -12,6 +12,7 @@ import { bufferedBlock, conflicts, generateSlots } from './availability.mjs';
 import { AUTO_VIDEO, hostsFor, hydrate, locationDisplay, scheduleFor } from './event-types.mjs';
 import { bookingIcs } from './ics.mjs';
 import { cancelScheduledWorkflows, runWorkflows } from './workflows.mjs';
+import { bookingJoinUrl, ensureBookingVideo, isNativeVideo, meetingHostUrl, revokeBookingVideo } from '../video/rooms.mjs';
 
 const DAY = 86400000;
 const MINUTE = 60000;
@@ -179,9 +180,11 @@ function meetingHosts(app, meetingId) {
   return app.db.all('SELECT u.id, u.name, u.email FROM meeting_hosts h JOIN users u ON u.id = h.host_id WHERE h.meeting_id = ? ORDER BY u.name', meetingId);
 }
 
-function locationText(booking) {
+function locationText(app, booking) {
   const location = typeof booking.location === 'string' ? JSON.parse(booking.location) : booking.location;
   if (!location) return 'To be confirmed by the host';
+  // Each attendee gets their own Schedora Meet attendance link (never the booking management link).
+  if (location.type === 'schedora_meet') return 'Schedora Meet: ' + (bookingJoinUrl(app, booking.id) || 'the join link will be sent by the host');
   if (AUTO_VIDEO.includes(location.type)) return VIDEO_PLACEHOLDER;
   if (location.type === 'phone_host_calls') return `The host will call you at ${location.value}`;
   return locationDisplay(location);
@@ -191,7 +194,7 @@ export function templateValues(app, booking, eventType, hosts, token) {
   const answers = typeof booking.answers === 'string' ? JSON.parse(booking.answers) : booking.answers || {};
   const values = {
     'invitee.name': booking.invitee_name, 'invitee.email': booking.invitee_email, 'invitee.phone': booking.invitee_phone || '',
-    'event.title': eventType.title, 'event.location': locationText(booking), 'booking.reference': booking.reference,
+    'event.title': eventType.title, 'event.location': locationText(app, booking), 'booking.reference': booking.reference,
     'booking.start': formatInstant(booking.starts_at, booking.invitee_timezone), 'booking.start_host': formatInstant(booking.starts_at, eventType.timezone),
     'host.name': hosts.map(host => host.name).join(', '), manage_url: token ? manageUrl(app, token) : ''
   };
@@ -212,6 +215,8 @@ function confirmationMessages(app, { booking, eventType, hosts, token, kind }) {
   const extra = eventType.confirmation_message ? `\n\n${eventType.confirmation_message}` : '';
   const verb = kind === 'rescheduled' ? 'Rescheduled' : 'Confirmed';
   const ics = bookingIcs({ booking, eventType, hostName: hostNames, now: app.now() });
+  // Hosts join a Schedora Meet room through their signed-in host link, not the attendee link.
+  const hostLocation = isNativeVideo(booking.location) ? 'Schedora Meet (host link, sign in required): ' + (meetingHostUrl(app, booking.meeting_id) || 'see Meet') : values['event.location'];
   const inviteeBody = `Hi ${booking.invitee_name},\n\nYour appointment is ${verb.toLowerCase()}.\n\n${eventType.title} with ${hostNames}\n${values['booking.start']}\nLocation: ${values['event.location']}\nReference: ${booking.reference}${extra}${manage}\n\nSent by Meet by Schedora.`;
   queueEmail(app, { workspaceId: booking.workspace_id, key: `booking:${booking.id}:invitee-confirmation`, kind: 'confirmation', relatedId: booking.id, to: booking.invitee_email,
     subject: `${verb}: ${eventType.title} with ${hostNames}`, body: inviteeBody, ics });
@@ -223,7 +228,7 @@ function confirmationMessages(app, { booking, eventType, hosts, token, kind }) {
   for (const host of hosts) {
     queueEmail(app, { workspaceId: booking.workspace_id, key: `booking:${booking.id}:host-notification:${host.id}`, kind: 'host_notification', relatedId: booking.id, to: host.email,
       subject: `${kind === 'rescheduled' ? 'Rescheduled' : 'New'} appointment: ${booking.invitee_name}`, ics,
-      body: `${booking.invitee_name} (${booking.invitee_email}) ${kind === 'rescheduled' ? 'moved their appointment to' : 'booked'} ${eventType.title}.\n${values['booking.start_host']}\nLocation: ${values['event.location']}\nReference: ${booking.reference}${booking.notes ? '\n\nNotes:\n' + booking.notes : ''}${answersSummary(eventType, booking)}` });
+      body: `${booking.invitee_name} (${booking.invitee_email}) ${kind === 'rescheduled' ? 'moved their appointment to' : 'booked'} ${eventType.title}.\n${values['booking.start_host']}\nLocation: ${hostLocation}\nReference: ${booking.reference}${booking.notes ? '\n\nNotes:\n' + booking.notes : ''}${answersSummary(eventType, booking)}` });
   }
   if (eventType.reminder_min && booking.starts_at - eventType.reminder_min * MINUTE > app.now()) {
     queueEmail(app, { workspaceId: booking.workspace_id, key: `booking:${booking.id}:reminder`, kind: 'reminder', relatedId: booking.id, to: booking.invitee_email,
@@ -241,6 +246,8 @@ const emit = (app, type, booking) => app.db.run('INSERT INTO outbox (id, workspa
 // Side effects of a booking becoming confirmed: event for Flow and webhooks, messages, single-use links.
 function onConfirmed(app, booking, eventType, token, kind) {
   const hosts = meetingHosts(app, booking.meeting_id);
+  // Native video: database-only room and attendance credential, inside this transaction.
+  ensureBookingVideo(app, booking, eventType);
   emit(app, kind === 'rescheduled' ? 'meet.booking.rescheduled' : 'meet.booking.created', booking);
   confirmationMessages(app, { booking, eventType, hosts, token, kind });
   if (eventType.single_use && kind !== 'rescheduled') app.db.run('UPDATE event_types SET published = 0 WHERE id = ?', eventType.id);
@@ -377,6 +384,7 @@ export function publicBooking(app, booking, eventType) {
     starts_at: new Date(booking.starts_at).toISOString(), ends_at: new Date(booking.ends_at).toISOString(),
     invitee_name: booking.invitee_name, invitee_email: booking.invitee_email, invitee_timezone: booking.invitee_timezone,
     location: location ? { type: location.type, display: AUTO_VIDEO.includes(location.type) ? meeting?.video_url || locationDisplay(location) : locationDisplay(location) } : null,
+    video: location?.type === 'schedora_meet' && booking.status === 'confirmed' ? { join_url: bookingJoinUrl(app, booking.id) } : null,
     event: { title: eventType.title, location: eventType.location, duration_min: eventType.duration_min, host_name: meetingHosts(app, booking.meeting_id).map(host => host.name).join(', ') || eventType.host_name,
       timezone: eventType.timezone, workspace_slug: eventType.workspace_slug, slug: eventType.slug, kind: eventType.kind, confirmation_message: eventType.confirmation_message, redirect_url: eventType.redirect_url },
     payment: booking.payment_status === 'none' ? null : { status: booking.payment_status, amount_cents: booking.amount_cents, currency: booking.currency, hold_expires_at: booking.hold_expires_at },
@@ -409,6 +417,7 @@ function cancelAttendee(app, booking, eventType, by, reason, notify = true) {
     app.db.run("UPDATE meetings SET status = 'canceled' WHERE id = ?", booking.meeting_id);
     app.db.run('UPDATE meeting_hosts SET active = 0 WHERE meeting_id = ?', booking.meeting_id);
   }
+  revokeBookingVideo(app, booking, by === 'reschedule' ? 'rescheduled' : 'canceled');
   cancelScheduledWorkflows(app, booking.id);
   cancelPendingEmails(app, booking.id, ['guest_confirmation', 'host_notification']);
   if (wasConfirmed && by !== 'reschedule') emit(app, 'meet.booking.canceled', booking);
@@ -498,6 +507,7 @@ export function listBookings(app, workspaceId, actor, scope, { eventTypeId, host
       ...row, questions: undefined,
       answers: questions.filter(question => answers[question.id] !== undefined).map(question => ({ label: question.label, value: answerText(question, answers[question.id]) })),
       location: location ? (AUTO_VIDEO.includes(location.type) ? row.video_url || locationDisplay(location) : locationDisplay(location)) : null,
+      video_room_url: location?.type === 'schedora_meet' && row.status === 'confirmed' ? meetingHostUrl(app, row.meeting_id) : null,
       guests: JSON.parse(row.guests), email: emailStatusFor(app, row.id, 'confirmation')
     };
   });

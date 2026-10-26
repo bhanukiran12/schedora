@@ -33,21 +33,26 @@
           "value": "nosniff"
         },
         {
-          "key": "Referrer-Policy",
-          "value": "strict-origin-when-cross-origin"
-        },
-        {
-          "key": "Permissions-Policy",
-          "value": "camera=(), microphone=(), geolocation=(), payment=()"
-        },
-        {
           "key": "Strict-Transport-Security",
           "value": "max-age=31536000; includeSubDomains"
         }
       ]
     },
     {
-      "source": "/((?!f/|embed/).*)",
+      "source": "/((?!meet/room/|meet/join/).*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        }
+      ]
+    },
+    {
+      "source": "/((?!f/|embed/|meet/room/|meet/join/).*)",
       "headers": [
         {
           "key": "Content-Security-Policy",
@@ -56,6 +61,31 @@
         {
           "key": "Cross-Origin-Opener-Policy",
           "value": "same-origin"
+        }
+      ]
+    },
+    {
+      "source": "/meet/(room|join)/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; media-src 'self' blob: mediastream:; worker-src 'self' blob:; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://*.livekit.cloud wss://*.livekit.cloud; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), microphone=(self), display-capture=(self), autoplay=(self), geolocation=(), payment=()"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
         }
       ]
     },
@@ -78,7 +108,7 @@
       ]
     },
     {
-      "source": "/(js|shared)/(.*)",
+      "source": "/(js|shared|vendor)/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -106,7 +136,12 @@
     },
     {
       "source": "/(demo|start)/(.*)",
-      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
     }
   ]
 }
