@@ -65,7 +65,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     assistAddress: env.ASSIST_ADDRESS || `assist@${productDomain}`,
     operator: {
       name: env.OPERATOR_NAME || '',
-      contact: env.OPERATOR_CONTACT || '',
+      contact: env.OPERATOR_CONTACT || 'support@schedora.in',
       jurisdiction: env.OPERATOR_JURISDICTION || ''
     },
     workerIntervalMs: Number(env.WORKER_INTERVAL_MS || 2000),

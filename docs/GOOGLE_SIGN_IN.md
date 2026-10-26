@@ -34,6 +34,16 @@ Preserve the existing calendar callback (`/api/oauth/google/callback`, on the AP
 
 The Google app's publishing/verification status is controlled in Google Cloud, not by application code or the presence of a client secret.
 
+## Setup observed on 26 October 2026
+
+- Existing project: `schedora-meet`, retained for production use.
+- Branding saved as Schedora with homepage, privacy and terms links; authorized domain remains schedora.in.
+- Added `https://schedora.in/api/auth/google/callback` to the existing web client, preserving the calendar callback.
+- Audience verified as **In production / External**. The test-user-only restriction has been removed.
+- The console still displays the 100-user limit for **unapproved sensitive/restricted scopes**. This is distinct from basic OpenID/email/profile sign-in. Calendar scope verification is not asserted as complete.
+- Public application support/privacy contact requested by the owner: `support@schedora.in`. Confirm the mailbox can receive mail. Google support-email dropdown may require a verified Google account/group address before that address can replace the existing console contact.
+- The operator's legal name and jurisdiction are still awaiting owner confirmation. The application continues to identify these as pending rather than inventing details or claiming a commercial release is approved.
+
 Official references:
 - https://developers.google.com/identity/openid-connect/openid-connect
 - https://developers.google.com/identity/protocols/oauth2/production-readiness/policy-compliance

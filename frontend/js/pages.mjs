@@ -55,7 +55,7 @@ export async function home(ctx) {
 
 const operatorText = () => boot.operator.name
   ? html`${boot.operator.name}${boot.operator.jurisdiction ? `, ${boot.operator.jurisdiction}` : ''}. Contact: ${boot.operator.contact || 'not yet provided'}.`
-  : html`<strong>Not yet confirmed.</strong> This build is an evaluation preview; the legal operator, privacy contact and jurisdiction must be published before Schedora is offered commercially.`;
+  : html`<strong>Legal operator details are awaiting confirmation.</strong> Privacy and support contact: <a href="mailto:${boot.operator.contact || 'support@schedora.in'}">${boot.operator.contact || 'support@schedora.in'}</a>. The operator's legal name and jurisdiction must be published before Schedora is offered commercially.`;
 
 export async function privacy(ctx) {
   setTitle('Privacy policy · Schedora');

@@ -119,7 +119,7 @@ function signedOut(ctx) {
   const error = ctx.query.get('error');
   mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>${signup ? 'Create your Schedora account' : 'Sign in to Schedora'}</h1>
     ${error ? notice('bad', html`<p>${error}</p>`) : ''}
-    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(next)}" data-external>Continue with Google</a><p>One Google account for Meet, Forms and Flow. Calendar access is requested separately.</p>${signup ? html`<p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>` : ''}</section>` : ''}
+    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(next)}" data-external>Continue with Google</a><p>One Google account for Meet, Forms and Flow. Calendar access is requested separately.</p><p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p></section>` : ''}
     <div class="grid-2">${signup ? html`${signUpCard}${signInCard}` : html`${signInCard}${signUpCard}`}</div>
     <section class="card card-plain section-gap"><h2>Single sign-on</h2><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
       <p class="hint">For organizations that have set up single sign-on.</p></section></div>`);
