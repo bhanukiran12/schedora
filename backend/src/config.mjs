@@ -64,7 +64,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     inboundEmailSecret: env.INBOUND_EMAIL_SECRET || '',
     assistAddress: env.ASSIST_ADDRESS || `assist@${productDomain}`,
     operator: {
-      name: env.OPERATOR_NAME || '',
+      name: env.OPERATOR_NAME || 'VEMULA BHANU KIRAN',
       contact: env.OPERATOR_CONTACT || 'support@schedora.in',
       jurisdiction: env.OPERATOR_JURISDICTION || ''
     },

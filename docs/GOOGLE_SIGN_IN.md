@@ -43,7 +43,15 @@ The Google app's publishing/verification status is controlled in Google Cloud, n
 - The console still displays the 100-user limit for **unapproved sensitive/restricted scopes**. This is distinct from basic OpenID/email/profile sign-in. Calendar scope verification is not asserted as complete.
 - Data Access declarations saved for openid, email, profile and the existing calendar.freebusy/calendar.events integration. Calendar event access shows approval required. The usage justification was saved; the requested YouTube demonstration and Google verification submission/approval remain outstanding.
 - Public application support/privacy contact requested by the owner: `support@schedora.in`. Confirm the mailbox can receive mail. Google support-email dropdown may require a verified Google account/group address before that address can replace the existing console contact.
-- The operator's legal name and jurisdiction are still awaiting owner confirmation. The application continues to identify these as pending rather than inventing details or claiming a commercial release is approved.
+- Owner-confirmed operator name: **VEMULA BHANU KIRAN**. Published as the default operator name; OPERATOR_NAME can override it. The country/jurisdiction is still awaiting confirmation.
+
+## Shared authentication across products
+
+- Production uses `COOKIE_DOMAIN=.schedora.in`, confirmed from the live OAuth flow cookie on 26 October 2026. The same Secure, HttpOnly session is used by the suite and Meet, Forms and Flow subdomains; each frontend proxies `/api` to the same backend/database.
+- Account includes direct links to all three product workspaces. Product access still respects workspace membership, roles and subscriptions.
+- Signing out revokes the server session, so its cookie cannot authenticate any of the apps afterward. Other separately signed-in devices retain their own sessions.
+- Regression coverage in `shared-auth.test.mjs` verifies the shared cookie attributes, identity on all four hosts, and session revocation across hosts.
+- Product walkthrough footage uses only public pages and clearly labeled sample data. It is not a substitute for Google's requested real OAuth consent and Calendar permission demonstration. The verification recording must include the production OAuth client, consent screens, Calendar connection and actual scope use; upload an unlisted YouTube video and use its URL in Google Data Access. Do not fabricate consent or an approval result.
 
 Official references:
 - https://developers.google.com/identity/openid-connect/openid-connect

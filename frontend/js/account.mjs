@@ -13,7 +13,9 @@ export async function account(ctx) {
   const admin = ['owner', 'admin'].includes(ws?.role);
   const google = await api('GET', '/api/auth/google/status').catch(() => ({ enabled: false }));
   if (!ctx.alive()) return;
-  mount(ctx.main, html`<div class="container page"><span class="tag">Schedora account</span><h1>Account</h1>
+  mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>Account</h1>
+    <p>You're signed in across Schedora apps. Signing out ends this session in every app.</p>
+    <nav class="actions" aria-label="Your Schedora apps"><a class="btn" href="${boot.links.meet}">Open Meet</a><a class="btn" href="${boot.links.forms}">Open Forms</a><a class="btn" href="${boot.links.flow}">Open Flow</a></nav>
     <div class="grid-2">
       <section class="card card-plain"><h2>Profile</h2><p><strong>${session.user.name}</strong><br>${session.user.email}</p><button class="btn" id="sign-out">Sign out</button>${google.enabled ? html`<hr><h3>Google sign-in</h3>${google.connected ? html`<p>Google is connected. You can use it to sign in.</p>` : html`<p>Connect Google with the same email to sign in next time. Calendar access is separate.</p><button class="btn" id="link-google">Connect Google sign-in</button>`}` : ''}${ctx.query.get('error') ? notice('bad', html`<p>${ctx.query.get('error')}</p>`) : ''}</section>
       <section class="card card-plain"><h2>Workspace</h2>
