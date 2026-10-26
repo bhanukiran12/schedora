@@ -41,6 +41,7 @@ The Google app's publishing/verification status is controlled in Google Cloud, n
 - Added `https://schedora.in/api/auth/google/callback` to the existing web client, preserving the calendar callback.
 - Audience verified as **In production / External**. The test-user-only restriction has been removed.
 - The console still displays the 100-user limit for **unapproved sensitive/restricted scopes**. This is distinct from basic OpenID/email/profile sign-in. Calendar scope verification is not asserted as complete.
+- Data Access declarations saved for openid, email, profile and the existing calendar.freebusy/calendar.events integration. Calendar event access shows approval required. The usage justification was saved; the requested YouTube demonstration and Google verification submission/approval remain outstanding.
 - Public application support/privacy contact requested by the owner: `support@schedora.in`. Confirm the mailbox can receive mail. Google support-email dropdown may require a verified Google account/group address before that address can replace the existing console contact.
 - The operator's legal name and jurisdiction are still awaiting owner confirmation. The application continues to identify these as pending rather than inventing details or claiming a commercial release is approved.
 
