@@ -56,6 +56,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Public address of this API, for webhook URLs given to providers (defaults to BASE_URL, which proxies /api).
     apiBaseUrl: (env.API_BASE_URL || '').replace(/\/$/, ''),
     google: { clientId: env.GOOGLE_CLIENT_ID || '', clientSecret: env.GOOGLE_CLIENT_SECRET || '' },
+    googleSignIn: { clientId: env.GOOGLE_SIGNIN_CLIENT_ID || '', clientSecret: env.GOOGLE_SIGNIN_CLIENT_SECRET || '' },
     microsoft: { clientId: env.MICROSOFT_CLIENT_ID || '', clientSecret: env.MICROSOFT_CLIENT_SECRET || '' },
     zoom: { clientId: env.ZOOM_CLIENT_ID || '', clientSecret: env.ZOOM_CLIENT_SECRET || '' },
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
@@ -95,6 +96,7 @@ export function publicConfig(config) {
   return {
     productDomain: config.productDomain,
     analytics: config.analytics,
+    googleSignIn: Boolean((config.googleSignIn?.clientId ? config.googleSignIn.clientId && config.googleSignIn.clientSecret : config.google.clientId && config.google.clientSecret) && (!config.production || config.encryptionKey)),
     billingMode: config.billingMode,
     operator: config.operator,
     providers: { email: config.emailProvider, sms: config.smsProvider, calendar: 'ICS feed', billing: config.billingProvider },

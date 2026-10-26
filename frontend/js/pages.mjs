@@ -66,8 +66,10 @@ export async function privacy(ctx) {
     <h2>What we collect and why</h2>
     <ul>
       <li><strong>Accounts:</strong> name, email address and a salted password hash, to sign you in and identify you to your workspace.</li>
+      <li><strong>Google sign-in:</strong> if you choose Google, we verify your Google account identifier, verified email and display name to create or access your Schedora account. We store the identifier to recognize the same Google account. Sign-in requests only OpenID, email and profile permissions; it does not connect your calendar or store Google sign-in access tokens. Existing accounts must explicitly link Google while signed in.</li>
       <li><strong>Appointments (Meet):</strong> the invitee's name, email address, time zone and optional notes, so the host can hold the appointment and both sides receive confirmations, reminders and cancellation notices.</li>
       <li><strong>Calendar connections:</strong> if a host connects a calendar feed, we store the feed address and only the start and end times of busy periods, to hide times that are not free. Event titles and attendees are not stored.</li>
+      <li><strong>Google Calendar:</strong> a separate optional Google connection checks calendar busy periods and creates, updates or cancels the calendar events associated with Schedora bookings. Its access and refresh tokens are encrypted on the server. Disconnect the connection in Meet to remove its stored credentials.</li>
       <li><strong>Form responses (Forms):</strong> the answers a respondent submits, stored in the form owner's workspace. Answers to questions hidden by the form's logic are discarded.</li>
       <li><strong>Automations (Flow):</strong> run records referencing the booking or response that triggered them, and any task or email the workspace configured.</li>
       <li><strong>Security logs:</strong> request method, route, status and timing. Connection addresses are held in memory for rate limiting only.</li>

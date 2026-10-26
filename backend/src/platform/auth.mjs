@@ -107,6 +107,11 @@ export function signOut(app, session) {
 export async function deleteAccount(app, user, body) {
   const record = app.db.get('SELECT password_hash FROM users WHERE id = ?', user.id);
   if (!record || !(await verifyPassword(String(body.password || ''), record.password_hash))) fail(401, 'invalid_credentials', 'Password is incorrect.', { field: 'password' });
+  deleteAccountRecords(app, user);
+}
+
+// Call only after password verification or a fresh, bound Google reauthentication.
+export function deleteAccountRecords(app, user) {
   app.db.transaction(() => {
     const owned = app.db.all("SELECT workspace_id FROM memberships WHERE user_id = ? AND role = 'owner'", user.id);
     for (const { workspace_id } of owned) {

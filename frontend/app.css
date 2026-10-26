@@ -315,6 +315,9 @@ dialog::backdrop { background: #0008; }
 .row > label:not(.check), .range > label:not(.check) { margin: 0; }
 .row > input:not([type="checkbox"]):not([type="radio"]), .row > select, .range > select, .range > input:not([type="checkbox"]):not([type="radio"]):not([type="time"]):not([type="date"]) { width: auto; flex: 1 1 180px; }
 .range > .check { margin: 0; }
+.google-signin-panel { padding: 24px 0; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.google-signin-button { background: #fff; color: #1f1f1f; border-color: #747775; min-width: 240px; font-weight: 500; }
+.google-signin-panel p { font-size: 13px; color: var(--muted); margin: 12px 0 0; max-width: 600px; }
 .theme-select { max-width: 90px !important; min-width: 76px; font-size: 13px; }
 .container.product-landing { max-width: 1600px; padding-inline: clamp(20px, 4vw, 64px); }
 .product-landing .landing-hero { grid-template-columns: .9fr 1.1fr; gap: clamp(28px, 5vw, 80px); padding-block: 52px; }

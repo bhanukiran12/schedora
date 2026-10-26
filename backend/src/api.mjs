@@ -14,6 +14,7 @@ import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } fro
 import { handleMcp } from './platform/mcp.mjs';
 import { chat, createRecap, createTranscript, deleteTranscript, getTranscript, handleInboundEmail, listTranscripts, meetingPrep, publicRecap, shareRecap, unshareRecap } from './ai/service.mjs';
 import { timingSafeEqual } from 'node:crypto';
+import { clearGoogleLoginCookie, finishGoogleLogin, googleLoginEnabled, googleLoginRedirect, startGoogleLogin } from './platform/google-signin.mjs';
 import { audit, authenticateKey, createEndpoint, createKey, deleteEndpoint, listAudit, listEndpoints, listKeys, redeliver, revokeKey, updateEndpoint } from './platform/developer.mjs';
 
 export function createApi(app) {
@@ -42,6 +43,42 @@ export function createApi(app) {
   get('/api/config', () => publicConfig(app.config), { public: true });
 
   // ---- Auth ----
+  get('/api/auth/google/status', ctx => ({ enabled: googleLoginEnabled(app), connected: Boolean(ctx.user && app.db.get("SELECT 1 FROM auth_identities WHERE provider = 'google' AND user_id = ?", ctx.user.id)), redirect_uri: googleLoginRedirect(app) }), { public: true });
+  get('/api/auth/google/start', ctx => {
+    limit(ctx, 'google-login', 20);
+    if (ctx.user) return { redirect: '/account' };
+    const { url, cookie } = startGoogleLogin(app, { next: ctx.query.get('next') });
+    ctx.setCookie(cookie);
+    return { redirect: url };
+  }, { public: true });
+  post('/api/auth/google/link', ctx => {
+    limit(ctx, 'google-login', 10);
+    const { url, cookie } = startGoogleLogin(app, { userId: ctx.user.id, next: '/account' });
+    ctx.setCookie(cookie);
+    return { url };
+  });
+  post('/api/auth/google/delete-account', async ctx => {
+    limit(ctx, 'google-delete', 5);
+    const body = await ctx.json();
+    if (body.confirm !== 'DELETE') fail(400, 'validation_failed', 'Type DELETE to confirm account deletion.');
+    if (!app.db.get("SELECT 1 FROM auth_identities WHERE provider = 'google' AND user_id = ?", ctx.user.id)) fail(403, 'account_changed', 'Google sign-in is not connected to this account.');
+    const { url, cookie } = startGoogleLogin(app, { userId: ctx.user.id, action: 'delete' });
+    ctx.setCookie(cookie);
+    return { url };
+  });
+  get('/api/auth/google/callback', async ctx => {
+    limit(ctx, 'google-callback', 30);
+    ctx.setCookie(clearGoogleLoginCookie(app));
+    try {
+      const result = await finishGoogleLogin(app, ctx.request, ctx.query, ctx.session);
+      ctx.setCookie(result.cookie);
+      return { redirect: result.next };
+    } catch (error) {
+      const message = ['invalid_state', 'google_denied', 'google_failed', 'account_changed', 'email_mismatch', 'identity_taken', 'account_exists', 'sso_required'].includes(error.code) ? error.message : 'Google sign-in is temporarily unavailable. Please try again.';
+      return { redirect: '/account?error=' + encodeURIComponent(message) };
+    }
+  }, { public: true });
+
   post('/api/auth/signup', async ctx => {
     limit(ctx, 'signup', 10, 3600000);
     const userId = await signUp(app, await ctx.json());

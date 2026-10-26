@@ -45,6 +45,11 @@ async function initialize(schema) {
       UNIQUE (workspace_id, request_key))`);
     await client.query('CREATE INDEX IF NOT EXISTS billing_checkouts_workspace ON billing_checkouts(workspace_id)');
     await client.query("INSERT INTO schema_migrations (name, applied_at) VALUES ('postgres_v2_billing_checkouts', $1) ON CONFLICT DO NOTHING", [Date.now()]);
+    await client.query(`CREATE TABLE IF NOT EXISTS auth_identities (
+      provider TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY (provider, subject), UNIQUE (provider, user_id))`);
+    await client.query('CREATE TABLE IF NOT EXISTS auth_login_flows (state_hash TEXT PRIMARY KEY, expires_at BIGINT NOT NULL)');
+    await client.query("INSERT INTO schema_migrations (name, applied_at) VALUES ('postgres_v3_google_signin', $1) ON CONFLICT DO NOTHING", [Date.now()]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   await client.query('SET search_path TO "' + schemaName + '"');

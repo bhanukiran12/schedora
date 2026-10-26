@@ -25,7 +25,7 @@ test('pages, assets, headers and legacy routes', async () => {
     assert.match(home.headers.get('content-security-policy'), /frame-ancestors 'none'/);
     assert.equal(home.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(home.headers.get('content-encoding'), 'gzip');
-    assert.match(await home.text(), /<script type="module" src="\/app.js">/);
+    assert.match(await home.text(), /<script type="module" src="\/app\.js(?:\?[^"<>]*)?">/);
     const unknown = await fetch(env.base + '/missing-page');
     assert.equal(unknown.status, 404);
     assert.equal(unknown.headers.get('x-robots-tag'), 'noindex');

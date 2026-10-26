@@ -1,4 +1,4 @@
-import { $, $$, api, applyMe, ask, badge, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
+import { $, $$, api, applyMe, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
 
@@ -11,9 +11,11 @@ export async function account(ctx) {
   const ws = workspace();
   const owner = ws?.role === 'owner';
   const admin = ['owner', 'admin'].includes(ws?.role);
+  const google = await api('GET', '/api/auth/google/status').catch(() => ({ enabled: false }));
+  if (!ctx.alive()) return;
   mount(ctx.main, html`<div class="container page"><span class="tag">Schedora account</span><h1>Account</h1>
     <div class="grid-2">
-      <section class="card card-plain"><h2>Profile</h2><p><strong>${session.user.name}</strong><br>${session.user.email}</p><button class="btn" id="sign-out">Sign out</button></section>
+      <section class="card card-plain"><h2>Profile</h2><p><strong>${session.user.name}</strong><br>${session.user.email}</p><button class="btn" id="sign-out">Sign out</button>${google.enabled ? html`<hr><h3>Google sign-in</h3>${google.connected ? html`<p>Google is connected. You can use it to sign in.</p>` : html`<p>Connect Google with the same email to sign in next time. Calendar access is separate.</p><button class="btn" id="link-google">Connect Google sign-in</button>`}` : ''}${ctx.query.get('error') ? notice('bad', html`<p>${ctx.query.get('error')}</p>`) : ''}</section>
       <section class="card card-plain"><h2>Workspace</h2>
         ${session.workspaces.length ? html`<label for="ws-select">Current workspace</label><select id="ws-select">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name} (${item.role})</option>`)}</select>` : html`<p>You are not in a workspace yet.</p>`}
         <form id="new-ws" novalidate><label for="new-ws-name">Create another workspace</label><div class="row"><input id="new-ws-name" name="name" required maxlength="100" placeholder="Team name"><button class="btn" type="submit">Create</button></div><div data-form-status tabindex="-1"></div></form>
@@ -40,6 +42,10 @@ export async function account(ctx) {
     </section></div>`);
 
   $('#sign-out').onclick = async () => { await api('POST', '/api/auth/logout'); applyMe({ user: null, workspaces: [] }); ctx.navigate('/', { replace: true }); };
+  if ($('#link-google')) $('#link-google').onclick = async () => {
+    try { const result = await api('POST', '/api/auth/google/link', {}); location.assign(result.url); }
+    catch (error) { toast(error.message); }
+  };
   $('#ws-select')?.addEventListener('change', event => { selectWorkspace(event.target.value); ctx.render(); });
   handleSubmit($('#new-ws'), async data => {
     const result = await api('POST', '/api/workspaces', data);
@@ -82,6 +88,13 @@ export async function account(ctx) {
     try { await api('DELETE', wsPath('/members/' + session.user.id)); await loadMe(); ctx.render(); } catch (error) { toast(error.message); }
   });
   $('#delete-account').onclick = async () => {
+    if (google.connected) {
+      const result = await ask({ title: 'Delete your account?', body: 'This permanently deletes your account and every workspace where you are the only owner. You will confirm with the Google account linked to Schedora.', fields: html`<label>Type DELETE to confirm<input name="confirm" required autocomplete="off" pattern="DELETE"></label>`, confirm: 'Continue to Google', danger: true });
+      if (!result) return;
+      try { const response = await api('POST', '/api/auth/google/delete-account', { confirm: result.confirm }); location.assign(response.url); }
+      catch (error) { toast(error.message); }
+      return;
+    }
     const result = await ask({ title: 'Delete your account?', body: 'This cannot be undone.', fields: html`<label for="confirm-password">Enter your password to confirm</label><input id="confirm-password" name="password" type="password" required autocomplete="current-password">`, confirm: 'Delete my account', danger: true });
     if (!result) return;
     try { await api('DELETE', '/api/me', { password: result.password }); applyMe({ user: null, workspaces: [] }); ctx.navigate('/', { replace: true }); toast('Your account was deleted.'); }
@@ -106,6 +119,7 @@ function signedOut(ctx) {
   const error = ctx.query.get('error');
   mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>${signup ? 'Create your Schedora account' : 'Sign in to Schedora'}</h1>
     ${error ? notice('bad', html`<p>${error}</p>`) : ''}
+    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(next)}" data-external>Continue with Google</a><p>One Google account for Meet, Forms and Flow. Calendar access is requested separately.</p>${signup ? html`<p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>` : ''}</section>` : ''}
     <div class="grid-2">${signup ? html`${signUpCard}${signInCard}` : html`${signInCard}${signUpCard}`}</div>
     <section class="card card-plain section-gap"><h2>Single sign-on</h2><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
       <p class="hint">For organizations that have set up single sign-on.</p></section></div>`);
