@@ -70,3 +70,13 @@ Status: **proposal, not implemented.** Slices 3 and 7 of the [implementation log
 - **Monitoring:** reconciliation drift and failed projection updates.
 - **Privacy:** activity rows must contain no answer text, contact details or message bodies, consistent with the analytics rules in the [UX research plan](UX_RESEARCH_PLAN.md).
 - **Research gate:** confirm that operators find the queue faster or more accurate than their current tools in moderated sessions before building notifications or reports on top of it.
+
+## Focused competitor check: ownership and next actions
+Checked official pages on 27 October 2026; documentation evidence only, no hands-on competitor account test or customer study.
+
+- [Jotform Inbox approval tracking](https://www.jotform.com/help/how-to-track-approval-process-in-jotform-inbox/) documents workflow-state filtering and saved filtered tabs, plus taking over/reassigning, canceling and restarting in-progress approvals. Article date: 22 October 2024; retrieved current page. This is evidence of the documented interaction model, not proof of customer success, current plan inclusion or latency.
+- [Fillout approvals](https://www.fillout.com/blog/automate-job-applications/approvals) describes choosing approvers, task delegation, testing before publication and actions from Results. The retrieved page carries a Draft metadata marker and a 15 November 2024 update, so treat it as an older official description requiring a current help/account check before claiming present availability or plan coverage.
+
+Decision implication (inference): a needs-attention list by itself is weak differentiation. Test whether a service operator can identify the correct next action and responsible person across a response, booking and follow-up, then recover when that person is unavailable. Schedora currently has a read-only cross-product trail but no assignment or explicit resolve control. Do not claim equivalent approval/reassignment behavior. Use the existing Enquiries permissions and source records as constraints before adding ownership; competitor feature existence does not prove Schedora customers need a full approvals engine.
+
+Next comparison task: ask an operator to handle a consultation enquiry with a confirmed booking and a failed follow-up, then an unbooked enquiry with an expired offer. Measure correct next action, correct owner, mistaken completion and recovery steps. Compare appropriately configured alternatives rather than marketing screenshots. No participants contacted and no demand/conversion result inferred.
