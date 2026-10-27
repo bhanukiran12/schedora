@@ -3,9 +3,9 @@
 // and server feature flags), so every status traces to saved data or a server check, never to
 // unsaved form values. Anything the viewer's API access cannot confirm is "Not verified".
 
-export const STATUS_LABELS = { ready: 'Ready', attention: 'Needs attention', unverified: 'Not verified', not_required: 'Not required' };
-// Why an item matters: a required blocker stops invitees booking; a recommendation is optional.
-export const KIND_LABELS = { blocker: 'Required', recommendation: 'Optional', unknown: 'Unknown' };
+import { summarize } from './readiness.mjs';
+
+export { KIND_LABELS, STATUS_LABELS } from './readiness.mjs';
 
 const KINDS = { one_on_one: 'One-on-one', group: 'Group', collective: 'Collective', round_robin: 'Round robin' };
 const LOCATIONS = {
@@ -167,7 +167,9 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
     const first = Date.parse(slots.value.slots[0]);
     availability.push({ status: 'ready', text: `Checked ${checked}: ${plural(slots.value.slots.length, 'open start time')}, the first on ${f.dateTime(first, type.timezone)}. An open time can still be taken before someone books it.` });
   } else {
-    availability.push({ status: 'attention', kind: 'blocker', text: `Checked ${checked}: no open times. Invitees would have nothing to choose. Hours, notice, limits, existing meetings or calendar busy times may be filling the window.`, action: fix('Review hours', 'availability') });
+    // The link still works and times reappear as they free up, so this explains the current state
+    // rather than blocking sharing. Structural causes (no hours, ended window) are Required above.
+    availability.push({ status: 'attention', kind: 'recommendation', text: `Checked ${checked}: no open times right now. Invitees would see no times to choose until one frees up. Existing meetings, calendar busy times, notice or limits may be filling the window.`, action: fix('Review hours', 'availability') });
   }
 
   // ---- Calendar and conflict checking ----
@@ -214,28 +216,12 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
       : { status: 'unverified', kind: 'unknown', text: 'Confirmation email delivery is not checked here.', action: viewer.admin ? { label: 'Send a test email', href: '/meet?tab=emails' } : undefined });
   }
 
-  const areas = [
+  const result = summarize([
     { key: 'details', title: 'Event details', items: details },
     { key: 'availability', title: 'Availability', items: availability },
     { key: 'calendar', title: 'Calendar and conflicts', items: calendars },
     { key: 'sharing', title: 'Sharing', items: sharing }
-  ].map(area => ({ ...area, status: areaStatus(area.items) }));
-  const all = areas.flatMap(area => area.items);
-  const counts = { blocker: all.filter(item => item.kind === 'blocker').length, recommendation: all.filter(item => item.kind === 'recommendation').length, unknown: all.filter(item => item.kind === 'unknown').length };
-  return { areas, counts, headline: headline(counts, type), shareable: !type.managed_template && counts.blocker === 0 };
-}
-
-function areaStatus(items) {
-  const states = items.map(item => item.status).filter(Boolean);
-  if (states.includes('attention')) return 'attention';
-  if (states.includes('unverified')) return 'unverified';
-  if (states.length && states.every(state => state === 'not_required')) return 'not_required';
-  return 'ready';
-}
-
-function headline(counts, type) {
-  if (type.managed_template) return 'This is a managed template, so it is not shared directly.';
-  const rest = [counts.recommendation && plural(counts.recommendation, 'optional recommendation'), counts.unknown && `${plural(counts.unknown, 'item')} not verified`].filter(Boolean).join(' and ');
-  if (counts.blocker) return `${plural(counts.blocker, 'required item')} ${counts.blocker === 1 ? 'needs' : 'need'} attention before invitees can book.${rest ? ` Also ${rest}.` : ''}`;
-  return `Nothing in the saved settings stops invitees from booking.${rest ? ` ${rest[0].toUpperCase() + rest.slice(1)}.` : ''}`;
+  ], 'before invitees can book');
+  if (type.managed_template) result.headline = 'This is a managed template, so it is not shared directly.';
+  return { ...result, shareable: !type.managed_template && result.counts.blocker === 0 };
 }

@@ -187,18 +187,29 @@ try {
     const typeId = app.db.get("SELECT id FROM event_types WHERE slug = 'intro-call'").id;
     const hostApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.status === 204 ? null : r.json(); })()`);
     const sideEffects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM meetings) AS meetings, (SELECT published FROM event_types WHERE id = ?) AS published', typeId));
-    const areaText = key => evaluate(`document.querySelector('#ready-${key}').closest('section').innerText`);
+    const areaText = key => evaluate(`document.querySelector('#ready-${key}').closest('details').textContent.replace(/\\s+/g, ' ')`);
     const ready = "document.querySelector('#readiness .readiness-areas')";
 
     await open('/meet/event-types/' + typeId, ready);
-    const titles = await evaluate("[...document.querySelectorAll('.readiness-area h3')].map(h => h.textContent.replace(/\\s+/g, ' ').trim())");
+    const titles = await evaluate("[...document.querySelectorAll('.readiness-area > summary')].map(h => h.textContent.replace(/\\s+/g, ' ').trim())");
     if (titles.length !== 4 || !['Event details', 'Availability', 'Calendar and conflicts', 'Sharing'].every((title, index) => titles[index].includes(title))) throw new Error('unexpected areas: ' + titles.join('|'));
     const summary = await evaluate("document.querySelector('#readiness').innerText");
     if (/\d\s*%/.test(summary)) throw new Error('readiness shows a percentage');
     if (!(await areaText('availability')).includes('open start time')) throw new Error('slot check missing');
-    if (!(await areaText('calendar')).includes('Needs attention · Optional') || await evaluate("document.querySelector('#ready-calendar').closest('section').dataset.blocking") !== 'false') throw new Error('an optional calendar is not shown as optional');
+    if (!(await areaText('calendar')).includes('Needs attention · Optional') || await evaluate("document.querySelector('#ready-calendar').closest('details').dataset.blocking") !== 'false') throw new Error('an optional calendar is not shown as optional');
     if (!(await areaText('details')).includes('Needs attention · Optional: No location is set')) throw new Error('missing location not flagged');
     await layoutCheck('meet readiness (published)');
+    // Real Tab key presses: every stop in the card shows the focus indicator.
+    await evaluate("document.querySelector('#main a[href=\"/meet\"]').focus()");
+    const stops = [];
+    for (let index = 0; index < 30; index++) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      const stop = await evaluate("(() => { const el = document.activeElement; const style = getComputedStyle(el); const rect = el.getBoundingClientRect(); return { inCard: Boolean(el.closest('#readiness')), shown: el.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2 && rect.bottom > 0 && rect.top < innerHeight, name: el.textContent.trim().slice(0, 30) || el.id }; })()");
+      if (!stop.inCard) { if (stops.length) break; continue; }
+      stops.push(stop);
+    }
+    if (stops.length < 3 || stops.some(stop => !stop.shown)) throw new Error('keyboard focus not visible in the readiness card: ' + JSON.stringify(stops));
 
     // Unsaved edits are named, and the summary keeps describing the saved title.
     await fill('#title', 'Intro call (edited, not saved)');
@@ -412,6 +423,72 @@ try {
     if (await evaluate("Boolean(document.querySelector('.day[data-available], #invitee-form'))")) throw new Error('invalid handoff still offers booking');
     await layoutCheck('invalid handoff');
   });
+  await step('Forms readiness: draft vs live, logic checks, booking offer wording, preview and share change nothing', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.status === 204 ? null : r.json(); })()`);
+    const areaText = key => evaluate(`document.querySelector('#ready-${key}').closest('details').textContent.replace(/\\s+/g, ' ')`);
+    const ready = "document.querySelector('#readiness .readiness-areas')";
+    const state = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM form_versions) AS versions, (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM form_handoffs) AS handoffs'));
+    const before = state();
+
+    // The routed, published form from the earlier steps.
+    await open(`/forms/${formId}`, ready);
+    const titles = await evaluate("[...document.querySelectorAll('.readiness-area > summary')].map(s => s.textContent.replace(/\\s+/g, ' ').trim())");
+    if (titles.length !== 5 || !['Draft and live', 'Questions and logic', 'Respondent preview', 'After submission', 'Sharing'].every((title, index) => titles[index].includes(title))) throw new Error('unexpected areas: ' + titles.join('|'));
+    if (/\d\s*%/.test(await evaluate("document.querySelector('#readiness').innerText"))) throw new Error('readiness shows a percentage');
+    const after = await areaText('after');
+    if (!after.includes("only Meet's confirmation means an appointment exists") || !after.includes('The receipt means the response was received, nothing more')) throw new Error('booking offer wording: ' + after);
+    if (!(await evaluate("Boolean(document.querySelector('#ready-after').closest('details').querySelector('a[href^=\"/meet/event-types/\"]'))"))) throw new Error('no link to the booking page readiness');
+    if (!(await evaluate("Boolean(document.querySelector('#readiness #share-link') && document.querySelector('#readiness #embed'))"))) throw new Error('share link and embed not in the Sharing area');
+    await layoutCheck('forms readiness (live)');
+    // Real Tab key presses reach every control in the card with a visible focus indicator.
+    await evaluate("document.querySelector('#delete-form').focus()");
+    const stops = [];
+    for (let index = 0; index < 40; index++) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      const stop = await evaluate("(() => { const el = document.activeElement; const style = getComputedStyle(el); const rect = el.getBoundingClientRect(); return { inCard: Boolean(el.closest('#readiness')), shown: el.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2 && rect.bottom > 0 && rect.top < innerHeight }; })()");
+      if (!stop.inCard) { if (stops.length) break; continue; }
+      stops.push(stop);
+    }
+    if (stops.length < 5 || stops.some(stop => !stop.shown)) throw new Error('keyboard focus not visible in the forms readiness card');
+
+    // Unsaved edits are named and not assessed.
+    await fill('#f-title', 'Edited but not saved');
+    await waitFor("document.querySelector('#readiness-unsaved .notice')", 'unsaved notice');
+    if ((await areaText('versions')).includes('Edited but not saved')) throw new Error('summary assessed unsaved edits');
+    // Preview actions switch the preview presentation only.
+    await evaluate("document.querySelector('#readiness [data-goto=\"preview-conversational\"]').click()");
+    if (!(await evaluate("document.querySelector('#preview-mode').value === 'conversational' && document.activeElement === document.querySelector('#preview-heading')"))) throw new Error('preview action did not switch presentation and focus the preview');
+    await evaluate("delete document.body.dataset.dirty");
+
+    // A form with an unreachable required question and an unknown insertion, never published.
+    const tricky = await formApi('POST', '/forms', { definition: { title: 'Workshop enquiry', description: '', presentation: 'classic', submit_label: 'Send', fields: [
+      { id: 'kind', type: 'single_choice', label: 'What do you need?', required: true, options: [{ id: 'team', label: 'Team' }, { id: 'solo', label: 'Solo' }] },
+      { id: 'p2', type: 'page_break', show_if: { field: 'kind', op: 'equals', value: 'team' } },
+      { id: 'size', type: 'short_text', label: 'Team size', required: true, show_if: { field: 'kind', op: 'equals', value: 'solo' } },
+      { id: 'notes', type: 'long_text', label: 'Anything else about {{budget}}?' }] } });
+    await open(`/forms/${tricky.id}`, ready);
+    const logicText = await areaText('questions');
+    if (!logicText.includes('“Team size” can never be shown with these display rules, so it is never asked even though it is required')) throw new Error('unreachable required question not reported: ' + logicText);
+    if (!logicText.includes('inserts {{budget}}, which is not a question in this form')) throw new Error('unknown insertion not reported');
+    if (!(await areaText('versions')).includes('Needs attention · Required: Not published')) throw new Error('draft not shown as a required blocker');
+    if (await evaluate("Boolean(document.querySelector('#readiness #share-link'))") || !(await evaluate("Boolean(document.querySelector('#readiness #share-future'))"))) throw new Error('an unpublished form offers a share link');
+    await evaluate("document.querySelector('#readiness [data-goto=\"publish\"]').click()");
+    if (!(await focused('#publish'))) throw new Error('Go to Publish did not focus the Publish button');
+    if (app.db.get('SELECT published_version FROM forms WHERE id = ?', tricky.id).published_version !== null) throw new Error('readiness published the form');
+    await layoutCheck('forms readiness (draft)');
+    // A fresh phone render, not a desktop card merely resized after initialization.
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 900, deviceScaleFactor: 1, mobile: true });
+    await open(`/forms/${tricky.id}`, ready);
+    if (!(await evaluate("[...document.querySelectorAll('#readiness .readiness-area')].every(area => area.open === (area.dataset.state === 'attention'))"))) throw new Error('phone readiness does not open only areas needing attention');
+    if (shotsDir) {
+      const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      writeFileSync(join(shotsDir, 'forms-readiness-fresh-phone.png'), Buffer.from(data, 'base64'));
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await formApi('DELETE', `/forms/${tricky.id}`);
+    if (state() !== JSON.stringify({ ...JSON.parse(before) })) throw new Error('readiness changed responses, versions, bookings or handoffs');
+  });
   await step('Flow starters: real draft contracts, no silent enable, replace confirmation and outcome preview', async () => {
     // Empty Flows list offers the starters; opening one creates nothing.
     await open('/flow', "document.querySelector('.flow-starter-links')");
@@ -491,6 +568,28 @@ try {
     await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); await fetch('/api/workspaces/' + me.workspaces[0].id + '/tasks/${task.id}', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify({ status: 'done' }) }); })()`);
     await open(`/forms/${formId}/responses`, "document.querySelector('[data-filter=attention]:not([aria-disabled])')");
     if (!/Needs attention \(0\)/.test(await evaluate("document.querySelector('[data-filter=attention]').textContent"))) throw new Error('completed task still needs attention');
+  });
+  await step('Enquiries: one list across Forms, Meet and Flow, attention first, read-only', async () => {
+    const records = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM flow_runs) AS runs, (SELECT COUNT(*) FROM tasks) AS tasks'));
+    const before = records();
+    await open('/forms', "document.querySelector('#main a[href=\"/enquiries\"]')");
+    await click('#main a[href="/enquiries"]');
+    await waitFor("location.pathname === '/enquiries' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'enquiries list');
+    const summary = await evaluate("({ origins: [...document.querySelectorAll('.enquiry .meta span:first-child')].map(s => s.textContent.split(':')[0]), states: [...document.querySelectorAll('.enquiry')].map(e => e.dataset.state), hint: document.querySelector('#enquiries-body .hint').textContent })");
+    if (!summary.origins.includes('Form') || !summary.origins.includes('Booked directly')) throw new Error('responses and direct bookings are not both listed: ' + summary.origins.join(','));
+    if (!summary.hint.startsWith('Built from responses from')) throw new Error('coverage note missing: ' + summary.hint);
+    const firstCalm = summary.states.findIndex(state => state !== 'attention');
+    if (firstCalm >= 0 && summary.states.slice(firstCalm).includes('attention')) throw new Error('needs attention is not listed first: ' + summary.states.join(','));
+    if (summary.states.includes('attention') && !(await evaluate("document.querySelector('#enquiries-body .notice-warn')?.textContent.includes('need')"))) throw new Error('attention summary missing');
+    if (await evaluate("(() => { const ids = [...document.querySelectorAll('[id]')].map(e => e.id); return ids.length !== new Set(ids).size; })()")) throw new Error('duplicate ids on the enquiries page');
+    await evaluate("document.querySelector('.enquiry-detail').open = true");
+    if (!(await evaluate("document.querySelector('.enquiry-detail .trail-steps li') !== null"))) throw new Error('trail not shown in details');
+    await layoutCheck('enquiries');
+    await open('/enquiries?show=attention', "document.querySelector('.enquiry-list, #enquiries-body .empty')");
+    if (await evaluate("[...document.querySelectorAll('.enquiry')].some(e => e.dataset.state !== 'attention')")) throw new Error('attention filter shows other states');
+    await open('/enquiries?from=booking', "document.querySelector('.enquiry-list, #enquiries-body .empty')");
+    if (await evaluate("[...document.querySelectorAll('.enquiry .meta span:first-child')].some(s => !s.textContent.startsWith('Booked directly'))")) throw new Error('direct-booking filter shows responses');
+    if (records() !== before) throw new Error('the enquiries page changed records');
   });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");

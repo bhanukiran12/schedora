@@ -31,7 +31,7 @@ test('1. a valid published event with verified configuration has no blockers, bu
   const result = assessReadiness(verified());
   assert.deepEqual(result.areas.map(item => [item.key, item.status]), [['details', 'ready'], ['availability', 'ready'], ['calendar', 'ready'], ['sharing', 'unverified']]);
   assert.deepEqual(result.counts, { blocker: 0, recommendation: 0, unknown: 1 });
-  assert.equal(result.headline, 'Nothing in the saved settings stops invitees from booking. 1 item not verified.');
+  assert.equal(result.headline, 'No required issues in the saved settings. 1 item not verified.');
   assert.match(area(result, 'availability').items.at(-1).text, /^Checked .+: 2 open start times, the first on .+ An open time can still be taken/);
   assert.match(area(result, 'calendar').items[0].text, /Work: connected; busy times last checked successfully/);
   assert.match(area(result, 'calendar').items.at(-1).text, /Calendars you have not connected are not checked/);
@@ -55,7 +55,9 @@ test('3. statuses come from the saved event type passed in, not from form values
 test('4. missing or invalid availability, without calling a future-only schedule broken', () => {
   const none = assessReadiness(verified({ type: savedType({ rules: [] }), slots: ok({ slots: [], accepting: true, today: '2026-10-24' }) }));
   assert.ok(issues(none, 'blocker').includes('No weekly hours are set, so there are no times to book.'));
-  assert.ok(issues(none, 'blocker').some(text => /no open times\. Invitees would have nothing to choose/.test(text)));
+  const full = assessReadiness(verified({ slots: ok({ slots: [], accepting: true, today: '2026-10-24' }) }));
+  assert.equal(issues(full, 'blocker').length, 0, 'hours exist but every time is taken: explained, not blocking');
+  assert.ok(issues(full, 'recommendation').some(text => /no open times right now\. Invitees would see no times to choose until one frees up/.test(text)));
   const ended = assessReadiness(verified({ type: savedType({ end_date: '2026-10-01' }) }));
   assert.ok(issues(ended, 'blocker').some(text => /Bookable until .+, which has passed\./.test(text)));
   const later = assessReadiness(verified({ type: savedType({ start_date: '2027-03-01' }), slots: ok({ slots: [], accepting: true, today: '2026-10-24' }) }));

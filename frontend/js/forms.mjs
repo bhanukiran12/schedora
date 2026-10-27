@@ -2,22 +2,24 @@ import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, html, isAd
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FORM_TEMPLATES, questionCount } from './forms-templates.mjs';
 import { buildTrail, STATE_LABELS } from './enquiry-trail.mjs';
+import { assessFormReadiness } from './forms-readiness.mjs';
+import { readinessAreas } from './readiness-view.mjs';
 
 // Linked records for the enquiry trail. Each source loads independently, so a role that cannot see
 // one of them still gets the rest, with that part marked unavailable rather than guessed.
-async function loadTrailContext() {
+export async function loadTrailContext() {
   const [runs, tasks, ...scopes] = await Promise.allSettled([api('GET', wsPath('/runs')), api('GET', wsPath('/tasks')),
     ...['upcoming', 'past', 'canceled'].map(scope => api('GET', wsPath('/bookings?scope=' + scope)))]);
   const bookingsByReference = new Map();
   for (const scope of scopes) if (scope.status === 'fulfilled') for (const booking of scope.value) bookingsByReference.set(booking.reference, booking);
   return {
     runs: runs.value || [], runsAvailable: runs.status === 'fulfilled', tasks: tasks.value || [], tasksAvailable: tasks.status === 'fulfilled',
-    bookingsByReference, bookingsAvailable: scopes.every(scope => scope.status === 'fulfilled'), provider: boot.providers?.email,
+    bookingsByReference, bookingsAvailable: scopes.every(scope => scope.status === 'fulfilled'), provider: boot.providers?.email, now: Date.now(),
     capped: (runs.value?.length || 0) >= 200 || (tasks.value?.length || 0) >= 200
   };
 }
 
-const trailList = trail => html`<section class="trail" aria-labelledby="trail-heading"><h3 id="trail-heading">What happened next</h3>
+export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
     <strong>${step.title}</strong>${step.reference ? html` <span class="muted">· ${step.key === 'received' ? 'Receipt' : 'Ref'} ${step.reference}</span>` : ''}${step.at ? html` <span class="muted">· ${fmtDateTime(step.at)}</span>` : ''}
     ${step.key === 'run' ? html`<span class="muted"> · from the ${step.source}</span>` : ''}
@@ -25,7 +27,7 @@ const trailList = trail => html`<section class="trail" aria-labelledby="trail-he
     ${step.key === 'run' ? html`<p class="trail-links"><a href="/flow/runs">Run history</a>${step.taskId ? html` · <a href="/flow/tasks">Tasks</a>` : ''}</p>`
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
-import { CONDITION_OPS, FIELD_TYPES, answerText, checkAnswer, pipe, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CONDITION_OPS, FIELD_TYPES, answerText, checkAnswer, definitionProblems, pipe, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 
 const publicUrl = (form, mode) => `${location.origin}/f/${form.slug}${mode ? '?mode=' + mode : ''}`;
 const SUBMIT_TIMEOUT_MS = 20000;
@@ -283,7 +285,7 @@ export async function dashboard(ctx) {
   if (!needsSession(ctx)) return;
   const presentation = definition => definition.presentation === 'conversational' ? 'one question at a time' : 'classic layout';
   mount(ctx.main, html`<div class="container page"><div class="row-between"><div><span class="tag">Forms · ${workspace().name}</span><h1>Forms</h1></div>
-    <button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div>
+    <div class="row"><a class="btn" href="/enquiries">Enquiries</a><button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
     <section class="form-templates" id="form-templates" aria-labelledby="templates-heading" hidden>
       <h2 id="templates-heading" tabindex="-1">Choose a starting point</h2>
@@ -357,6 +359,7 @@ export async function builder(ctx) {
   let draft = structuredClone(form.draft);
   setTitle(`${draft.title} · Forms by Schedora`);
   let saveState = 'saved';
+  let readiness = null;
   let view = 'edit';
 
   mount(ctx.main, html`<div class="container page">
@@ -367,13 +370,16 @@ export async function builder(ctx) {
     <p class="hint" id="save-hint">Changes are kept on this page until you select Save draft. The live form changes only when you publish.</p>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
-    <div id="share"></div>
+    <section class="card card-plain readiness" id="readiness" aria-labelledby="readiness-heading">
+      <div class="row-between"><h2 id="readiness-heading" tabindex="-1">Ready to share?</h2><button class="btn btn-small" type="button" data-recheck>Check again</button></div>
+      <p class="hint" id="readiness-checked">What respondents see now and what your saved draft would publish. Unsaved edits are not included.</p>
+      <div id="readiness-unsaved"></div><div id="readiness-body"></div><p class="visually-hidden" id="readiness-status" role="status"></p></section>
     <div id="routing"></div>
     <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit">Edit</button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1">Preview</button></div>
     <div class="builder" data-view="edit">
       <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="settings"></div><div id="fields"></div>
         <div class="card card-plain"><label for="new-type">Add an item</label><div class="row"><select id="new-type">${Object.entries(FIELD_TYPES).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select><button class="btn" id="add-field">Add</button></div></div></section>
-      <section class="builder-preview card" id="builder-preview" aria-label="Live preview"><div class="row-between"><h2>Preview</h2><select id="preview-mode" aria-label="Preview presentation"><option value="classic">Classic</option><option value="conversational">Conversational</option></select></div><div id="preview"></div></section>
+      <section class="builder-preview card" id="builder-preview" aria-label="Live preview"><div class="row-between"><h2 id="preview-heading" tabindex="-1">Preview</h2><select id="preview-mode" aria-label="Preview presentation"><option value="classic">Classic</option><option value="conversational">Conversational</option></select></div><div id="preview"></div></section>
     </div></div>`);
 
   const announce = text => { $('#builder-live').textContent = ''; setTimeout(() => { $('#builder-live').textContent = text; }, 30); };
@@ -381,17 +387,20 @@ export async function builder(ctx) {
     saveState = value;
     if (value === 'saved') delete document.body.dataset.dirty; else document.body.dataset.dirty = '1';
     renderStatus();
+    readiness?.unsaved(value !== 'saved');
   };
   const liveBadge = () => form.published_version ? badge('published', `Live · version ${form.published_version}`) : form.locked_ids?.length ? badge('paused', 'Closed · not collecting') : badge('draft', 'Not published');
   const renderStatus = () => mount($('#builder-status'), html`${liveBadge()}
     <span class="badge badge-${saveState === 'saved' ? 'ok' : saveState === 'saving' || saveState === 'dirty' ? 'warn' : 'bad'}" role="status">${SAVE_TEXT[saveState]}</span>
     ${saveState === 'saved' && form.published_version && form.has_unpublished_changes ? badge('pending', 'Saved draft not yet published') : ''}`);
-  const renderShare = () => mount($('#share'), form.published_version ? html`<details class="card card-plain"><summary><strong>Share and embed</strong></summary>
-    <label for="share-link">Public link</label><div class="row"><input id="share-link" readonly value="${publicUrl(form)}"><button class="btn btn-small" data-copy="${publicUrl(form)}">Copy</button><a class="btn btn-small" href="/f/${form.slug}" target="_blank" rel="noopener">Open</a></div>
-    <label for="share-conv">Conversational link</label><div class="row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" data-copy="${publicUrl(form, 'conversational')}">Copy</button></div>
-    <label for="embed">Embed on your site</label><textarea id="embed" class="embed-code" readonly>&lt;iframe src="${publicUrl(form)}${publicUrl(form).includes('?') ? '&amp;' : '?'}embed=1" title="${draft.title}" width="100%" height="680" style="border:0"&gt;&lt;/iframe&gt;</textarea>
-    <button class="btn btn-small" data-copy-embed>Copy embed code</button>
-    <div class="actions"><button class="btn btn-danger btn-small" id="unpublish">Stop collecting responses</button></div></details>` : '');
+  // Share controls live in the readiness Sharing area; nothing here publishes.
+  const renderShare = () => $('#share') && mount($('#share'), form.published_version ? html`<div class="share-block">
+    <label for="share-link">Public link</label><div class="share-row"><input id="share-link" readonly value="${publicUrl(form)}"><button class="btn btn-small" type="button" data-copy="${publicUrl(form)}">Copy</button><a class="btn btn-small" href="/f/${form.slug}" target="_blank" rel="noopener">Open<span class="visually-hidden"> the live form in a new tab</span></a></div>
+    <label for="share-conv">Conversational link</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy="${publicUrl(form, 'conversational')}">Copy</button></div>
+    <details class="share-embed"><summary>Embed on your site</summary><label for="embed">Embed code</label><textarea id="embed" class="embed-code" readonly>&lt;iframe src="${publicUrl(form)}${publicUrl(form).includes('?') ? '&amp;' : '?'}embed=1" title="${form.draft.title}" width="100%" height="680" style="border:0"&gt;&lt;/iframe&gt;</textarea>
+      <button class="btn btn-small" type="button" data-copy-embed>Copy embed code</button></details>
+    <div class="actions"><button class="btn btn-danger btn-small" type="button" id="unpublish">Stop collecting responses</button></div></div>`
+    : html`<label for="share-future">Link once published</label><input id="share-future" readonly value="${publicUrl(form)}">`);
   const renderPreview = () => renderForm($('#preview'), draft, { mode: $('#preview-mode').value, preview: true });
 
   const renderSettings = () => mount($('#settings'), html`<div class="card card-plain">
@@ -441,7 +450,7 @@ export async function builder(ctx) {
 
   const renderAll = () => {
     $('#builder-title').textContent = draft.title || 'Untitled form';
-    renderStatus(); renderShare(); bindShare(); renderSettings(); renderFields();
+    renderStatus(); readiness?.check(); renderSettings(); renderFields();
     $('#preview-mode').value = draft.presentation;
     renderPreview();
   };
@@ -573,6 +582,7 @@ export async function builder(ctx) {
       setState(JSON.stringify(draft) === sent ? 'saved' : 'dirty');
       $('#builder-notice').innerHTML = '';
       renderFields();
+      readiness.check();
       return true;
     } catch (error) {
       if (error.code === 'draft_conflict') {
@@ -602,7 +612,7 @@ export async function builder(ctx) {
     if (form.published_version && !(await ask({ title: `Publish version ${form.published_version + 1}?`, body: 'New visitors see the updated questions and routing right away. Responses already received stay linked to the version they answered. People who opened the current version can still submit it for 24 hours.', confirm: 'Publish' }))) return;
     try {
       form = await api('POST', wsPath(`/forms/${form.id}/publish`), { base_revision: form.revision });
-      renderStatus(); renderShare(); bindShare(); renderFields();
+      renderStatus(); readiness.check(); renderFields();
       mount($('#builder-notice'), notice('ok', html`<p>Version ${form.published_version} is live. New responses use this version.</p>`));
       $('#builder-notice').focus();
     } catch (error) {
@@ -615,10 +625,26 @@ export async function builder(ctx) {
     $('#share [data-copy-embed]')?.addEventListener('click', () => copy($('#embed').value, 'Embed code'));
     $('#unpublish')?.addEventListener('click', async () => {
       if (!(await ask({ title: 'Stop collecting responses?', body: 'The public link will say the form is closed. Existing responses are kept. You can publish again later.', confirm: 'Stop collecting', danger: true }))) return;
-      try { form = await api('POST', wsPath(`/forms/${form.id}/unpublish`)); renderStatus(); renderShare(); bindShare(); toast('The form is closed to new responses.'); }
+      try { form = await api('POST', wsPath(`/forms/${form.id}/unpublish`)); renderStatus(); readiness.check(); toast('The form is closed to new responses.'); }
       catch (error) { reportError(error); }
     });
   }
+  // "Ready to share?": the saved form and the live public form, assessed with the shared validator.
+  // Re-checked after every save, publish, unpublish and routing save. It never publishes.
+  readiness = formReadiness(ctx, () => form, { renderShare, bindShare, goTo: section => {
+    if (section === 'publish') return $('#publish').focus();
+    if (section === 'routing') { const routing = $('#routing details'); if (routing) { routing.open = true; routing.scrollIntoView({ block: 'start' }); routing.querySelector('summary').focus({ preventScroll: true }); } return; }
+    if (section.startsWith('preview-')) {
+      $('#preview-mode').value = section.slice(8);
+      renderPreview();
+      selectView(tabs.find(tab => tab.dataset.view === 'preview'));
+      $('#builder-preview').scrollIntoView({ block: 'start' });
+      return $('#preview-heading').focus({ preventScroll: true });
+    }
+    selectView(tabs.find(tab => tab.dataset.view === 'edit'));
+    $('#fields').scrollIntoView({ block: 'start' });
+    ($('#fields [data-prop="label"]') || $('#new-type')).focus({ preventScroll: true });
+  } });
   renderAll();
   renderRouting();
   // Arriving from the template picker: say plainly what exists and what does not yet.
@@ -691,6 +717,7 @@ export async function builder(ctx) {
         try {
           form = await api('PUT', wsPath(`/forms/${form.id}/routing`), { routing: target.id === 'clear-routing' ? null : { rules, fallback }, base_revision: form.revision });
           renderStatus();
+          readiness.check();
           toast(target.id === 'clear-routing' ? 'Rules removed from the draft. Publish to apply.' : form.published_version ? 'Routing saved. Publish to apply it to the live form.' : 'Routing saved.');
           rules = (form.routing?.rules || []).map(rule => ({ condition: { ...rule.condition }, action: clone(rule.action) }));
           fallback = clone(form.routing?.fallback);
@@ -706,6 +733,52 @@ export async function builder(ctx) {
     if (!(await ask({ title: 'Delete this form?', body: 'The form and all of its responses are permanently deleted. This does not restore your monthly response allowance.', confirm: 'Delete form and responses', danger: true }))) return;
     try { await api('DELETE', wsPath('/forms/' + form.id)); setState('saved'); toast('Form deleted.'); ctx.navigate('/forms', { replace: true }); }
     catch (error) { reportError(error); }
+  };
+}
+
+function formReadiness(ctx, currentForm, { renderShare, bindShare, goTo }) {
+  const root = $('#readiness');
+  const body = $('#readiness-body', root);
+  let announce = false;
+  const check = async refetch => {
+    body.setAttribute('aria-busy', 'true');
+    if (!body.childElementCount) mount(body, loading('Checking the saved form…'));
+    // "Check again" re-reads the saved form into its own copy; the builder's revision is untouched.
+    const [saved] = await Promise.allSettled([refetch ? api('GET', wsPath('/forms/' + currentForm().id)) : currentForm()]);
+    const [live, eventTypes] = saved.status === 'fulfilled' ? await Promise.allSettled([
+      saved.value.published_version ? api('GET', `/api/public/forms/${encodeURIComponent(saved.value.slug)}`) : null,
+      api('GET', wsPath('/event-types'))
+    ]) : [];
+    if (!ctx.alive() || !root.isConnected) return;
+    body.removeAttribute('aria-busy');
+    if (saved.status === 'rejected') {
+      $('#readiness-status', root).textContent = 'Readiness could not be checked.';
+      return mount(body, html`${notice('bad', html`<p>Readiness could not be checked: ${saved.reason.message} Nothing is marked ready.</p>`)}<button class="btn btn-small" type="button" data-recheck>Check again</button>`);
+    }
+    const form = saved.value;
+    const settle = result => result.status === 'fulfilled' ? (result.value === null ? null : { ok: true, value: result.value }) : { ok: false, error: result.reason };
+    const result = assessFormReadiness({
+      form, live: settle(live), eventTypes: settle(eventTypes), viewer: { admin: isAdmin() }, baseUrl: location.origin,
+      flags: { formsActive: Boolean(workspace().entitlements?.forms?.active), meetActive: Boolean(workspace().entitlements?.meet?.active) },
+      logic: { definitionProblems, visibleFields }
+    });
+    $('#readiness-checked', root).textContent = `Based on the draft saved ${fmtDateTime(form.updated_at)}${form.published_version ? ` and live version ${form.published_version}` : ''}. Unsaved edits are not included.`;
+    mount(body, readinessAreas(result, { extra: area => area.key === 'sharing' ? html`<div id="share"></div>` : '' }));
+    renderShare(); bindShare();
+    if (announce) $('#readiness-status', root).textContent = result.headline;
+  };
+  root.addEventListener('click', event => {
+    const goto = event.target.closest('[data-goto]');
+    if (goto) return goTo(goto.dataset.goto);
+    if (event.target.closest('[data-recheck]')) { announce = true; check(true); }
+  });
+  return {
+    check: () => check(false),
+    unsaved(on) {
+      const slot = $('#readiness-unsaved', root);
+      if (!on) return mount(slot, '');
+      if (!slot.childElementCount) mount(slot, notice('warn', html`<p><strong>You have unsaved changes.</strong> This summary describes the saved draft. Save to check your changes; Preview already shows them.</p>`));
+    }
   };
 }
 
@@ -780,7 +853,7 @@ export async function responses(ctx) {
 
   mount(ctx.main, html`<div class="container page" id="responses-page"><a href="/forms/${form.id}">← Back to form</a>
     <div class="row-between"><h1>Responses</h1><button class="btn btn-primary" id="export">Export CSV</button></div>
-    <p class="muted">${form.draft.title} · ${form.response_count} total · kept for ${workspace().retention_days || 365} days under your workspace retention setting.</p>
+    <p class="muted">${form.draft.title} · ${form.response_count} total · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
     <div id="export-status" tabindex="-1"></div>
     <div id="response-detail"></div>
     <div id="responses"></div></div>`);

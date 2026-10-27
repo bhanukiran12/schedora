@@ -7,7 +7,8 @@ import { inputFor, readAnswer } from './forms.mjs';
 import { checkAnswer, FIELD_TYPES } from '/shared/forms-logic.mjs';
 import * as team from './meet-team.mjs';
 import { videoTab } from './meet-video.mjs';
-import { assessReadiness, KIND_LABELS, STATUS_LABELS } from './meet-readiness.mjs';
+import { assessReadiness } from './meet-readiness.mjs';
+import { readinessAreas } from './readiness-view.mjs';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const KINDS = {
@@ -111,7 +112,7 @@ async function meetingsTab(ctx, panel) {
   const [bookings, types] = await Promise.all([api('GET', wsPath('/bookings?scope=' + scope)), api('GET', wsPath('/event-types'))]);
   if (!ctx.alive()) return;
   mount(panel, html`<div class="row-between"><nav class="row" aria-label="Meeting list">${['upcoming', 'past', 'canceled'].map(key => html`<a class="btn btn-small ${key === scope ? 'btn-primary' : ''}" href="/meet?tab=meetings&scope=${key}">${key[0].toUpperCase() + key.slice(1)}</a>`)}</nav>
-      <button class="btn" id="book-for">Schedule for someone</button></div>
+      <div class="row"><a class="btn" href="/enquiries">Enquiries</a><button class="btn" id="book-for">Schedule for someone</button></div></div>
     <div id="book-for-panel"></div>
     ${bookings.length ? html`<ul class="list section-gap booking-rows">${bookings.map(booking => html`<li>
       <div class="booking-row"><div class="booking-row-main">
@@ -518,7 +519,6 @@ export async function editor(ctx) {
 
 // "Ready to share?": statuses come from saved data and server checks (meet-readiness.mjs), never from
 // unsaved form values. The editor re-renders after every successful save, which re-runs the check.
-const READY_ICONS = { ready: '✓', attention: '!', unverified: '?', not_required: '–' };
 const SECTION_IDS = { details: 'section-details', availability: 'section-availability', limits: 'section-limits', visibility: 'section-visibility', readiness: 'readiness' };
 const fmtDate = date => fmt(date + 'T12:00:00Z', 'UTC', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -535,10 +535,6 @@ function readinessPanel(ctx, savedType) {
   let type = savedType;
   let announce = false;
   const settle = result => result.status === 'fulfilled' ? { ok: true, value: result.value } : { ok: false, error: result.reason };
-  const action = item => item.action.section ? html`<button class="btn-link" type="button" data-goto="${item.action.section}">${item.action.label}</button>`
-    : item.action.href ? html`<a href="${item.action.href}">${item.action.label}</a>`
-    : item.action.retry ? html`<button class="btn-link" type="button" data-recheck>${item.action.label}</button>`
-    : html`<span class="muted">${item.action.note}</span>`;
   const share = () => {
     const url = bookingUrl(type);
     return html`<label for="share-link">Booking link</label>
@@ -548,12 +544,7 @@ function readinessPanel(ctx, savedType) {
       <p class="copy-status" id="copy-status" role="status"></p>`;
   };
   const draw = result => {
-    mount(body, html`<p class="readiness-headline">${result.headline}</p>
-      <div class="readiness-areas">${result.areas.map(area => html`<section class="readiness-area" data-state="${area.status}" data-blocking="${area.items.some(item => item.kind === 'blocker') ? 'true' : 'false'}" aria-labelledby="ready-${area.key}">
-        <h3 id="ready-${area.key}"><span class="readiness-icon" aria-hidden="true">${READY_ICONS[area.status]}</span> ${area.title}<span class="readiness-state">${STATUS_LABELS[area.status]}</span></h3>
-        <ul class="readiness-items">${area.items.map(item => html`<li data-state="${item.status || 'fact'}" data-kind="${item.kind || ''}"><span class="readiness-icon" aria-hidden="true">${item.status ? READY_ICONS[item.status] : 'i'}</span>
-          <div><p>${item.status === 'ready' ? html`<span class="visually-hidden">Ready: </span>` : item.status ? html`<strong>${STATUS_LABELS[item.status]}${item.kind ? ` · ${KIND_LABELS[item.kind]}` : ''}:</strong> ` : ''}${item.text}</p>${item.action ? html`<p class="readiness-action">${action(item)}</p>` : ''}</div></li>`)}</ul>
-        ${area.key === 'sharing' && !type.managed_template ? share() : ''}</section>`)}</div>`);
+    mount(body, readinessAreas(result, { extra: area => area.key === 'sharing' && !type.managed_template ? share() : '' }));
     if (announce) $('#readiness-status', root).textContent = result.headline;
   };
   const check = async refetch => {

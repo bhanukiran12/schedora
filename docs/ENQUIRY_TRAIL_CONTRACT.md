@@ -1,6 +1,6 @@
 # Enquiry trail: backend contract (proposal)
 
-Status: **proposal, not implemented.** Slice 3 of the [implementation log](RESEARCH_IMPLEMENTATION.md) ships a per-form trail built in the browser from existing APIs. This document specifies what a workspace-wide, owned, reliable trail would need. Nothing here is promised to customers until it is built and verified.
+Status: **proposal, not implemented.** Slices 3 and 7 of the [implementation log](RESEARCH_IMPLEMENTATION.md) ship a per-form trail and a workspace-wide `/enquiries` list, both built in the browser from existing APIs within stated limits (20 forms × 50 responses, 200 runs and tasks, 300 bookings per scope). The browser infers `offer_unanswered` from the handoff's age against the 2-hour TTL, and counts every open task as `task_open` because tasks have no due date. This document specifies what a workspace-wide, owned, reliable trail would need. Nothing here is promised to customers until it is built and verified.
 
 ## Why the current frontend trail is not enough
 

@@ -31,8 +31,10 @@ export function normalizeDefinition(input) {
       if (typeof clean.label === 'string') clean.label = clean.label.trim();
       if (typeof clean.help === 'string') clean.help = clean.help.trim() || undefined;
       if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => option && pick(option, ['id', 'label'])) : field.options;
-      if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
+      // Page-break defaults come before show_if so normalizing twice gives identical JSON; the
+      // unpublished-changes check compares stored JSON.
       if (clean.type === 'page_break') { delete clean.required; clean.label = clean.label || ''; }
+      if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
       return clean;
     }) : input.fields
   };

@@ -267,7 +267,7 @@ No sample data and no new endpoint. A workspace-wide queue with owners, reconcil
   | Area | What is checked |
   | --- | --- |
   | **Event details** | Title, duration and kind; each location; payment. Schedora Meet with the server gate off is Required. With the gate on it is only Not verified, because a room's quality is known only when a meeting starts. Google Meet, Zoom and Teams are Ready only when the viewer is the sole host and that integration is `active`. A revoked or failed integration is Required; other hosts' connections are Not verified. Paid events need an active Stripe or Razorpay connection; without one, the summary names the test-checkout consequence. |
-  | **Availability** | Friendly time-zone label; weekly hours (for example "Mon–Fri 09:00–17:00"), specific times and upcoming date exceptions; notice, horizon, buffers and caps. The authoritative check is the server's own slot calculation. It names the exact range checked: from today (or the "bookable from" date) to the horizon (or the "bookable until" date). No open times in that range is Required. A start date beyond the window is Not verified, not "broken". An expired link or a past end date is Required. |
+  | **Availability** | Friendly time-zone label; weekly hours (for example "Mon–Fri 09:00–17:00"), specific times and upcoming date exceptions; notice, horizon, buffers and caps. The authoritative check is the server's own slot calculation. It names the exact range checked: from today (or the "bookable from" date) to the horizon (or the "bookable until" date). With hours set but no open times in that range (fully booked or busy), the item is Optional: it explains the current state, because the link still works and times reappear. A start date beyond the window is Not verified, not "broken". An expired link or a past end date is Required. |
   | **Calendar and conflicts** | Each of the viewer's own connections, by state (see the list below this table). No calendar at all is an Optional limitation, never a blocker. A note says what conflict checking covers. Other hosts' calendars are Not verified, as is every host's calendar when an admin views someone else's event. |
   | **Sharing** | An inactive Meet/Suite plan is Required. A draft is Required, with "Go to Visibility"; nothing is ever published automatically. A published event is Ready, with hidden and single-use notes. Email through the local outbox is Optional ("not delivered"); through a real provider it is Not verified, with "Send a test email" for admins. Sharing actions are listed below this table. |
 
@@ -288,7 +288,7 @@ No sample data and no new endpoint. A workspace-wide queue with owners, reconcil
 
 - **Headline.** It counts required items, optional recommendations and unverified items.
   - There is no percentage and no all-green state.
-  - With no blockers it says "Nothing in the saved settings stops invitees from booking", followed by what is unverified.
+  - With no blockers it says "No required issues in the saved settings", followed by what is unverified.
 - **Interaction:**
   - **Unsaved changes.** Any edit adds "You have unsaved changes. This summary describes the last saved version."
   - **Re-checking.** Saving re-renders the editor, which re-runs the check. **Check again** re-fetches everything, including the event type, and announces the headline in a status region. The first load does not announce.
@@ -374,8 +374,250 @@ Full checks ran on the working tree, which includes the uncommitted Forms reliab
 
 Screenshots reviewed, before and after, at 1440 and 375 px: a published event, a draft with a long title, and the video gate off.
 
+**Follow-up review (carried forward before Forms readiness)**
+- **Keyboard focus, verified independently.** A separate script pressed real Tab and Enter keys through the card for a draft and a published event at 1440 and 375 px. It measured each focused element:
+  - All 8 stops on the draft and all 5 on the published event match `:focus-visible`.
+  - Each shows a 3px solid outline with at least 5.24:1 contrast against the background behind it.
+  - Each is in view, not clipped by an ancestor's overflow, and not covered.
+  - Enter on a fix link lands on the section heading, which is visibly focused.
+
+  The browser journey now repeats the Tab pass with real key events.
+- **Dark theme.** `frontend/app.js` pins `data-theme="light"` (commit `78f1bc5`, fixed light theme). Dark mode is therefore never shown, and the "dark" passes of `layoutCheck` re-test light. The dark `--focus` token is defined but unused. Nothing was changed; this is noted so the layout-check count is not over-read.
+- **"No open times" no longer blocks sharing.** The server cannot tell a misconfigured schedule from a fully booked or busy one. The link still works and shows times as they free up, so this is now **Needs attention · Optional**, with a "Review hours" action. Structural causes stay **Required**: no weekly hours, a past end date, an expired link, or every offered time passed. The no-blocker headline now reads "No required issues in the saved settings" rather than claiming invitees can book.
+
 **Known limitations:**
-- Keyboard access uses native buttons and links, and fix actions move focus. The `:focus-visible` styling is the existing design-system rule and was not separately measured.
-- The card is long on phones, with four stacked areas; the headline comes first.
+- Keyboard access uses native buttons and links, and fix actions move focus. Focus visibility was measured only in the shipped light theme.
+- On phones the card was long, with four stacked areas. Slice 6 makes the areas expandable.
 - In headless Chrome the Copy outcome depends on clipboard permission, so the test accepts either message.
 - None of this is real-provider or human evidence.
+
+## Slice 6: Forms "Ready to share?" summary
+
+**Problem.** A form creator could not see in one place what respondents see now, whether the saved draft would publish, which questions the logic can never reach, or what "after submitting" means. The builder showed status badges, a collapsed "Share and embed" panel and a routing editor separately, and nothing distinguished "response received" from "booking offered" from "appointment confirmed".
+
+**Behaviour now**
+- A **Ready to share?** card sits under the builder's action buttons. Meet and Forms use the same vocabulary (`frontend/js/readiness.mjs`) and renderer (`frontend/js/readiness-view.mjs`).
+  - Statuses: Ready, Needs attention, Not verified, Not required.
+  - Issue tags: Required, Optional, Unknown.
+  - There is no percentage.
+- **Compact on phones.** Each area is a disclosure. Wide screens open all of them. Phones open only areas that need attention; the others collapse to one line ("Sharing · Ready"). The Meet card now uses the same renderer, which addresses slice 5's "long on phones" limitation.
+- **Evidence:**
+  - the saved form (`GET /forms/:id`);
+  - for a published form, the live public payload (`GET /api/public/forms/:slug`), which gives the live definition and the server's availability (`open`, `capacity_reached`, `not_accepting`);
+  - the event types the viewer can see (`GET /event-types`);
+  - the shared `definitionProblems` and `visibleFields` from `/shared/forms-logic.mjs` (the same code the server runs);
+  - the workspace Forms and Meet entitlements.
+- **Five areas:**
+
+  | Area | What is checked |
+  | --- | --- |
+  | **Draft and live** | Not published, or closed: Required, with "Go to Publish", which moves focus to the Publish button and never publishes. Live and matching the saved draft: Ready. Live with unpublished changes: Optional; it names the differences against the live definition (questions added, removed or changed; order; title, description, presentation or submit label), and when only routing differs it says routing cannot be compared here. A used-up allowance or an inactive plan is Required. A failed live check is Not verified. |
+  | **Questions and logic** (the saved draft, which is what Publish makes live) | Shared validator problems are Required. No questions is Required. Unreachable questions are Optional: every controlling answer is tried with the shared visibility evaluator (each option, unanswered, and each value a rule distinguishes). Over 4,096 combinations is Not verified. An unreachable required question is called out as "never asked even though it is required" while respondents can still submit. `{{key}}` insertions that show blank (unknown key) or "…" (this question's own answer, or a later question) are Optional. |
+  | **Respondent preview** | The presentation respondents get, plus actions to preview classic or conversational. These switch the existing preview, move to the Preview tab on phones and focus its heading. Preview includes unsaved edits, runs only in the browser and stores nothing. |
+  | **After submission** | Always: "The receipt means the response was received, nothing more." No routing: Not required (receipt only). Each rule and the fallback are described; booking-page checks are listed below this table. Questions or options a rule refers to that no longer exist are Required. The saved-vs-live routing caveat is stated. |
+  | **Sharing** | Published and accepting: Ready. The public link, conversational link, a collapsed **Embed on your site** and **Stop collecting responses** now live here; the separate "Share and embed" panel was removed. Unpublished: Required; only the future link is shown, read-only, with no copy or embed. "Copying a link does not show that responses are received or that follow-ups work." |
+
+  **Booking pages in routing:**
+  - A **published** booking page is Ready. The text explains that the receipt says "Response received — choose a time", that nothing is booked until the respondent picks a time, and that only Meet's confirmation means an appointment exists. It links to that event type's own **Ready to share?** card.
+  - An **unpublished or expired** booking page is Required.
+  - A **deleted** booking page is Required for admins. Members see "a booking page you cannot see (another host's)" as Not verified, because `GET /event-types` lists only event types they host.
+  - **Booking rules without an active Meet plan** are Required.
+  - **Unloaded event types** are Not verified.
+
+- **Interaction:**
+  - **Unsaved edits** add "This summary describes the saved draft. Save to check your changes; Preview already shows them."
+  - **When it re-checks.** The card re-checks after save, publish, unpublish, routing save and loading a conflicting version. **Check again** re-reads the form into its own copy, so the builder's save revision (and conflict detection) is never changed by a check.
+  - **Fix actions** move focus to the Publish button, the first question, the routing panel (opened) or the preview heading.
+
+**Bug found and fixed (committed code):** `normalizeDefinition` added a page break's empty `label` after `show_if`, and re-normalizing on publish put it before. `has_unpublished_changes` compares stored JSON, so any form with a conditional page break showed "Saved draft not yet published" straight after publishing, both in the existing badge and in the new summary. Page-break defaults are now applied before `show_if`, so normalizing is idempotent; a regression test covers it. Drafts saved before this fix keep the old key order until they are next saved, so for those forms the badge can still appear once.
+
+**Authoritative vs not verified**
+- **Authoritative:**
+  - the saved draft and routing;
+  - the live definition and availability from the public endpoint;
+  - the shared validator and visibility rules;
+  - the workspace entitlements.
+- **Same rules, checked in the browser:** routing destinations are checked with the server's rules against the event types the viewer can see. Publishing re-checks on the server and stays the final word.
+- **Not verified:**
+  - the live version's routing, which is not in any API response;
+  - other hosts' booking pages, for members;
+  - whether a respondent books after being offered a time, which the inbox and enquiry trail show per response;
+  - follow-up delivery.
+
+**Missing backend contracts** (proposals; not built):
+- **`published_routing` in `GET /forms/:id`.** This would let the summary name routing differences exactly.
+- **A dry-run `POST /forms/:id/check`.** It would return the publish validator's problems (definition plus routing, with destination status for every host) without publishing, so members get authoritative destination checks.
+- **A semantic comparison for `has_unpublished_changes`** (parsed and canonical, not string equality). This would make stored-order differences irrelevant for older drafts.
+
+**Carried forward from slice 5**
+- **Keyboard focus** was measured with real key events; the results are in slice 5's follow-up section. The Forms browser step repeats the Tab pass over its own card.
+- **"No open times"** in Meet is now Optional.
+
+**Files:**
+- `frontend/js/readiness.mjs` (new; shared vocabulary)
+- `frontend/js/readiness-view.mjs` (new; shared renderer)
+- `frontend/js/forms-readiness.mjs` (new; rules)
+- `frontend/js/forms.mjs`, which is mixed with the uncommitted Forms work: card, share controls moved, re-check hooks, fix actions
+- `frontend/js/meet-readiness.mjs` and `frontend/js/meet.mjs` (moved onto the shared modules)
+- `frontend/app.css`
+- `backend/src/forms/service.mjs` (normalizer key order)
+- `backend/test/forms-readiness.test.mjs` (new, 9 tests)
+- `backend/test/meet-readiness.test.mjs`
+- `backend/scripts/browser-check.mjs`
+
+**Evidence (local; fake providers)**
+
+`forms-readiness.test.mjs`: 9 of 9 pass. They cover:
+- a live form that matches its draft;
+- draft, closed, and changed-but-unpublished states, with named differences;
+- validator problems as blockers;
+- unreachable required questions, plus the combination cap;
+- insertion problems;
+- booking destinations: published, unpublished, deleted (admin) and invisible (member); an inactive Meet plan; a failed event-type load;
+- live check failed, allowance used up, plan inactive;
+- the normalizer regression.
+
+One end-to-end test runs over the real local API:
+- a conditional page-break form is not "changed" after publishing;
+- a member gets Not verified rather than "deleted" for the owner's booking page;
+- checking creates no response.
+
+The browser journey confirms:
+- five areas and no percentage;
+- the booking-offer wording and the link to Meet readiness;
+- the share link and embed sit in the Sharing area;
+- real Tab presses show a visible focus indicator at every stop in the card;
+- unsaved edits are named and not assessed;
+- the preview action switches the presentation and moves focus;
+- an unpublished form with an unreachable required question and an unknown insertion is reported, offers no share link, and Go to Publish focuses Publish without publishing;
+- response, version, booking and handoff counts are unchanged.
+
+Full checks ran on the working tree, including the uncommitted Forms reliability work:
+- `npm run check`: 126 files.
+- `npm test`: 163 tests; 160 pass, 0 fail, 3 skipped (PostgreSQL).
+- `npm run browser-check`: every journey passes. 488 layout checks, with no runtime errors or overflow.
+
+Screenshots reviewed, before and after at 1440 and 375 px:
+- a template draft;
+- a live form with unreachable logic and a draft booking destination;
+- unsaved edits;
+- a true phone-width load showing collapsed Ready areas.
+
+The "before" captures come from a scratch copy of the working tree with only this slice's builder edits reversed, so they keep the uncommitted Forms work. They also show the false "Saved draft not yet published" badge.
+
+**Known limitations:**
+- The unreachable-question search tries representative answers, not every possible string. For the supported operators this covers every distinct rule outcome, but it is not a formal proof.
+- Phones decide which areas are open when the card renders; rotating a device does not reflow them.
+- Nothing here is real-provider or human evidence. No respondent comprehension of "Response received — choose a time" has been tested.
+
+## Slice 7: Cross-product enquiries (response → booking → follow-up → needs attention)
+
+**Problem.** Slice 3's trail lived inside one form's responses page. Someone using Forms, Meet and Flow together could not see every enquiry in one place: a booking made directly (not from a form) had no trail, and "needs attention" could not be found without opening each form.
+
+**Behaviour now**
+- **The page.** A new `/enquiries` page, signed in and workspace-scoped, lists every loaded form response plus every **direct** booking, each with its trail.
+  - Form bookings are not listed twice.
+  - Bookings superseded by a reschedule are skipped.
+- **Links to it:**
+  - an **Enquiries** button on the Forms dashboard and the Meet Meetings tab;
+  - **Enquiries needing attention** on the Flow dashboard;
+  - "See enquiries across all forms and bookings" on a form's Responses page.
+- **Each row shows:**
+  - who it is from: a name or email answer when the form asks for one, otherwise the receipt reference, or the invitee for direct bookings;
+  - where it started ("Form: …" or "Booked directly: …");
+  - when;
+  - the linked booking reference;
+  - the attention reasons;
+  - a state in text and icon: Needs attention, Waiting, Not verified or Done.
+  - An expandable **What happened** reuses the slice 3 trail (receipt → booking → each follow-up run and its task), with links to the form's responses or Meetings.
+- **Needs attention:**
+  - follow-up failed or retrying;
+  - an open task created by a follow-up;
+  - booking canceled;
+  - booking could not be offered;
+  - **booking offer expired unused** (new). The Forms handoff link lasts 2 hours (`HANDOFF_TTL_MS`) and the handoff keeps the status `offered`, so an offer older than that was never used. The per-form trail now shows this too.
+- **Layout and filters:**
+  - A summary banner counts reasons ("3 enquiries need attention: 2 open tasks, 1 booking offer expired unused").
+  - Filters: All, Needs attention or Waiting; and started from anywhere, a form, or a direct booking. Filters are links, so a filtered view can be bookmarked.
+  - Needs attention comes first, then the most recent: responses by arrival, direct bookings by appointment time.
+- **Coverage is stated on the page.** It reads, for example, "Built from responses from 1 form (latest 50 each), bookings you can see (up to 300 per list), 2 Flow runs, 2 tasks. Older records may not appear." A source that fails to load is named in an error notice, and its parts show as Not verified, never as done.
+- **Read-only.** The page changes no records (tested). It uses existing endpoints only:
+  - `GET /forms`;
+  - `GET /forms/:id/responses?limit=50` for the 20 most recently updated forms;
+  - `GET /runs` and `GET /tasks` (latest 200);
+  - `GET /bookings` for each of the three scopes.
+- **Permissions are unchanged.** Members see responses (all roles can read them) but only bookings they host. A form booking hosted by someone else keeps the note "Follow-ups for this booking are not visible to your role", and other hosts' direct bookings are not listed.
+
+**Authoritative vs not verified**
+- **Authoritative, from Forms, Meet and Flow records:**
+  - response receipt and booking state (including reschedules, through `next_step`);
+  - run status and outcome;
+  - task status.
+- **Inferred:**
+  - "Offer expired" from the handoff's age against the server's 2-hour TTL. The handoff row's own expiry is not returned by the API.
+  - Respondent names from answers, using the shared field heuristics (a short-text "name" question, otherwise an email question).
+- **Not verified:**
+  - anything older than the loaded windows;
+  - other hosts' bookings, for members;
+  - email delivery;
+  - whether an open task is overdue: tasks have no due date, so every open follow-up task counts as needing attention.
+
+**Backend dependencies.** The proposal in [ENQUIRY_TRAIL_CONTRACT.md](ENQUIRY_TRAIL_CONTRACT.md) still applies, and this slice is its frontend baseline. In particular:
+- a server-side enquiry list with pagination, so nothing falls outside a window;
+- ownership and resolve actions;
+- `offer_unanswered` computed on the server from `form_handoffs.expires_at`;
+- a task due date, so `task_open` means overdue rather than merely open;
+- a `created_at` on bookings in `GET /bookings`, so direct bookings can be ordered by arrival.
+
+**Files:**
+- `frontend/js/enquiries.mjs` (new; the page)
+- `frontend/js/enquiry-trail.mjs`: direct-booking trail, `buildEnquiries`, reasons, offer expiry
+- `frontend/js/forms.mjs`: trail loader and renderer exported, unique heading ids, current time passed in, link
+- `frontend/js/flow.mjs` and `frontend/js/meet.mjs` (links)
+- `frontend/app.js` (route)
+- `backend/src/web.mjs` (page whitelist)
+- `frontend/app.css`
+- `backend/test/enquiry-trail.test.mjs`: 4 new tests, including one over the real local API
+- `backend/scripts/browser-check.mjs`
+
+**Evidence (local; fake providers, outbox email)**
+
+`enquiry-trail.test.mjs`: 9 of 9 pass. The new tests cover:
+- an offer expiring at exactly the 2-hour boundary, and no assumption without a clock;
+- direct bookings: canceled, open task, and unreadable runs shown as unknown;
+- joining without duplicates, rescheduled bookings skipped, names from answers, attention first;
+- an end-to-end test over the real local API. A form response is routed to Meet and booked through the handoff, and an enabled Flow creates a preparation task; one offer is left unbooked past 2 hours; one booking is made directly. The test asserts:
+  - three enquiries, with the form booking linked and not repeated;
+  - reasons `task_open`, `offer_expired`, `task_open`;
+  - a member sees no direct bookings and gets the role note for the linked booking.
+
+The browser journey:
+- reaches the page from the Forms dashboard link;
+- lists both a form response and a direct booking;
+- shows the coverage note;
+- puts attention first, with the banner;
+- has no duplicate ids;
+- expands the trail;
+- passes the filters;
+- leaves response, booking, run and task counts unchanged;
+- passes the layout checks.
+
+Full checks ran on the working tree, including the uncommitted Forms reliability work:
+- `npm run check`: 127 files.
+- `npm test`: 167 tests; 164 pass, 0 fail, 3 skipped (PostgreSQL).
+- `npm run browser-check`: every journey passes. 496 layout checks, with no runtime errors or overflow.
+
+Screenshots reviewed:
+- **Before:** `/enquiries` was a "This page took a wrong turn" 404, and the only trail was per form.
+- **After:** at 1440 and 375 px, with a booked form response with an open task, an expired offer and a long-named direct booking.
+
+**Known limitations:**
+- Built in the browser: up to 20 forms × 50 responses, 200 runs, 200 tasks and 300 bookings per scope. These limits are stated on the page.
+- The page makes one request per form, so it is slower for large workspaces.
+- There is no ownership, assignment or "resolved" state: needs attention clears only when the underlying record changes (task done, run retried successfully).
+- No moderated sessions have checked that operators find this faster than their current tools. That is the contract's research gate before building notifications on top of it.
+
+### Readiness analysis correction (Codex continuation)
+A text answer can include several condition phrases at once. The earlier finite sample could therefore call a reachable required question unreachable (page includes red; question includes blue; answer red blue). Text-includes paths now show Not verified with Preview guidance, rather than a false recommendation to change the form. A regression runs the shared renderer on that concrete reachable answer. Focused readiness tests: 10 pass. This is a limit of automatic analysis, not a publish blocker.
+
+Release review update: reviewed matched desktop/phone screenshots for Meet readiness, Forms live/draft readiness and Enquiries. Added a fresh 375px navigation assertion to distinguish initial phone behavior from desktop cards resized for layout checks. Also fixed a finite-sample collision: a not-equals rule using the sample text "any answer" could produce a false unreachable warning; the checker now chooses a distinct witness. Both regression cases use actual shared-renderer visibility, and the focused Forms readiness suite is 11/11. The full unit run before that second small correction passed 168 tests (165 pass, 3 PostgreSQL skips). No claim of human validation or dark-mode verification: the app currently pins the light theme.

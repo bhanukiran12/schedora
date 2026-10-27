@@ -9,6 +9,7 @@ import * as video from './js/meet-video.mjs';
 import { loadStartupConfig } from './js/connection.mjs';
 import { productLanding } from './js/product-landing.mjs';
 import { pricingProposal } from './js/pricing-proposal-page.mjs';
+import { enquiries } from './js/enquiries.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
 const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
 
@@ -39,6 +40,7 @@ const routes = [
   [/^\/account$/, account.account],
   [/^\/billing$/, account.billing],
   [/^\/pricing\/proposal$/, pricingProposal],
+  [/^\/enquiries$/, enquiries],
   [/^\/privacy$/, pages.privacy],
   [/^\/terms$/, pages.terms]
 ];
