@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { fail } from '../http.mjs';
+import { fail, HttpError } from '../http.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
 import { answerText, conditionHolds, definitionProblems, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
@@ -47,6 +47,7 @@ function present(row) {
   const routing = parse(row.routing);
   return {
     id: row.id, slug: row.slug, draft: JSON.parse(row.draft), published_version: row.published_version, routing,
+    published_routing: parse(row.published_routing),
     revision: row.draft_revision, updated_at: row.updated_at, created_at: row.created_at, response_count: row.response_count ?? undefined,
     has_unpublished_changes: row.published_definition
       ? row.published_definition !== row.draft || (row.published_routing || null) !== (row.routing || null)
@@ -111,6 +112,32 @@ export function saveDraft(app, workspaceId, id, body) {
   return writeDraft(app, workspaceId, id, body, 'draft', JSON.stringify(normalizeDefinition(body.definition)));
 }
 
+function validatePublish(app, workspaceId, form) {
+  requireEntitlement(app, workspaceId, 'forms');
+  const definition = normalizeDefinition(form.draft);
+  if (!definition.fields.some(field => field.type !== 'page_break')) fail(400, 'validation_failed', 'Add at least one question before publishing.', { field: 'definition' });
+  const problems = form.routing ? routingProblems(app, workspaceId, definition, form.routing) : [];
+  if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'routing', problems });
+  return definition;
+}
+
+// Runs the very same saved-draft checks as Publish, without creating a version or any side effect.
+export function checkFormPublish(app, workspaceId, id, body = {}) {
+  const expected = baseRevision(body);
+  return app.db.transaction(() => {
+    const form = getForm(app, workspaceId, id);
+    if (expected != null && expected !== form.revision) conflict(app, workspaceId, id);
+    const result = { revision: form.revision, checked_at: app.now(), can_publish: true, problems: [] };
+    try { validatePublish(app, workspaceId, form); }
+    catch (error) {
+      if (!(error instanceof HttpError) || !['validation_failed', 'entitlement_required'].includes(error.code)) throw error;
+      result.can_publish = false;
+      result.problems = (error.details?.problems || [error.message]).map(message => ({ code: error.code, field: error.details?.field || 'plan', message }));
+    }
+    return result;
+  });
+}
+
 // Publishing snapshots the draft questions and routing together as one immutable version;
 // responses record the version they answered.
 export function publishForm(app, workspaceId, userId, id, body = {}) {
@@ -119,10 +146,7 @@ export function publishForm(app, workspaceId, userId, id, body = {}) {
   return app.db.transaction(() => {
     const form = getForm(app, workspaceId, id);
     if (expected != null && expected !== form.revision) conflict(app, workspaceId, id);
-    const definition = normalizeDefinition(form.draft);
-    if (!definition.fields.some(field => field.type !== 'page_break')) fail(400, 'validation_failed', 'Add at least one question before publishing.', { field: 'definition' });
-    const problems = form.routing ? routingProblems(app, workspaceId, definition, form.routing) : [];
-    if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'routing', problems });
+    const definition = validatePublish(app, workspaceId, form);
     const version = (app.db.get('SELECT MAX(version) AS version FROM form_versions WHERE form_id = ?', id).version || 0) + 1;
     app.db.run('INSERT INTO form_versions (form_id, version, definition, routing, published_at, published_by) VALUES (?, ?, ?, ?, ?, ?)',
       id, version, JSON.stringify(definition), form.routing ? JSON.stringify(form.routing) : null, app.now(), userId);

@@ -740,16 +740,19 @@ function formReadiness(ctx, currentForm, { renderShare, bindShare, goTo }) {
   const root = $('#readiness');
   const body = $('#readiness-body', root);
   let announce = false;
+  let generation = 0;
   const check = async refetch => {
+    const requestGeneration = ++generation;
     body.setAttribute('aria-busy', 'true');
     if (!body.childElementCount) mount(body, loading('Checking the saved form…'));
     // "Check again" re-reads the saved form into its own copy; the builder's revision is untouched.
     const [saved] = await Promise.allSettled([refetch ? api('GET', wsPath('/forms/' + currentForm().id)) : currentForm()]);
-    const [live, eventTypes] = saved.status === 'fulfilled' ? await Promise.allSettled([
+    const [live, eventTypes, publishCheck] = saved.status === 'fulfilled' ? await Promise.allSettled([
       saved.value.published_version ? api('GET', `/api/public/forms/${encodeURIComponent(saved.value.slug)}`) : null,
-      api('GET', wsPath('/event-types'))
+      api('GET', wsPath('/event-types')),
+      api('POST', wsPath(`/forms/${saved.value.id}/publish-check`), { base_revision: saved.value.revision })
     ]) : [];
-    if (!ctx.alive() || !root.isConnected) return;
+    if (!ctx.alive() || !root.isConnected || generation !== requestGeneration) return;
     body.removeAttribute('aria-busy');
     if (saved.status === 'rejected') {
       $('#readiness-status', root).textContent = 'Readiness could not be checked.';
@@ -758,7 +761,7 @@ function formReadiness(ctx, currentForm, { renderShare, bindShare, goTo }) {
     const form = saved.value;
     const settle = result => result.status === 'fulfilled' ? (result.value === null ? null : { ok: true, value: result.value }) : { ok: false, error: result.reason };
     const result = assessFormReadiness({
-      form, live: settle(live), eventTypes: settle(eventTypes), viewer: { admin: isAdmin() }, baseUrl: location.origin,
+      form, live: settle(live), eventTypes: settle(eventTypes), publishCheck: settle(publishCheck), viewer: { admin: isAdmin() }, baseUrl: location.origin,
       flags: { formsActive: Boolean(workspace().entitlements?.forms?.active), meetActive: Boolean(workspace().entitlements?.meet?.active) },
       logic: { definitionProblems, visibleFields }
     });

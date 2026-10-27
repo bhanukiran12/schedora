@@ -1,7 +1,7 @@
 import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
 import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
-import { availability, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { availability, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
@@ -260,6 +260,7 @@ export function createApi(app) {
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
   put('/api/workspaces/:ws/forms/:id/routing', async ctx => saveRouting(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   post('/api/workspaces/:ws/forms/:id/publish', async ctx => publishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.user.id, ctx.params.id, await ctx.json().catch(() => ({}))));
+  post('/api/workspaces/:ws/forms/:id/publish-check', async ctx => checkFormPublish(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   post('/api/workspaces/:ws/forms/:id/unpublish', ctx => unpublishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/workspaces/:ws/forms/:id/responses', ctx => {
     const { workspace } = member(ctx, 'responses.read');

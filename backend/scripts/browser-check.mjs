@@ -434,6 +434,8 @@ try {
     await open(`/forms/${formId}`, ready);
     const titles = await evaluate("[...document.querySelectorAll('.readiness-area > summary')].map(s => s.textContent.replace(/\\s+/g, ' ').trim())");
     if (titles.length !== 5 || !['Draft and live', 'Questions and logic', 'Respondent preview', 'After submission', 'Sharing'].every((title, index) => titles[index].includes(title))) throw new Error('unexpected areas: ' + titles.join('|'));
+    await waitFor("document.querySelector('#readiness-body').textContent.includes('Server publish checks passed for saved revision')", 'server publish validation');
+    if (!(await areaText('after')).includes('Live version 2:')) throw new Error('live routing version is not distinguished from the saved draft');
     if (/\d\s*%/.test(await evaluate("document.querySelector('#readiness').innerText"))) throw new Error('readiness shows a percentage');
     const after = await areaText('after');
     if (!after.includes("only Meet's confirmation means an appointment exists") || !after.includes('The receipt means the response was received, nothing more')) throw new Error('booking offer wording: ' + after);

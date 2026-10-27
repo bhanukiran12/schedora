@@ -89,7 +89,7 @@ export function draftChanges(live, draft) {
  *   logic: { definitionProblems, visibleFields } from the shared forms logic, now
  * }
  */
-export function assessFormReadiness({ form, live, eventTypes, viewer, flags, baseUrl, logic, now = Date.now() }) {
+export function assessFormReadiness({ form, live, eventTypes, publishCheck, viewer, flags, baseUrl, logic, now = Date.now() }) {
   const draft = form.draft;
   const closed = form.published_version == null && form.locked_ids?.length > 0;
   const liveDefinition = live?.ok ? live.value.definition : null;
@@ -116,6 +116,13 @@ export function assessFormReadiness({ form, live, eventTypes, viewer, flags, bas
 
   // ---- Questions and logic (the saved draft, which is what Publish would make live) ----
   const questions = [];
+  if (publishCheck) {
+    if (!publishCheck.ok || publishCheck.value.revision !== form.revision) questions.push({ status: 'unverified', kind: 'unknown', text: 'The server publish check could not verify this saved revision. Check again before publishing.', action: { retry: true, label: 'Check again' } });
+    else if (publishCheck.value.can_publish) questions.push({ status: 'ready', text: `Server publish checks passed for saved revision ${form.revision}. Nothing was published. The server checks again when you publish.` });
+    else for (const problem of publishCheck.value.problems) questions.push({ status: 'attention', kind: 'blocker', text: `Server publish check: ${problem.message}`, action: problem.field === 'plan'
+      ? viewer.admin ? { label: 'Review plans', href: '/billing' } : { note: 'Ask a workspace owner about the plan.' }
+      : { label: problem.field === 'routing' ? 'Edit routing' : 'Review questions', section: problem.field === 'routing' ? 'routing' : 'questions' } });
+  }
   const asked = questionsOf(draft);
   const problems = logic.definitionProblems(draft);
   for (const problem of problems) questions.push({ status: 'attention', kind: 'blocker', text: problem, action: { label: 'Review questions', section: 'questions' } });
@@ -148,8 +155,14 @@ export function assessFormReadiness({ form, live, eventTypes, viewer, flags, bas
   // ---- After submission ----
   const after = [{ text: 'Every accepted response shows a receipt with a reference and time. The receipt means the response was received, nothing more.' }];
   const routing = form.routing;
+  if (form.published_version != null && Object.hasOwn(form, 'published_routing')) {
+    const liveRouting = form.published_routing;
+    const liveActions = [...(liveRouting?.rules || []).map(rule => rule.action), ...(liveRouting?.fallback ? [liveRouting.fallback] : [])];
+    const offers = liveActions.filter(action => action?.type === 'event').length;
+    after.push({ text: `Live version ${form.published_version}: ${offers ? `${count(offers, 'booking offer rule')}; respondents still choose a time before anything is booked.` : liveActions.length ? 'a message or link after the receipt, with no booking offer.' : 'receipt only, with no booking offer.'} The saved routing below applies only after you publish.` });
+  }
   if (!routing || (!routing.rules?.length && !routing.fallback)) {
-    after.push({ status: 'not_required', text: 'No next step is set, so respondents see the receipt only. No booking is offered.' });
+    after.push({ status: 'not_required', text: 'Saved draft: no next step is set. Publishing this draft would show the receipt only, with no booking offer.' });
   } else {
     const fields = new Map(asked.map(field => [field.id, field]));
     const known = eventTypes?.ok ? new Map(eventTypes.value.map(type => [type.id, type])) : null;

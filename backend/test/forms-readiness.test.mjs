@@ -91,6 +91,20 @@ test('a sample answer never hides a reachable not-equals question', () => {
   assert.deepEqual(unreachableFields(draft, visibleFields).unreachable, []);
 });
 
+test('server publish results are tied to the saved revision and never replace live-routing evidence', () => {
+  const form = savedForm({ revision: 4, published_routing: null, routing: { rules: [], fallback: { type: 'message', message: 'Draft thanks' } } });
+  const passed = assessFormReadiness(input({ form, publishCheck: ok({ revision: 4, can_publish: true, problems: [] }) }));
+  assert.ok(area(passed, 'questions').items.some(item => /Server publish checks passed for saved revision 4/.test(item.text)));
+  assert.ok(area(passed, 'after').items.some(item => /Live version 1: receipt only, with no booking offer/.test(item.text)));
+  for (const publishCheck of [{ ok: false }, ok({ revision: 3, can_publish: true, problems: [] })]) {
+    const result = assessFormReadiness(input({ form, publishCheck }));
+    assert.ok(texts(result, 'unknown').some(text => /could not verify this saved revision/.test(text)));
+    assert.ok(!area(result, 'questions').items.some(item => /Server publish checks passed/.test(item.text)));
+  }
+  const blocked = assessFormReadiness(input({ form, publishCheck: ok({ revision: 4, can_publish: false, problems: [{ field: 'routing', message: 'Destination no longer published.' }] }) }));
+  assert.ok(texts(blocked, 'blocker').includes('Server publish check: Destination no longer published.'));
+});
+
 test('answer insertions that can only show blank or "…" are flagged', () => {
   const draft = definition([{ id: 'name', type: 'short_text', label: 'Hi {{name}}, and {{budget}}', required: true }, { id: 'budget', type: 'short_text', label: 'Budget' }]);
   assert.deepEqual(placeholderIssues(draft).map(issue => [issue.key, issue.problem]), [['name', 'self'], ['budget', 'later']]);
