@@ -549,8 +549,8 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     booking_canceled: 'The appointment was canceled.', booking_rescheduled: 'The appointment was rescheduled. Use the link in your newest confirmation email.' };
   function confirmedOutcome(info) {
     if (!info) return null;
-    if (info.you?.status === 'removed') return ['removed', REMOVED[info.you.removed_reason] || 'Your access to this meeting was stopped.'];
     if (['ended', 'canceled'].includes(info.state) || ['ended', 'ending', 'canceled'].includes(info.status)) return [info.state === 'canceled' ? 'canceled' : 'ended', ENDED[info.end_cause] || 'This meeting has ended.'];
+    if (info.you?.status === 'removed') return ['removed', REMOVED[info.you.removed_reason] || 'Your access to this meeting was stopped.'];
     if (['rescheduled', 'revoked'].includes(info.state)) return ['removed', STATES[info.state][1]];
     return null;
   }

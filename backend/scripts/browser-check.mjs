@@ -528,6 +528,17 @@ try {
       await shot('removed');
     });
   });
+  await step('video room (fake-connected fixture): provider disconnect after server end shows ended, not removed', async () => {
+    await withFakeRoom(async () => {
+      const room = await pageApi('/api/workspaces/:ws/meet-video/rooms', { title: 'Server end check' });
+      await open(new URL(room.host_url).pathname, "document.querySelector('#join-form')");
+      await enterRoom();
+      await pageApi(`/api/meet-video/rooms/${room.public_id}/end`);
+      await evaluate("window.__fakeRoom.drop('PARTICIPANT_REMOVED')");
+      await waitFor("document.querySelector('#main h1')?.textContent === 'The meeting has ended'", 'ended status takes precedence over participant removal');
+      if (await evaluate("Boolean(document.querySelector('#rejoin'))")) throw new Error('rejoin offered after server end');
+    });
+  });
   await step('video prejoin: denied camera and microphone give guidance and still allow joining', async () => {
     const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', { source: "navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));" });
     try {

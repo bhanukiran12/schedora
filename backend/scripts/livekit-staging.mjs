@@ -8,10 +8,15 @@ import { reconcileWallet } from '../src/video/credits.mjs';
 if (process.env.RUN_LIVEKIT_STAGING !== 'true') throw new Error('Set RUN_LIVEKIT_STAGING=true to contact the real staging provider.');
 if (!process.env.LIVEKIT_URL || !process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) throw new Error('Load the ignored staging environment file first.');
 if (process.env.NODE_ENV === 'production') throw new Error('This runner cannot use production mode.');
+const publicBase = process.env.STAGING_PUBLIC_BASE_URL || 'http://localhost:3100';
+if (publicBase !== 'http://localhost:3100') {
+  const address = new URL(publicBase);
+  if (address.protocol !== 'https:' || !address.hostname.endsWith('.trycloudflare.com') || address.username || address.password || address.pathname !== '/' || address.search || address.hash) throw new Error('STAGING_PUBLIC_BASE_URL must be a temporary HTTPS trycloudflare.com origin.');
+}
 
 const config = loadConfig({ ...process.env,
   NODE_ENV: 'development', RELEASE_MODE: 'evaluation', DATABASE_URL: '', DATABASE_PATH: ':memory:',
-  HOST: '127.0.0.1', PORT: '3100', BASE_URL: 'http://localhost:3100', SERVE_FRONTEND: 'true',
+  HOST: '127.0.0.1', PORT: '3100', BASE_URL: publicBase, ALLOWED_ORIGINS: 'http://localhost:3100', SERVE_FRONTEND: 'true',
   EMAIL_PROVIDER: 'outbox', SMS_PROVIDER: 'outbox', BILLING_PROVIDER: 'test', BILLING_MODE: 'open',
   MEET_VIDEO_PROVIDER: 'livekit', MEET_VIDEO_ENABLED: 'true', MEET_VIDEO_DEPLOYMENT: 'livekit-staging',
   LIVEKIT_HOSTING: 'cloud', MEET_VIDEO_RECHARGE_ENABLED: 'false',
