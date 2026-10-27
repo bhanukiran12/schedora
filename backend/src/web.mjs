@@ -7,12 +7,14 @@ import { MEETING_PAGE, MEETING_PERMISSIONS } from './video/config.mjs';
 // Serves the static frontend for local development and single-host deployments. In the split
 // deployment Vercel serves frontend/ with the same rules (frontend/vercel.json) and this is off.
 
-const TYPES = { '.webmanifest': 'application/manifest+json', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
+const TYPES = { '.webmanifest': 'application/manifest+json', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
 const STATIC = /^\/(app\.js|app\.css|design\.css|product-minimal\.css|suite-theme\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs|vendor\/livekit-client\.esm\.mjs)$/;
+const DESIGN_ASSET = /^\/(?:assets\/figma\/[A-Za-z0-9_-]+\.(?:png|svg|woff2|txt)|images\/(?:meet|forms|flow)-workspace\.webp)$/;
 const LEGACY = { '/book': '/meet', '/form': '/forms' };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const PAGES = [
   /^\/$/, /^\/meet$/, /^\/forms$/, /^\/flow$/, /^\/privacy$/, /^\/terms$/, /^\/account$/, /^\/billing$/,
+  /^\/products\/(?:meet|forms|flow)$/, /^\/pricing\/proposal$/, /^\/demo(?:\/[a-z0-9-]+)*$/, /^\/start(?:\/[a-z0-9-]+)*$/,
   new RegExp(`^/meet/event-types/(new|${UUID})$`), /^\/meet\/manage\/[A-Za-z0-9_-]{20,100}$/,
   new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`),
   /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/room\/[A-Za-z0-9_-]{20,30}$/, /^\/meet\/join\/[A-Za-z0-9_-]{40,60}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
@@ -34,8 +36,10 @@ export function createWeb(app) {
   return async function handleWeb(request, response, path, url) {
     if (!['GET', 'HEAD'].includes(request.method)) return send(request, response, 405, 'text/plain; charset=utf-8', 'Method not allowed', { Allow: 'GET, HEAD' });
     if (LEGACY[path]) return send(request, response, 301, 'text/plain; charset=utf-8', 'Moved', { Location: LEGACY[path] + url.search });
-    if (STATIC.test(path)) {
-      const body = await readFile(join(dir, path));
+    if (STATIC.test(path) || DESIGN_ASSET.test(path)) {
+      let body;
+      try { body = await readFile(join(dir, path)); }
+      catch (error) { if (error.code === 'ENOENT') return send(request, response, 404, 'text/plain; charset=utf-8', 'Asset not found'); throw error; }
       return send(request, response, 200, TYPES[extname(path)], body, { 'Cache-Control': /\.(png|svg)$/.test(path) ? 'public, max-age=86400' : 'no-cache' });
     }
     const page = resolvePage(app, path);

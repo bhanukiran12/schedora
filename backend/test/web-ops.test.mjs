@@ -20,6 +20,15 @@ test('pages, assets, headers and legacy routes', async () => {
     for (const path of ['/', '/meet', '/forms', '/flow', '/account', '/billing', '/privacy', '/terms', '/robots.txt', '/sitemap.xml', '/app.js', '/app.css', '/js/meet.mjs', '/shared/forms-logic.mjs', '/favicon.svg', '/logo-meet.png']) {
       assert.equal((await fetch(env.base + path)).status, 200, path);
     }
+    for (const [path, type] of [['/assets/figma/BookMark.png', 'image/png'], ['/assets/figma/Check.svg', 'image/svg+xml'], ['/assets/figma/InterVariable.woff2', 'font/woff2'], ['/images/forms-workspace.webp', 'image/webp']]) {
+      const response = await fetch(env.base + path);
+      assert.equal(response.status, 200, path);
+      assert.equal(response.headers.get('content-type'), type, path);
+      assert.ok((await response.arrayBuffer()).byteLength > 0, path);
+    }
+    for (const path of ['/products/meet', '/products/forms', '/products/flow', '/demo/flow', '/start']) assert.equal((await fetch(env.base + path)).status, 200, path);
+    assert.equal((await fetch(env.base + '/assets/figma/../../package.json')).status, 404);
+    assert.equal((await fetch(env.base + '/assets/figma/not-a-real-asset.png')).status, 404);
     const home = await fetch(env.base + '/', { headers: { 'Accept-Encoding': 'gzip' } });
     assert.match(home.headers.get('content-security-policy'), /script-src 'self'; style-src 'self'/);
     assert.match(home.headers.get('content-security-policy'), /frame-ancestors 'none'/);

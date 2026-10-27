@@ -1,8 +1,12 @@
-import { $, $$, api, ask, badge, errorBlock, fmtDateTime, handleSubmit, html, isAdmin, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
+import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, isAdmin, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
+import { FLOW_STARTERS } from './flow-starters.mjs';
 
 const TRIGGERS = { 'meet.booking.created': 'A Meet appointment is booked', 'forms.response.created': 'A Forms response is submitted' };
 const ACTIONS = { email: 'Send an email', task: 'Create a follow-up task' };
+const emailOutcome = () => boot.providers.email === 'outbox'
+  ? 'Recorded in the local outbox. It is not delivered to an inbox.'
+  : 'Accepted by the email provider. Inbox delivery is not tracked here.';
 const PLACEHOLDERS = {
   'meet.booking.created': ['invitee.name', 'invitee.email', 'booking.start', 'booking.start_host', 'booking.reference', 'event.title', 'event.location', 'host.name'],
   'forms.response.created': ['form.title', 'response.id']
@@ -10,7 +14,7 @@ const PLACEHOLDERS = {
 
 export async function dashboard(ctx) {
   setTitle('Flow by Schedora');
-  if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'flow', title: 'Give your next step a little momentum.', lead: 'When someone books a Meet appointment or submits a form, Flow sends the follow-up email or creates the task, exactly once, with a visible history and retries.' }));
+  if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'flow', title: 'Give every enquiry a clear next step.', lead: 'Turn a Meet booking or Forms response into an email or a task. Review each run, investigate failures and retry supported actions.' }));
   if (!needsSession(ctx)) return;
   const tab = ctx.params[0] || 'flows';
   mount(ctx.main, html`<div class="container page">
@@ -29,7 +33,10 @@ export async function dashboard(ctx) {
 async function flowsTab(ctx, panel) {
   const flows = await api('GET', wsPath('/flows'));
   if (!ctx.alive()) return;
-  if (!flows.length) return mount(panel, html`<div class="empty"><h2>No flows yet</h2><p>A flow connects one trigger to one action, for example: when an appointment is booked, create a preparation task.</p>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New flow</a>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
+  if (!flows.length) return mount(panel, html`<div class="empty flow-empty"><h2>No flows yet</h2><p>A flow connects one trigger to one action: when an appointment is booked or a form is submitted, send an email or create a task.</p>
+    ${isAdmin() ? html`<p class="flow-empty-lead">Start from an outcome. Each opens as an unsaved draft you can edit; nothing runs until you enable it.</p>
+      <ul class="flow-starter-links">${FLOW_STARTERS.map(starter => html`<li><a href="/flow/new?starter=${starter.id}"><strong>${starter.name}</strong><span>${starter.description}</span></a></li>`)}</ul>
+      <a class="btn" href="/flow/new">Start from scratch</a>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
   mount(panel, html`<ul class="list">${flows.map(flow => html`<li class="row-between"><div>
       <div class="list-title">${flow.name}</div>
       <div class="meta"><span>${TRIGGERS[flow.trigger_type]} → ${ACTIONS[flow.action_type]}</span><span>${flow.run_count} runs</span>${flow.failed_count ? html`<a href="/flow/runs">${flow.failed_count} failed</a>` : ''}</div></div>
@@ -44,12 +51,12 @@ async function flowsTab(ctx, panel) {
 }
 
 async function runsTab(ctx, panel) {
-  const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">Each event runs a flow once. Retries reuse the same run, so emails and tasks are never duplicated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
-    ${runs.length ? html`<div class="table-wrap"><table><thead><tr><th>Started</th><th>Flow</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Details</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
-    ${runs.map(run => html`<tr><td>${fmtDateTime(run.created_at)}</td><td>${run.flow_name}${run.flow_status === 'paused' && ['queued', 'retrying'].includes(run.status) ? html`<div class="muted">Held while paused</div>` : ''}</td>
-      <td>${run.event_type === 'meet.booking.created' ? 'Booking' : 'Response'}</td><td>${badge(run.status)}</td><td>${run.attempts}</td>
-      <td>${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? 'Task created' : run.result?.email ? 'Email sent' : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</td>
-      <td>${run.status === 'failed' && isAdmin() ? html`<button class="btn btn-small" data-retry="${run.id}">Retry</button>` : ''}</td></tr>`)}</tbody></table></div>`
+  const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">A run succeeds when its task is created or its email is handed over. ${boot.providers.email === 'outbox' ? 'Email goes to the local outbox on this server and is not delivered.' : 'For email, that means the provider accepted it; inbox delivery is not tracked.'} Retrying reuses the same run, so a created task or accepted email is not repeated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
+    ${runs.length ? html`<div class="table-wrap stack-on-mobile"><table><thead><tr><th>Started</th><th>Flow</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Outcome</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
+    ${runs.map(run => html`<tr><td data-label="Started">${fmtDateTime(run.created_at)}</td><td data-label="Flow">${run.flow_name}${run.flow_status === 'paused' && ['queued', 'retrying'].includes(run.status) ? html`<div class="muted">Held while paused</div>` : ''}</td>
+      <td data-label="Trigger">${run.event_type === 'meet.booking.created' ? 'Booking' : 'Response'}</td><td data-label="Status">${badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
+      <td data-label="Outcome">${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailOutcome() : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</td>
+      <td class="${run.status === 'failed' && isAdmin() ? '' : 'empty-cell'}">${run.status === 'failed' && isAdmin() ? html`<button class="btn btn-small" data-retry="${run.id}">Retry<span class="visually-hidden"> ${run.flow_name}</span></button>` : ''}</td></tr>`)}</tbody></table></div>`
     : html`<div class="empty">No runs yet. Runs appear when an enabled flow's trigger happens.</div>`}`);
   const load = async () => { const runs = await api('GET', wsPath('/runs')); if (ctx.alive()) draw(runs); };
   await load();
@@ -91,12 +98,33 @@ export async function editor(ctx) {
   if (!ctx.alive()) return;
   const state = structuredClone(flow);
   const admin = isAdmin();
+  let selectedStarter = '';
+  // Only the flow's own fields are copied from a starter; it always starts as an unsaved draft.
+  const applyStarter = starter => {
+    Object.assign(state, { name: starter.name, trigger_type: starter.trigger_type, trigger_source: null, action_type: starter.action_type, action_config: structuredClone(starter.action_config), status: 'draft' });
+    selectedStarter = starter.id;
+  };
 
   const formFields = () => {
     const form = forms.find(item => item.id === state.trigger_source);
     return form ? form.draft.fields.filter(field => field.type !== 'page_break') : [];
   };
   const placeholders = () => [...PLACEHOLDERS[state.trigger_type], ...(state.trigger_type === 'forms.response.created' ? formFields().map(field => 'answer.' + field.id) : [])];
+
+  // One sentence that names the actual source, action and recipient, so the result is predictable
+  // before saving. It describes configuration only; nothing here runs or sends.
+  const summary = (recipients, to) => {
+    const source = state.trigger_type === 'meet.booking.created'
+      ? eventTypes.find(item => item.id === state.trigger_source)?.title : forms.find(item => item.id === state.trigger_source)?.draft.title;
+    const when = state.trigger_type === 'meet.booking.created'
+      ? `When an appointment is booked${source ? ` for “${source}”` : ' for any event type'}`
+      : `When a response is submitted${source ? ` to “${source}”` : ' to any form'}`;
+    const config = state.action_config || {};
+    const who = to.startsWith('address:') ? (to.slice(8) || 'an address you have not entered yet') : { invitee: 'the invitee', host: 'the host' }[to] || (recipients.find(([value]) => value === to)?.[1].toLowerCase() ?? 'a recipient you have not chosen yet');
+    const what = state.action_type === 'task' ? `create a task titled “${config.title || 'Untitled task'}” in Flow › Tasks` : `email ${who}`;
+    const status = { draft: 'It is a draft: nothing runs until you enable it.', paused: 'It is paused: new events are held and run when you resume it.', enabled: 'Once saved as enabled, new matching events run it. Earlier events are not replayed.' }[state.status];
+    return html`<p class="flow-summary-sentence">${when}, ${what}.</p><p>${status}${state.action_type === 'email' ? ' ' + emailOutcome() : ''}</p>`;
+  };
 
   const draw = () => {
     const sources = state.trigger_type === 'meet.booking.created' ? eventTypes.map(item => [item.id, item.title]) : forms.map(item => [item.id, item.draft.title]);
@@ -106,7 +134,9 @@ export async function editor(ctx) {
       : formFields().filter(field => field.type === 'email').map(field => ['field:' + field.id, `Answer to “${field.label.slice(0, 40)}”`]);
     const to = config.to || recipients[0]?.[0] || 'address:';
     mount(ctx.main, html`<div class="container page"><a href="/flow">← Back to Flow</a><h1>${isNew ? 'New flow' : state.name}</h1>
+      ${isNew && admin ? html`<section class="flow-start-section" aria-labelledby="starter-heading"><h2 id="starter-heading">Start with an outcome</h2><p>Choose a starting point, then review the details. Every template starts as a draft.</p><div class="flow-starters">${FLOW_STARTERS.map(starter => html`<button type="button" class="flow-starter" data-starter="${starter.id}" aria-pressed="${selectedStarter === starter.id}"><strong>${starter.name}</strong><span>${starter.description}</span></button>`)}</div><button type="button" class="btn btn-small" id="blank-flow">Start from scratch</button></section>` : ''}
       ${admin ? '' : notice('info', html`<p>Only workspace administrators can change flows.</p>`)}
+      <section id="flow-outcome" class="card card-plain flow-summary" aria-labelledby="flow-summary-heading"><h2 id="flow-summary-heading">What this flow will do</h2>${summary(recipients, to)}<p class="hint">${isNew ? 'Not saved yet. ' : document.body.dataset.dirty ? 'Unsaved changes. ' : ''}This describes the settings below; changes apply only after you save.</p></section>
       <form id="flow-form" novalidate><fieldset ${admin ? '' : raw('disabled')}>
         <label for="name">Flow name</label><input id="name" name="name" required maxlength="120" value="${state.name}" placeholder="Prepare for new appointments">
         <div class="flow-steps">
@@ -133,9 +163,25 @@ export async function editor(ctx) {
         <div data-form-status tabindex="-1"></div>
         <div class="actions"><button class="btn btn-primary" type="submit">${state.status === 'enabled' ? 'Save and keep enabled' : 'Save flow'}</button>
           ${isNew ? '' : html`<button class="btn" type="button" id="simulate">Simulate</button><button class="btn btn-danger" type="button" id="delete-flow">Delete</button>`}</div>
+        ${isNew ? html`<p class="hint">Save the draft to simulate it with sample data. Simulation never sends an email or creates a task.</p>` : ''}
       </fieldset></form><div id="simulation" aria-live="polite"></div></div>`);
 
     const form = $('#flow-form');
+    $$('[data-starter]').forEach(button => button.onclick = async () => {
+      const starter = FLOW_STARTERS.find(item => item.id === button.dataset.starter);
+      if (!starter || !admin || selectedStarter === starter.id) return;
+      if (document.body.dataset.dirty && !(await ask({ title: 'Replace this unsaved draft?', body: 'The template replaces the current name, trigger and action. It will remain a draft.', confirm: 'Use template' }))) return;
+      applyStarter(starter);
+      document.body.dataset.dirty = '1';
+      draw();
+      $('#name').focus();
+    });
+    $('#blank-flow')?.addEventListener('click', async () => {
+      if (document.body.dataset.dirty && !(await ask({ title: 'Start a blank draft?', body: 'This clears the unsaved template and its settings.', confirm: 'Start blank' }))) return;
+      Object.assign(state, { name: '', trigger_type: 'meet.booking.created', trigger_source: null, action_type: 'task', action_config: { title: '', details: '' }, status: 'draft' });
+      selectedStarter = '';
+      document.body.dataset.dirty = '1'; draw(); $('#name').focus();
+    });
     const capture = () => {
       const data = Object.fromEntries(new FormData(form));
       state.name = data.name ?? state.name;
@@ -145,16 +191,20 @@ export async function editor(ctx) {
     };
     form.addEventListener('change', event => {
       const name = event.target.name;
-      if (!['trigger_type', 'trigger_source', 'action_type', 'to'].includes(name)) return;
+      if (!['trigger_type', 'trigger_source', 'action_type', 'to', 'status'].includes(name)) return;
       capture();
       if (name === 'trigger_type') { state.trigger_type = event.target.value; state.trigger_source = null; if (state.action_type === 'email') state.action_config.to = ''; }
       if (name === 'trigger_source') state.trigger_source = event.target.value || null;
       if (name === 'action_type') { state.action_type = event.target.value; state.action_config = state.action_type === 'email' ? { to: '', subject: 'Thanks', body: '' } : { title: '', details: '' }; }
       document.body.dataset.dirty = '1';
       draw();
-      form.isConnected && $(`[name="${name}"]`)?.focus();
+      $(`[name="${name}"]`)?.focus();
     });
-    form.addEventListener('input', () => { document.body.dataset.dirty = '1'; });
+    form.addEventListener('input', () => {
+      document.body.dataset.dirty = '1';
+      capture();
+      mount($('#flow-outcome'), html`<h2 id="flow-summary-heading">What this flow will do</h2>${summary(recipients, state.action_config?.to || to)}<p class="hint">${isNew ? 'Not saved yet.' : 'Unsaved changes.'} This describes the settings below; changes apply only after you save.</p>`);
+    });
     handleSubmit(form, async () => {
       capture();
       const body = { name: state.name, trigger_type: state.trigger_type, trigger_source: state.trigger_source, action_type: state.action_type, action_config: state.action_config, status: state.status };
@@ -166,7 +216,7 @@ export async function editor(ctx) {
     $('#simulate')?.addEventListener('click', async () => {
       try {
         const result = await api('POST', wsPath(`/flows/${flow.id}/simulate`));
-        mount($('#simulation'), html`<div class="card card-plain"><h2>Simulation</h2>${notice('info', html`<p>${result.note} It uses sample data and the last saved version of this flow.</p>`)}
+        mount($('#simulation'), html`<div class="card card-plain"><h2>Simulation</h2>${notice('info', html`<p>${result.note} It uses sample data and the last saved version of this flow.${document.body.dataset.dirty ? ' Your unsaved changes are not included.' : ''}</p>`)}
           ${result.action === 'email' ? html`<p><strong>To:</strong> ${result.to}</p><p><strong>Subject:</strong> ${result.subject}</p><pre class="preview">${result.body}</pre>` : html`<p><strong>Task:</strong> ${result.title}</p><pre class="preview">${result.details}</pre>`}</div>`);
         $('#simulation').scrollIntoView({ block: 'nearest' });
       } catch (error) { toast(error.message); }
@@ -178,5 +228,9 @@ export async function editor(ctx) {
       ctx.navigate('/flow', { replace: true });
     });
   };
+  const requested = isNew && admin && FLOW_STARTERS.find(item => item.id === ctx.query.get('starter'));
+  if (requested) {
+    applyStarter(requested);
+  }
   draw();
 }

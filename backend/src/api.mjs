@@ -1,7 +1,7 @@
 import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
 import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
-import { saveRouting, createForm, deleteForm, deleteResponse, exportCsv, getForm, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { availability, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
@@ -259,13 +259,12 @@ export function createApi(app) {
   patch('/api/workspaces/:ws/forms/:id', async ctx => saveDraft(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
   put('/api/workspaces/:ws/forms/:id/routing', async ctx => saveRouting(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
-  post('/api/workspaces/:ws/forms/:id/publish', ctx => publishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.user.id, ctx.params.id));
+  post('/api/workspaces/:ws/forms/:id/publish', async ctx => publishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.user.id, ctx.params.id, await ctx.json().catch(() => ({}))));
   post('/api/workspaces/:ws/forms/:id/unpublish', ctx => unpublishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/workspaces/:ws/forms/:id/responses', ctx => {
     const { workspace } = member(ctx, 'responses.read');
     const form = getForm(app, workspace.id, ctx.params.id);
-    const versions = Object.fromEntries(app.db.all('SELECT version, definition FROM form_versions WHERE form_id = ?', form.id).map(row => [row.version, JSON.parse(row.definition)]));
-    return { form, versions, responses: listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit') }) };
+    return { form, versions: formVersions(app, form.id), responses: listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit') }) };
   });
   get('/api/workspaces/:ws/forms/:id/responses.csv', ctx => {
     const { workspace } = member(ctx, 'responses.read');
@@ -276,8 +275,11 @@ export function createApi(app) {
 
   get('/api/public/forms/:slug', ctx => {
     const form = publishedForm(app, ctx.params.slug);
-    return { slug: form.slug, version: form.published_version, definition: form.definition, workspace_name: form.workspace_name, accepting: entitlementsFor(app, form.workspace_id).forms.active };
+    const state = availability(app, form.workspace_id);
+    return { slug: form.slug, version: form.published_version, definition: form.definition, workspace_name: form.workspace_name, availability: state, accepting: state === 'open' };
   }, { public: true });
+  // Opaque booking handoff from an accepted response: returns only what the booking page may pre-fill.
+  get('/api/public/form-handoffs/:token', ctx => { limit(ctx, 'manage', 60); return { status: 200, body: handoffDetails(app, ctx.params.token) }; }, { public: true });
   post('/api/public/forms/:slug/responses', async ctx => {
     limit(ctx, 'responses', 30);
     const result = submitResponse(app, ctx.params.slug, await ctx.json(256 * 1024));

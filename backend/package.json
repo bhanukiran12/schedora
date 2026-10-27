@@ -8,6 +8,7 @@
     "start": "node --disable-warning=ExperimentalWarning server.mjs",
     "dev": "node --disable-warning=ExperimentalWarning --watch server.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/*.test.mjs\"",
+    "test:postgres": "node --disable-warning=ExperimentalWarning scripts/test-postgres.mjs",
     "check": "node scripts/check.mjs",
     "sync-shared": "node scripts/sync-shared.mjs",
     "browser-check": "node --disable-warning=ExperimentalWarning scripts/browser-check.mjs",

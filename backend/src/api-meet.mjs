@@ -233,14 +233,14 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     const body = await ctx.json();
     if (body.website) fail(400, 'rejected', 'Submission rejected.');
     try {
-      const { booking, token, replay } = createBooking(app, eventType, body, ctx.request.headers['idempotency-key']);
+      const { booking, token, replay, handoff_linked } = createBooking(app, eventType, body, ctx.request.headers['idempotency-key']);
       let checkout = null;
       let checkout_error = null;
       if (booking.status === 'pending' && token) {
         try { checkout = await app.payments.checkout(booking, eventType, token); }
         catch { checkout_error = 'Checkout is temporarily unavailable. Retry payment from your booking page before the hold expires.'; }
       }
-      return { status: replay ? 200 : 201, body: { booking: publicBooking(app, booking, eventType), manage_token: token, replay, checkout, checkout_error } };
+      return { status: replay ? 200 : 201, body: { booking: publicBooking(app, booking, eventType), manage_token: token, replay, checkout, checkout_error, handoff_linked: Boolean(handoff_linked) } };
     } catch (error) {
       if (error.code === 'slot_unavailable') error.details = { ...error.details, ...slotsResponse(eventType, ctx) };
       throw error;

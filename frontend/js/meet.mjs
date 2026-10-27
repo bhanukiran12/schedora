@@ -7,6 +7,7 @@ import { inputFor, readAnswer } from './forms.mjs';
 import { checkAnswer, FIELD_TYPES } from '/shared/forms-logic.mjs';
 import * as team from './meet-team.mjs';
 import { videoTab } from './meet-video.mjs';
+import { assessReadiness, KIND_LABELS, STATUS_LABELS } from './meet-readiness.mjs';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const KINDS = {
@@ -233,19 +234,24 @@ export async function editor(ctx) {
   };
   const lockedForMe = field => type.managed_parent_id && !admin && type.locked_fields.includes(field);
   const lockAttr = field => lockedForMe(field) ? raw('disabled title="Managed by your administrator"') : '';
-  const markDirty = () => { document.body.dataset.dirty = '1'; };
+  let readiness = null;
+  const markDirty = () => { document.body.dataset.dirty = '1'; readiness?.unsaved(); };
 
   mount(ctx.main, html`<div class="container page">
     <a href="/meet">← Back to Meet</a>
     <h1>${isNew ? (type.one_off ? 'New one-off link' : type.managed_template ? 'New managed template' : 'New event type') : type.title}</h1>
     ${type.managed_parent_id ? notice('info', html`<p>This event type is managed by your administrator from “${type.managed_parent_title}”. ${type.locked_fields.length ? `Locked settings: ${type.locked_fields.join(', ')}.` : ''}</p>`) : ''}
+    ${isNew ? html`<p class="hint">After you save, <strong>Ready to share?</strong> checks the saved settings before you send the link.</p>` : html`<section class="card card-plain readiness" id="readiness" aria-labelledby="readiness-heading">
+      <div class="row-between"><h2 id="readiness-heading" tabindex="-1">Ready to share?</h2><button class="btn btn-small" type="button" data-recheck>Check again</button></div>
+      <p class="hint" id="readiness-checked">Statuses come from saved settings and checks on this server. Unsaved edits are not included.</p>
+      <div id="readiness-unsaved"></div><div id="readiness-body"></div><p class="visually-hidden" id="readiness-status" role="status"></p></section>`}
     <form id="event-form" class="stack" novalidate>
       <section class="card card-plain"><h2>Meeting type</h2>
         <fieldset><legend class="visually-hidden">Meeting type</legend><div class="kind-grid">${Object.entries(KINDS).map(([key, [label, help]]) => html`<label class="kind-card">
           <input type="radio" name="kind" value="${key}" ${state.kind === key ? raw('checked') : ''} ${(!admin && ['collective', 'round_robin'].includes(key)) || type.managed_parent_id ? raw('disabled') : ''}><strong>${label}</strong><span class="muted">${help}</span></label>`)}</div></fieldset>
         <div id="kind-extra"></div>
       </section>
-      <section class="card card-plain"><h2>Details</h2>
+      <section class="card card-plain" id="section-details"><h2 tabindex="-1">Details</h2>
         <label for="title">Name <span class="required-mark" aria-hidden="true">*</span></label>
         <input id="title" name="title" required maxlength="120" value="${type.title}" placeholder="30-minute introduction" ${lockAttr('title')}>
         <label for="slug">Link</label><span class="hint" id="slug-hint">${location.origin}/meet/${ws.slug}/<strong id="slug-preview">${type.slug || 'your-link'}</strong></span>
@@ -261,7 +267,7 @@ export async function editor(ctx) {
         <p class="hint" id="location-help" aria-live="polite">${LOCATION_HELP.video}</p>
         ${boot.video?.enabled ? '' : html`<p class="hint" id="video-unavailable">Schedora Meet built-in video is not enabled on this server yet, so it cannot be chosen. Use a connected video app or your own video link for now.</p>`}
       </section>
-      <section class="card card-plain"><h2>Availability</h2>
+      <section class="card card-plain" id="section-availability"><h2 tabindex="-1">Availability</h2>
         <label for="timezone">Time zone</label><span class="hint">Weekly hours are in this time zone. Invitees see times converted to theirs, including daylight-saving changes.</span>
         <select id="timezone" name="timezone">${zoneOptions(type.timezone)}</select>
         ${type.one_off ? html`<h3 class="label">Specific times (optional)</h3><p class="hint">Offer only these times instead of your weekly hours. Times use your browser's time zone.</p><div id="offered"></div><button class="btn btn-small" type="button" id="add-offered">Add a time</button>` : ''}
@@ -273,7 +279,7 @@ export async function editor(ctx) {
           <div><label for="end_date">Bookable until (optional)</label><input id="end_date" name="end_date" type="date" value="${type.end_date || ''}"></div>
         </div>
       </section>
-      <section class="card card-plain"><h2>Limits and reminders</h2>
+      <section class="card card-plain" id="section-limits"><h2 tabindex="-1">Limits and reminders</h2>
         <div class="inline-fields">
           <div><label for="min_notice_hours">Minimum notice (hours)</label><input id="min_notice_hours" name="min_notice_hours" type="number" min="0" max="720" step="0.5" value="${type.min_notice_min / 60}" ${lockAttr('min_notice_min')}></div>
           <div><label for="horizon_days">Bookable up to (days ahead)</label><input id="horizon_days" name="horizon_days" type="number" min="1" max="365" value="${type.horizon_days}" ${lockAttr('horizon_days')}></div>
@@ -296,7 +302,7 @@ export async function editor(ctx) {
       <section class="card card-plain"><h2>After booking</h2>
         <label for="confirmation_message">Message on the confirmation page and email</label><textarea id="confirmation_message" name="confirmation_message" maxlength="1000" ${lockAttr('confirmation_message')}>${type.confirmation_message}</textarea>
         <label for="redirect_url">Or send invitees to your own page (https://…)</label><input id="redirect_url" name="redirect_url" type="url" value="${type.redirect_url || ''}"></section>
-      <section class="card card-plain"><h2>Visibility</h2>
+      <section class="card card-plain" id="section-visibility"><h2 tabindex="-1">Visibility</h2>
         <label class="check"><input type="checkbox" name="published" ${type.published ? raw('checked') : ''}> Accept bookings on the link</label>
         <label class="check"><input type="checkbox" name="secret" ${type.secret ? raw('checked') : ''}> Hide from my booking page (only people with the link can book)</label>
         ${type.one_off ? html`<label class="check"><input type="checkbox" name="single_use" ${type.single_use ? raw('checked') : ''}> Close the link after one booking</label>
@@ -309,11 +315,13 @@ export async function editor(ctx) {
         ${!isNew && type.managed_template ? html`<button class="btn" type="button" id="assign">Assign to members</button>` : ''}</section>` : ''}
       <div data-form-status tabindex="-1"></div>
       <div class="actions"><button class="btn btn-primary" type="submit">Save event type</button>
-        ${isNew ? '' : html`<a class="btn" href="/meet/${ws.slug}/${type.slug}" target="_blank" rel="noopener">${type.published ? 'View booking page' : 'Preview booking page'}</a><button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
+        ${isNew ? '' : html`<button class="btn" type="button" data-goto="readiness">Review readiness</button><a class="btn" href="/meet/${ws.slug}/${type.slug}" target="_blank" rel="noopener">${type.published ? 'View booking page' : 'Preview booking page'}</a><button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
     </form></div>`);
 
   const form = $('#event-form');
   form.addEventListener('input', markDirty);
+  form.addEventListener('click', event => { const goto = event.target.closest('[data-goto]'); if (goto) goToSection(goto.dataset.goto); });
+  if (!isNew) readiness = readinessPanel(ctx, type);
   $('#title').addEventListener('input', () => { if (!$('#slug').value) $('#slug-preview').textContent = $('#title').value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'your-link'; });
   $('#slug').addEventListener('input', () => { $('#slug-preview').textContent = $('#slug').value || 'your-link'; });
 
@@ -490,7 +498,7 @@ export async function editor(ctx) {
     if (type.managed_parent_id && !admin) for (const field of type.locked_fields) { delete body[field]; if (field === 'price_cents') delete body.currency; }
     const saved = isNew ? await api('POST', wsPath('/event-types'), body) : await api('PATCH', wsPath('/event-types/' + type.id), body);
     delete document.body.dataset.dirty;
-    toast(saved.managed_template ? 'Template saved.' : saved.published ? 'Saved. Your booking page is live.' : 'Saved. Publish when you are ready to accept bookings.');
+    toast(saved.managed_template ? 'Template saved.' : saved.published ? 'Saved and published. Check “Ready to share?” before sending the link.' : 'Saved. Publish when you are ready to accept bookings.');
     ctx.navigate('/meet/event-types/' + saved.id, { replace: isNew });
   });
   $('#assign')?.addEventListener('click', async () => {
@@ -506,6 +514,88 @@ export async function editor(ctx) {
     try { await api('DELETE', wsPath('/event-types/' + type.id)); delete document.body.dataset.dirty; toast('Event type deleted.'); ctx.navigate('/meet', { replace: true }); }
     catch (error) { showErrors(form, error); }
   });
+}
+
+// "Ready to share?": statuses come from saved data and server checks (meet-readiness.mjs), never from
+// unsaved form values. The editor re-renders after every successful save, which re-runs the check.
+const READY_ICONS = { ready: '✓', attention: '!', unverified: '?', not_required: '–' };
+const SECTION_IDS = { details: 'section-details', availability: 'section-availability', limits: 'section-limits', visibility: 'section-visibility', readiness: 'readiness' };
+const fmtDate = date => fmt(date + 'T12:00:00Z', 'UTC', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+
+function goToSection(key) {
+  const section = document.getElementById(SECTION_IDS[key]);
+  if (!section) return;
+  section.scrollIntoView({ block: 'start' });
+  section.querySelector('h2').focus({ preventScroll: true });
+}
+
+function readinessPanel(ctx, savedType) {
+  const root = $('#readiness');
+  const body = $('#readiness-body', root);
+  let type = savedType;
+  let announce = false;
+  const settle = result => result.status === 'fulfilled' ? { ok: true, value: result.value } : { ok: false, error: result.reason };
+  const action = item => item.action.section ? html`<button class="btn-link" type="button" data-goto="${item.action.section}">${item.action.label}</button>`
+    : item.action.href ? html`<a href="${item.action.href}">${item.action.label}</a>`
+    : item.action.retry ? html`<button class="btn-link" type="button" data-recheck>${item.action.label}</button>`
+    : html`<span class="muted">${item.action.note}</span>`;
+  const share = () => {
+    const url = bookingUrl(type);
+    return html`<label for="share-link">Booking link</label>
+      <div class="share-row"><input id="share-link" readonly value="${url}">${type.published ? html`<button class="btn btn-small" type="button" id="copy-share">Copy link</button>` : ''}
+        <a class="btn btn-small" href="${url}" target="_blank" rel="noopener">Preview booking page<span class="visually-hidden"> (opens in a new tab)</span></a></div>
+      <p class="hint">Preview opens the booking page in a new tab. It does not publish, book or send anything. ${type.published ? 'Copying the link does not show that booking, email or video works.' : 'Copy link appears once the event type is published.'}</p>
+      <p class="copy-status" id="copy-status" role="status"></p>`;
+  };
+  const draw = result => {
+    mount(body, html`<p class="readiness-headline">${result.headline}</p>
+      <div class="readiness-areas">${result.areas.map(area => html`<section class="readiness-area" data-state="${area.status}" data-blocking="${area.items.some(item => item.kind === 'blocker') ? 'true' : 'false'}" aria-labelledby="ready-${area.key}">
+        <h3 id="ready-${area.key}"><span class="readiness-icon" aria-hidden="true">${READY_ICONS[area.status]}</span> ${area.title}<span class="readiness-state">${STATUS_LABELS[area.status]}</span></h3>
+        <ul class="readiness-items">${area.items.map(item => html`<li data-state="${item.status || 'fact'}" data-kind="${item.kind || ''}"><span class="readiness-icon" aria-hidden="true">${item.status ? READY_ICONS[item.status] : 'i'}</span>
+          <div><p>${item.status === 'ready' ? html`<span class="visually-hidden">Ready: </span>` : item.status ? html`<strong>${STATUS_LABELS[item.status]}${item.kind ? ` · ${KIND_LABELS[item.kind]}` : ''}:</strong> ` : ''}${item.text}</p>${item.action ? html`<p class="readiness-action">${action(item)}</p>` : ''}</div></li>`)}</ul>
+        ${area.key === 'sharing' && !type.managed_template ? share() : ''}</section>`)}</div>`);
+    if (announce) $('#readiness-status', root).textContent = result.headline;
+  };
+  const check = async refetch => {
+    body.setAttribute('aria-busy', 'true');
+    mount(body, loading('Checking saved settings…'));
+    const sources = await Promise.allSettled([
+      refetch ? api('GET', wsPath('/event-types/' + type.id)) : type,
+      api('GET', wsPath(`/event-types/${type.id}/slots`)),
+      api('GET', wsPath('/calendar')),
+      api('GET', wsPath('/integrations'))
+    ]);
+    if (!ctx.alive() || !root.isConnected) return;
+    body.removeAttribute('aria-busy');
+    if (sources[0].status === 'rejected') {
+      $('#readiness-status', root).textContent = 'Readiness could not be checked.';
+      return mount(body, html`${notice('bad', html`<p>Readiness could not be checked: ${sources[0].reason.message} Nothing is marked ready.</p>`)}<button class="btn btn-small" type="button" data-recheck>Check again</button>`);
+    }
+    type = sources[0].value;
+    const [, slots, calendar, integrations] = sources.map(settle);
+    $('#readiness-checked', root).textContent = `Based on the settings saved ${fmtDateTime(type.updated_at)}, checked at ${fmtTime(Date.now())}. Unsaved edits are not included.`;
+    draw(assessReadiness({
+      type, viewer: { id: session.user.id, admin: isAdmin() }, slots, calendar, integrations,
+      flags: { videoEnabled: Boolean(boot.video?.enabled), emailProvider: boot.providers?.email, testPayments: Boolean(boot.integrations?.testPayments), meetActive: Boolean(workspace().entitlements?.meet?.active) },
+      format: { dateTime: fmtDateTime, date: fmtDate, zone: zoneLabel, money }
+    }));
+  };
+  root.addEventListener('click', async event => {
+    const goto = event.target.closest('[data-goto]');
+    if (goto) return goToSection(goto.dataset.goto);
+    if (event.target.closest('[data-recheck]')) { announce = true; return check(true); }
+    if (!event.target.closest('#copy-share')) return;
+    const status = $('#copy-status', root);
+    try { await navigator.clipboard.writeText(bookingUrl(type)); status.textContent = 'Link copied. This does not test booking, email or video.'; }
+    catch { $('#share-link', root).select(); status.textContent = 'Copy failed. The link is selected so you can copy it yourself.'; }
+  });
+  check(false);
+  return {
+    unsaved() {
+      const slot = $('#readiness-unsaved', root);
+      if (slot && !slot.childElementCount) mount(slot, notice('warn', html`<p><strong>You have unsaved changes.</strong> This summary describes the last saved version. Save to check your changes.</p>`));
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -604,9 +694,35 @@ export async function booking(ctx) {
     const value = query.get('a_' + question.id);
     if (value) prefill.answers[question.id] = question.type === 'multiple_choice' ? value.split(',') : value;
   }
+  // A Forms handoff carries an opaque token, never personal details. It is removed from the address
+  // bar straight away, and the server returns only what this page may pre-fill.
+  let handoff = null;
+  let handoffNote = '';
+  if (query.has('handoff')) {
+    const token = query.get('handoff');
+    const clean = new URL(location.href);
+    clean.searchParams.delete('handoff');
+    history.replaceState(history.state, '', clean.pathname + clean.search + clean.hash);
+    try {
+      const details = await api('GET', `/api/public/form-handoffs/${encodeURIComponent(token)}`);
+      if (details.status === 'offered' && details.event.workspace_slug === wsSlug && details.event.slug === slug) {
+        handoff = token;
+        Object.assign(prefill, { name: details.prefill.name || prefill.name, email: details.prefill.email || prefill.email, answers: { ...prefill.answers, ...details.prefill.answers } });
+        handoffNote = notice('info', html`<p><strong>Your form response was received.</strong> Choose a time below to book; your details are filled in. Booking is optional.</p>`);
+      } else if (details.status === 'booked') {
+        handoffNote = notice('info', html`<p>Your form response was received, and a time was already booked from it. Your confirmation email has links to change it.</p>`);
+      } else {
+        handoffNote = notice('info', html`<p>This booking link has ${details.status === 'expired' ? 'expired' : 'stopped working'}. Any accepted form response is kept. Contact the team for the next step.</p>`);
+      }
+    } catch (error) {
+      handoffNote = notice('info', html`<p>${error.status === 404 ? 'This booking link is not valid. If you submitted a form, your response is not affected.' : 'This booking link could not be verified. Any accepted form response is kept.'} Contact the team for the next step.</p>`);
+    }
+    if (!ctx.alive()) return;
+    if (!handoff) return mount(ctx.main, html`<div class="container page"><h1>Booking link unavailable</h1>${handoffNote}</div>`);
+  }
   const notifyParent = () => { if (embed) parent.postMessage({ type: 'schedora:height', height: document.documentElement.scrollHeight }, '*'); };
 
-  mount(ctx.main, html`<div class="container page">${event.preview ? notice('warn', html`<p><strong>Preview.</strong> This event type is not published, so it cannot be booked yet.</p>`) : ''}<div class="card booking-layout">
+  mount(ctx.main, html`<div class="container page">${event.preview ? notice('warn', html`<p><strong>Preview.</strong> This event type is not published, so it cannot be booked yet.</p>`) : ''}${handoffNote}<div class="card booking-layout">
     <aside class="booking-summary" aria-label="Appointment summary">
       ${event.branding.logo ? html`<img class="brand-logo" src="${event.branding.logo}" alt="${event.workspace_name} logo">` : ''}
       <p class="muted">${event.host_name} · ${event.workspace_name}</p>
@@ -682,6 +798,7 @@ export async function booking(ctx) {
         const body = { name: data.name, email: data.email, notes: data.notes, start: slot, timezone: state.timezone, answers, guests, website: data.website };
         if (multiple) body.location_index = Number(data.location_index);
         if (data.phone) body.phone = data.phone;
+        if (handoff) body.handoff = handoff;
         const result = await api('POST', base + '/bookings', body, { 'Idempotency-Key': state.key });
         if (result.checkout?.url) { location.href = result.checkout.url; return; }
         if (result.booking.status === 'pending' && result.manage_token) {

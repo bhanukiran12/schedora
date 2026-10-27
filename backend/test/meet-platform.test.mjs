@@ -36,7 +36,7 @@ test('contacts are created from bookings and responses, with notes and follow-up
   } finally { await env.close(); }
 });
 
-test('routing forms send respondents to the right booking page, pre-filled', async () => {
+test('routing forms offer the right booking page through an opaque handoff, after republishing', async () => {
   const env = await setup();
   try {
     const owner = env.client();
@@ -49,14 +49,21 @@ test('routing forms send respondents to the right booking page, pre-filled', asy
         { condition: { field: 'topic', op: 'equals', value: 'support' }, action: { type: 'url', url: 'https://help.example.com' } }],
       fallback: { type: 'message', message: 'We will email you.' } } });
     assert.equal(saved.status, 200);
+    assert.equal(saved.body.has_unpublished_changes, true, 'routing is a draft change');
     const submit = topic => env.client().post(`/api/public/forms/${form.slug}/responses`, { answers: { name: 'Mia', email: 'mia@example.com', topic } });
-    const toBooking = (await submit('new_project')).body.route;
-    assert.equal(toBooking.type, 'event');
-    assert.match(toBooking.url, new RegExp(`^/meet/${ws.slug}/${enterprise.slug}\\?`));
-    const params = new URL(toBooking.url, 'https://x').searchParams;
-    assert.deepEqual([params.get('name'), params.get('email'), params.get('a_topic')], ['Mia', 'mia@example.com', 'new_project']);
-    assert.deepEqual((await submit('support')).body.route, { type: 'url', url: 'https://help.example.com/' });
-    assert.deepEqual((await submit('other')).body.route, { type: 'message', message: 'We will email you.' });
+    assert.equal((await submit('new_project')).body.next, null, 'live version 1 has no routing until republished');
+    await owner.post(`/api/workspaces/${ws.id}/forms/${form.id}/publish`);
+
+    const toBooking = (await submit('new_project')).body.next;
+    assert.deepEqual([toBooking.type, toBooking.status, toBooking.title], ['booking', 'offered', 'Enterprise demo']);
+    const url = new URL(toBooking.url, 'https://x');
+    assert.equal(url.pathname, `/meet/${ws.slug}/${enterprise.slug}`);
+    assert.deepEqual([...url.searchParams.keys()], ['handoff'], 'no name, email or answers in the address');
+    assert.ok(!toBooking.url.includes('mia'));
+    const details = (await env.client().get('/api/public/form-handoffs/' + url.searchParams.get('handoff'))).body;
+    assert.deepEqual(details.prefill, { name: 'Mia', email: 'mia@example.com', answers: { topic: 'new_project' } });
+    assert.deepEqual((await submit('support')).body.next, { type: 'url', url: 'https://help.example.com/' });
+    assert.deepEqual((await submit('other')).body.next, { type: 'message', message: 'We will email you.' });
   } finally { await env.close(); }
 });
 

@@ -14,6 +14,16 @@ export function postgresQuery(sql) {
 export const VIDEO_TABLES = ['video_rooms', 'video_invites', 'video_participants', 'video_usage_intervals', 'video_provider_events', 'video_provider_ops',
   'credit_accounts', 'credit_lots', 'credit_reservations', 'credit_allocations', 'credit_ledger', 'video_usage_records', 'credit_recharge_orders', 'credit_payment_events'];
 
+// Tables of migration 006 (Forms reliability), created by the postgres_v5 upgrade. Its added
+// columns are part of the generated base schema for new databases and are added here for existing ones.
+export const FORMS_V5_TABLES = ['form_handoffs'];
+export const FORMS_V5_COLUMNS = [
+  'ALTER TABLE forms ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1',
+  'ALTER TABLE form_versions ADD COLUMN IF NOT EXISTS routing TEXT',
+  'UPDATE form_versions SET routing = (SELECT f.routing FROM forms f WHERE f.id = form_versions.form_id) WHERE routing IS NULL AND version = (SELECT f.published_version FROM forms f WHERE f.id = form_versions.form_id)',
+  'ALTER TABLE responses ADD COLUMN IF NOT EXISTS request_hash TEXT'
+];
+
 export function postgresUpgrade(tables, indexes, extra = []) {
   return [...postgresSchema(tables, indexes).slice(0, -1), ...extra];
 }

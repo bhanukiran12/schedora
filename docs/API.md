@@ -27,7 +27,7 @@ All endpoints are under `https://schedora.in/api`. Request and response bodies a
 | `GET /analytics?from=&to=&tz=` | Totals, by event type and host, daily counts, weekday × hour heatmap |
 | `GET/POST /transcripts`, `POST /transcripts/{id}/recap` | Transcripts and AI recaps |
 | `POST /notetaker/transcripts` | For call-recording services: `{title, content, booking_reference?}`; creates a recap when AI is configured |
-| `GET/POST /forms`, `PUT /forms/{id}/routing`, `GET /forms/{id}/responses(.csv)` | Forms, routing and responses |
+| `GET/POST /forms`, `PATCH /forms/{id}` `{definition, base_revision}`, `PUT /forms/{id}/routing` `{routing, base_revision}`, `POST /forms/{id}/publish` `{base_revision}`, `GET /forms/{id}/responses(.csv)` | Forms, routing and responses. With `base_revision`, a save or publish based on an older draft returns `409 draft_conflict` with the current form; omit it only in single-writer scripts. Routing is part of the draft and goes live on publish. See [FORMS.md](FORMS.md) |
 | `GET/POST /flows`, `GET /runs`, `GET /tasks` | Flow automations |
 | `GET /meet-video/rooms?scope=current\|past` · `POST /meet-video/rooms` | Schedora Meet video rooms; `POST` starts an instant meeting (session only) |
 | `GET /meet-video/wallet`, `GET /meet-video/wallet/ledger?before=&limit=`, `GET /meet-video/wallet/usage`, `GET /meet-video/calculator?participants=&minutes=` | Meet credits (owners and admins) |
@@ -35,7 +35,9 @@ All endpoints are under `https://schedora.in/api`. Request and response bodies a
 
 Video room actions use the room's opaque id, not the workspace id: `GET /api/meet-video/rooms/{id}`, `POST …/join`, `…/end`, `…/participants/{participant}/remove`, `…/invites`. Guests use `GET/POST /api/public/meet-video/join/{attendance token}`. Join responses contain a short-lived provider token in a `no-store` JSON body; never put it in a URL or log. Provider webhooks: `POST /api/meet-video/webhooks/{deployment}` (signature verified against the raw body).
 
-Public endpoints (no key): `GET /api/public/meet/{workspace}/{event}/slots`, `POST /api/public/meet/{workspace}/{event}/bookings` (requires an `Idempotency-Key` header), and `/api/public/bookings/{manage token}` for invitees.
+Public endpoints (no key): `GET /api/public/meet/{workspace}/{event}/slots`, `POST /api/public/meet/{workspace}/{event}/bookings` (requires an `Idempotency-Key` header; optional `handoff` token from a form response), and `/api/public/bookings/{manage token}` for invitees. When `handoff` is supplied, invalid/mismatched tokens return `404 handoff_not_found`, used tokens return `409 handoff_used` even after expiry, and expired unused tokens return `410 handoff_expired`. These failures do not create an unlinked booking. Omitting `handoff` retains ordinary public booking behavior.
+
+Public Forms endpoints: `GET /api/public/forms/{slug}` (adds `availability`: `open`, `not_accepting` or `capacity_reached`; a closed form returns `410 form_closed`), `POST /api/public/forms/{slug}/responses` `{answers, submission_id, version}` (`201` accepted, `200` replay of an accepted `submission_id` with `answers_changed`; `409 form_version_changed`, `410 form_closed`, `429 quota_exceeded` mean nothing was stored), and `GET /api/public/form-handoffs/{token}` (booking pre-fill for an offered handoff, or only its status).
 
 ## Webhooks
 Add endpoints under **Account → Webhooks** (owners and admins). Events: `meet.booking.created`, `meet.booking.canceled`, `meet.booking.rescheduled`, `forms.response.created`.

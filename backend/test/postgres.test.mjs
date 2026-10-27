@@ -69,6 +69,25 @@ test('PostgreSQL upgrade for Schedora Meet video creates every table once with p
   assert.ok(statements.some(sql => /ALTER TABLE "credit_lots" ADD FOREIGN KEY \(workspace_id\) REFERENCES workspaces\(id\) ON DELETE CASCADE/.test(sql)));
 });
 
+test('PostgreSQL upgrade for Forms reliability adds columns idempotently and creates the handoff table', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { postgresUpgrade, FORMS_V5_COLUMNS, FORMS_V5_TABLES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const tables = template.all("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
+  template.close();
+  // New databases get the columns from the generated base schema; existing ones through IF NOT EXISTS.
+  for (const [table, column] of [['forms', 'draft_revision'], ['form_versions', 'routing'], ['responses', 'request_hash']]) {
+    assert.match(tables.find(item => item.name === table).sql, new RegExp(`\\b${column}\\b`));
+    assert.ok(FORMS_V5_COLUMNS.some(sql => sql.includes(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column}`)));
+  }
+  assert.ok(FORMS_V5_COLUMNS.every(sql => !/\bINTEGER\b/.test(sql)));
+  const statements = postgresUpgrade(tables.filter(table => FORMS_V5_TABLES.includes(table.name)), indexes.filter(index => FORMS_V5_TABLES.includes(index.tbl_name)));
+  assert.equal(statements.filter(sql => /^CREATE TABLE/.test(sql)).length, 1);
+  assert.ok(statements.every(sql => !/\bINTEGER\b|users_email_lower/.test(sql)));
+  assert.ok(statements.some(sql => /ALTER TABLE "form_handoffs" ADD FOREIGN KEY \(response_id\) REFERENCES responses\(id\) ON DELETE CASCADE/.test(sql)));
+});
+
 test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const { reconcileWallet } = await import('../src/video/credits.mjs');
   const config = loadConfig();
@@ -87,6 +106,34 @@ test('PostgreSQL: video admissions, credit reservations and the ledger stay cons
     assert.equal(results.filter(result => result.status === 200).length, 5);
     assert.deepEqual(reconcileWallet(env.app, ws.id), []);
     assert.throws(() => db.run('UPDATE credit_ledger SET units = 0'), /credit_ledger_immutable/);
+  } finally {
+    if (env) await env.close();
+    db.exec('DROP SCHEMA "' + schemaName + '" CASCADE');
+    db.close();
+  }
+});
+
+test('PostgreSQL: Forms quota boundary and submission retries under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
+  const { QUOTAS } = await import('../src/billing/plans.mjs');
+  const config = loadConfig();
+  const schemaName = 'schedora_test_' + randomUUID().replaceAll('-', '');
+  const db = openPostgres(config.databaseUrl, { ca: config.databaseCa, schemaName });
+  let env;
+  try {
+    env = await setup({ db, config: { billingMode: 'enforced' } });
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'Owner');
+    await owner.post(`/api/workspaces/${ws.id}/billing/test-events`, { action: 'checkout', plan: 'forms' });
+    const form = (await owner.post(`/api/workspaces/${ws.id}/forms`, {})).body;
+    await owner.post(`/api/workspaces/${ws.id}/forms/${form.id}/publish`);
+    const submit = id => env.client().post(`/api/public/forms/${form.slug}/responses`, { answers: { name: 'P', email: 'p@example.com', topic: 'support' }, submission_id: id });
+    assert.equal((await submit('pg-forms-seed-000001')).status, 201);
+    db.run("UPDATE usage_counters SET count = ? WHERE metric = 'responses'", QUOTAS.responses.monthly - 3);
+    const results = await Promise.all(Array.from({ length: 8 }, (_, index) => submit(`pg-forms-burst-${String(index % 5).padStart(6, '0')}`)));
+    assert.equal(new Set(results.filter(result => result.status === 201 || result.status === 200).map(result => result.body.id)).size, 3, 'three distinct responses, duplicates replayed');
+    assert.equal(db.get('SELECT COUNT(*) AS count FROM responses').count, 4);
+    assert.equal(db.get("SELECT count FROM usage_counters WHERE metric = 'responses'").count, QUOTAS.responses.monthly);
+    assert.equal(db.get('SELECT COUNT(*) AS count FROM outbox').count, 4);
   } finally {
     if (env) await env.close();
     db.exec('DROP SCHEMA "' + schemaName + '" CASCADE');

@@ -13,6 +13,7 @@ import { AUTO_VIDEO, hostsFor, hydrate, locationDisplay, scheduleFor } from './e
 import { bookingIcs } from './ics.mjs';
 import { cancelScheduledWorkflows, runWorkflows } from './workflows.mjs';
 import { bookingJoinUrl, bookingJoinWindow, ensureBookingVideo, isNativeVideo, meetingHostUrl, revokeBookingVideo } from '../video/rooms.mjs';
+import { claimHandoff, completeHandoff } from '../forms/service.mjs';
 
 const DAY = 86400000;
 const MINUTE = 60000;
@@ -343,14 +344,19 @@ export function createBooking(app, eventType, body, idempotencyKey, options = {}
       const existing = app.db.get('SELECT * FROM bookings WHERE event_type_id = ? AND idempotency_key = ?', eventType.id, idempotencyKey);
       if (existing) {
         if (existing.request_hash !== requestHash) fail(409, 'idempotency_conflict', 'This request key was already used for a different booking.');
-        return { booking: existing, token: null, replay: true };
+        const handoff = app.db.get('SELECT id FROM form_handoffs WHERE booking_id = ? AND status = ?', existing.id, 'booked');
+        return { booking: existing, token: null, replay: true, handoff_linked: Boolean(handoff) };
       }
       requireEntitlement(app, eventType.workspace_id, 'meet');
       if (eventType.price_cents && !options.override && !app.payments.available(eventType.workspace_id, eventType.currency)) fail(409, 'payments_unavailable', 'Online payment is not available for this event and currency. Contact the host.');
+      // A form handoff is linked in the same transaction, so a response shows as booked only when
+      // this booking is committed.
+      const handoff = body.handoff !== undefined ? claimHandoff(app, body.handoff, eventType.id) : null;
       consumeQuota(app, eventType.workspace_id, 'bookings');
       const { booking, token } = claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, ...options, payment: options.override ? { status: eventType.price_cents ? 'pending' : 'none' } : null });
+      if (handoff) completeHandoff(app, handoff, booking.id);
       if (booking.status === 'confirmed') onConfirmed(app, booking, eventType, token, 'created');
-      return { booking, token, replay: false };
+      return { booking, token, replay: false, handoff_linked: Boolean(handoff) };
     });
   } finally {
     app.nudge?.();

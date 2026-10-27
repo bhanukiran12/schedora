@@ -84,6 +84,7 @@ test('draft, publish versions, public submission and authorized CSV export', asy
     assert.equal((await env.client().get(`/api/workspaces/${ws.id}/forms/${created.id}/responses.csv`)).status, 401);
 
     await owner.post(`/api/workspaces/${ws.id}/forms/${created.id}/unpublish`);
-    assert.equal((await submit({ answers: { name: 'Late', kind: 'home', contact: 'l@example.com' } })).status, 404);
+    const late = await submit({ answers: { name: 'Late', kind: 'home', contact: 'l@example.com' } });
+    assert.deepEqual([late.status, late.body.error.code], [410, 'form_closed'], 'a closed form says so; a never-published draft stays 404');
   } finally { await env.close(); }
 });

@@ -16,8 +16,8 @@ Every private API route resolves the caller's membership of the workspace in the
 | Manage own event types, bookings, calendar | ✓ | ✓ | ✓ | Members see only event types and bookings they host |
 | Manage everyone's event types and bookings | ✓ | ✓ | | Including assigning another member as host |
 | Create, edit, publish forms | ✓ | ✓ | ✓ | |
-| View and export responses | ✓ | ✓ | ✓ | |
-| Delete responses | ✓ | ✓ | | |
+| View and export responses | ✓ | ✓ | ✓ | Checked when the export runs; a removed member's next request fails |
+| Delete responses | ✓ | ✓ | | Does not restore the monthly allowance or cancel a booking made from the response |
 | View flows and run history | ✓ | ✓ | ✓ | |
 | Create, edit, enable, pause, retry flows | ✓ | ✓ | | |
 | View and complete tasks | ✓ | ✓ | ✓ | |
@@ -43,7 +43,8 @@ Every private API route resolves the caller's membership of the workspace in the
 | Book | Same, plus an `Idempotency-Key` header and server-side revalidation of the slot |
 | View, cancel, reschedule, download .ics | Manage token from the confirmation (stored only as a SHA-256 hash; expires when the appointment starts) |
 | Join a Schedora Meet video meeting | Attendance link (`/meet/join/…`): separate from the manage token, one per booking (seats = invitee + guests) or a host-created guest link; only its SHA-256 is stored. Works from the join window to the room's end; stops on cancellation, rescheduling, host removal or meeting end. Shows no booking personal data |
-| View and submit a form | Published form version, active Forms entitlement |
+| View and submit a form | Published form version, active Forms entitlement and remaining monthly response allowance. A respondent may submit the version they opened for 24 hours after it is replaced; a retry with the same submission id returns the original acceptance |
+| Continue from a form response to booking | Handoff token from the receipt (only its SHA-256 is stored; expires 2 hours after the response; one booking per response). Returns only the name, email and answers to the booking page's own questions; after booking, only that a booking exists |
 | Billing webhook | Valid HMAC signature within 5 minutes |
 
 Rate limits (per client address, per minute): global 600, sign-in 10, sign-up 10 per hour, booking 20, manage 20–60, form submission 30, slot lookups 120.

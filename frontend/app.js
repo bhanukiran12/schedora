@@ -8,6 +8,7 @@ import * as account from './js/account.mjs';
 import * as video from './js/meet-video.mjs';
 import { loadStartupConfig } from './js/connection.mjs';
 import { productLanding } from './js/product-landing.mjs';
+import { pricingProposal } from './js/pricing-proposal-page.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
 const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
 
@@ -37,6 +38,7 @@ const routes = [
   [new RegExp(`^/flow/(new|${UUID.slice(1, -1)})$`), flow.editor],
   [/^\/account$/, account.account],
   [/^\/billing$/, account.billing],
+  [/^\/pricing\/proposal$/, pricingProposal],
   [/^\/privacy$/, pages.privacy],
   [/^\/terms$/, pages.terms]
 ];
@@ -133,6 +135,7 @@ export function navigate(path, { replace = false } = {}) {
 
 export async function render() {
   const token = ++renderToken;
+  document.head.querySelectorAll('[data-page-meta]').forEach(element => element.remove()); // per-page tags such as noindex
   video.leaveMeeting(); // releases camera, microphone and the connection before any other view renders
   const main = $('#main');
   const query = new URLSearchParams(location.search);
@@ -148,7 +151,7 @@ export async function render() {
     if (match) { view = handler; params = match.slice(1); break; }
   }
   const ctx = { main, params, query, path: currentPath, alive: () => token === renderToken, navigate, render, lockup };
-  if (boot.offline && !['workspace', 'onboarding', 'marketing'].includes(document.body.dataset.design) && !currentPath.startsWith('/products/')) mount(main, html`<div class="container page"><h1>Schedora is temporarily unavailable</h1><div class="notice notice-bad" role="alert"><p>The service may be starting up or temporarily unavailable. Please try again. No booking has been submitted.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
+  if (boot.offline && !['workspace', 'onboarding', 'marketing'].includes(document.body.dataset.design) && !currentPath.startsWith('/products/')) mount(main, html`<div class="container page"><h1>We can't reach ${product === 'suite' ? 'Schedora' : PRODUCTS[product].name} right now</h1><div class="notice notice-bad" role="alert"><p>The service did not respond. It may be starting up, or there may be a connection problem. Nothing has been submitted from this page. Please try again in a moment.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
   else try {
     await view(ctx);
   } catch (error) {

@@ -2,7 +2,8 @@
 // DevTools protocol against a fresh in-process server and database.
 // Checks every page for runtime errors and horizontal overflow at 320/375/768/1280 px in light
 // and dark themes, then runs the core journeys: sign up, publish an event type, book, manage,
-// build/publish/submit a form (both presentations), create a flow, and billing.
+// build/publish/submit a form (both presentations, save conflicts, lost replies, Meet handoff),
+// create a flow, and billing.
 // Usage: CHROME_PATH=<browser executable> npm run browser-check [-- --screenshots <dir>]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
@@ -171,16 +172,141 @@ try {
     await open('/meet?tab=emails', "document.querySelector('table')");
     await layoutCheck('email delivery');
   });
+  await step('Meet readiness: saved-state summary, unsaved edits, fix links; preview and copy change nothing', async () => {
+    const typeId = app.db.get("SELECT id FROM event_types WHERE slug = 'intro-call'").id;
+    const hostApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.status === 204 ? null : r.json(); })()`);
+    const sideEffects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM meetings) AS meetings, (SELECT published FROM event_types WHERE id = ?) AS published', typeId));
+    const areaText = key => evaluate(`document.querySelector('#ready-${key}').closest('section').innerText`);
+    const ready = "document.querySelector('#readiness .readiness-areas')";
+
+    await open('/meet/event-types/' + typeId, ready);
+    const titles = await evaluate("[...document.querySelectorAll('.readiness-area h3')].map(h => h.textContent.replace(/\\s+/g, ' ').trim())");
+    if (titles.length !== 4 || !['Event details', 'Availability', 'Calendar and conflicts', 'Sharing'].every((title, index) => titles[index].includes(title))) throw new Error('unexpected areas: ' + titles.join('|'));
+    const summary = await evaluate("document.querySelector('#readiness').innerText");
+    if (/\d\s*%/.test(summary)) throw new Error('readiness shows a percentage');
+    if (!(await areaText('availability')).includes('open start time')) throw new Error('slot check missing');
+    if (!(await areaText('calendar')).includes('Needs attention · Optional') || await evaluate("document.querySelector('#ready-calendar').closest('section').dataset.blocking") !== 'false') throw new Error('an optional calendar is not shown as optional');
+    if (!(await areaText('details')).includes('Needs attention · Optional: No location is set')) throw new Error('missing location not flagged');
+    await layoutCheck('meet readiness (published)');
+
+    // Unsaved edits are named, and the summary keeps describing the saved title.
+    await fill('#title', 'Intro call (edited, not saved)');
+    await waitFor("document.querySelector('#readiness-unsaved .notice')", 'unsaved notice');
+    if ((await areaText('details')).includes('edited, not saved')) throw new Error('summary shows unsaved values');
+    // A fix link moves focus to the matching editor section.
+    await evaluate("document.querySelector('#readiness [data-goto=\"details\"]').click()");
+    if (!(await evaluate("document.activeElement === document.querySelector('#section-details h2')"))) throw new Error('fix link did not focus the Details section');
+    await evaluate("delete document.body.dataset.dirty");
+
+    // A draft: required blocker pointing to Visibility, no Copy, Preview separate and harmless.
+    await hostApi('PATCH', `/event-types/${typeId}`, { published: false });
+    await open('/meet/event-types/' + typeId, ready);
+    const sharing = await areaText('sharing');
+    if (!sharing.includes('Needs attention · Required: Not published')) throw new Error('draft not flagged as a required blocker: ' + sharing);
+    if (await evaluate("Boolean(document.querySelector('#copy-share'))")) throw new Error('copy offered for an unpublished link');
+    await evaluate("document.querySelector('#readiness [data-goto=\"visibility\"]').click()");
+    if (!(await evaluate("document.activeElement === document.querySelector('#section-visibility h2') && !document.querySelector('[name=published]').checked"))) throw new Error('Visibility fix link wrong or publish pre-ticked');
+    const before = sideEffects();
+    const preview = await evaluate("(() => { const a = [...document.querySelectorAll('#readiness .share-row a')].find(link => link.textContent.includes('Preview')); return [a.getAttribute('href'), a.target, a.rel]; })()");
+    if (!preview[0].endsWith(`/meet/${workspaceSlug}/intro-call`) || preview[1] !== '_blank' || !preview[2].includes('noopener')) throw new Error('preview link wrong: ' + preview);
+    const previewPage = await fetch(base + `/api/public/meet/${workspaceSlug}/intro-call`);
+    if (previewPage.status !== 404) throw new Error('an anonymous visitor can see the draft');
+    if (sideEffects() !== before) throw new Error('preview changed data');
+    await layoutCheck('meet readiness (draft)');
+
+    // Published again: Copy reports its outcome and changes nothing.
+    await hostApi('PATCH', `/event-types/${typeId}`, { published: true });
+    await open('/meet/event-types/' + typeId, ready);
+    try { await send('Browser.grantPermissions', { permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'], origin: base }); } catch { /* the failure message is checked instead */ }
+    const published = sideEffects();
+    await click('#copy-share');
+    await waitFor("document.querySelector('#copy-status').textContent.length > 0", 'copy feedback');
+    const copied = await evaluate("document.querySelector('#copy-status').textContent");
+    if (!/^(Link copied\. This does not test booking, email or video\.|Copy failed\. The link is selected)/.test(copied)) throw new Error('unexpected copy feedback: ' + copied);
+    await click('#readiness-heading + [data-recheck]');
+    await waitFor("document.querySelector('#readiness-status').textContent.length > 0 && document.querySelector('#readiness .readiness-areas')", 'recheck announcement');
+    if (sideEffects() !== published) throw new Error('copy or recheck changed data');
+
+    // Native video selected while the server's feature gate is off is a required blocker.
+    const video = await hostApi('POST', '/event-types', { title: 'Video consult', timezone: 'Asia/Kolkata', published: true, min_notice_min: 0, locations: [{ type: 'schedora_meet' }] });
+    app.config.video.enabled = false;
+    try {
+      await open('/meet/event-types/' + video.id, ready);
+      if (!(await areaText('details')).includes('Needs attention · Required: Schedora Meet built-in video is selected, but built-in video is turned off on this server')) throw new Error('video gate not reported');
+    } finally { app.config.video.enabled = true; }
+    await open('/meet/event-types/' + video.id, ready);
+    if (!(await areaText('details')).includes('Not verified · Unknown: Schedora Meet built-in video is selected and switched on')) throw new Error('enabled video shown as more than selected');
+    await hostApi('DELETE', `/event-types/${video.id}`);
+  });
   let formSlug;
-  await step('build and publish form', async () => {
-    await open('/forms', "document.querySelector('#new-form')");
+  let formId;
+  const responseCount = () => app.db.get('SELECT COUNT(*) AS count FROM responses').count;
+  const focused = selector => evaluate(`Boolean(document.activeElement?.matches(${JSON.stringify(selector)}))`);
+  await step('Forms templates: goal starting points create unpublished drafts', async () => {
+    // With no forms yet, the starting points are shown directly; nothing is created by viewing them.
+    await open('/forms', "document.querySelector('#form-templates:not([hidden]) [data-template]')");
+    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 5) throw new Error('expected blank plus four goal templates');
+    await layoutCheck('Forms starting points');
     await click('#new-form');
+    if (!(await evaluate("document.querySelector('#form-templates').hidden && document.querySelector('#new-form').getAttribute('aria-expanded') === 'false'"))) throw new Error('Create form does not toggle the picker');
+    await click('#new-form');
+    if (!(await evaluate("document.activeElement.id === 'templates-heading'"))) throw new Error('opening the picker does not move focus to it');
+    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 0) throw new Error('viewing templates created a form');
+    await click('[data-template="consultation"]');
+    await waitFor("document.querySelector('#publish') && document.querySelector('#builder-notice').innerText.includes('Draft created from the “Consultation request” template')", 'builder with template notice');
+    if (!(await evaluate("document.querySelector('#builder-status').innerText.includes('Not published') && document.querySelector('#f-title').value === 'Consultation request'"))) throw new Error('template draft is not shown as unpublished');
+    const created = app.db.get("SELECT published_version FROM forms WHERE draft LIKE '%Consultation request%'");
+    if (!created || created.published_version !== null || app.db.get('SELECT COUNT(*) AS count FROM form_versions').count !== 0) throw new Error('choosing a template published something');
+    await layoutCheck('Forms builder from template');
+  });
+  await step('build and publish form', async () => {
+    await open('/forms', "document.querySelector('#new-form') && document.querySelector('#form-list .list')");
+    await click('#new-form');
+    await click('[data-template="blank"]');
     await waitFor("document.querySelector('#publish') && document.querySelector('#preview form')", 'builder');
+    formId = await evaluate("location.pathname.split('/')[2]");
     await layoutCheck('form builder');
+    if (!(await text()).includes('All changes saved')) throw new Error('initial save state missing');
     await fill('#f-title', 'Project intake');
+    if (!(await text()).includes('Unsaved changes')) throw new Error('unsaved state missing');
     await click('#publish');
     await waitFor("document.querySelector('#share-link')", 'published share link');
+    await waitFor("document.querySelector('#builder-status').innerText.includes('Live · version 1') && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'live and saved status');
     formSlug = (await evaluate("document.querySelector('#share-link').value")).split('/f/')[1];
+  });
+  await step('form builder: preview stores nothing, keyboard reorder keeps focus', async () => {
+    const before = responseCount();
+    await fill('#preview #q-name', 'Preview person'); await fill('#preview #q-email', 'preview@example.com');
+    await evaluate("const o = document.querySelector('#preview [name=topic][value=support]'); o.checked = true; o.dispatchEvent(new Event('change', { bubbles: true }))");
+    await click('#preview [type="submit"]');
+    await waitFor("document.querySelector('#preview').innerText.includes('Preview complete')", 'preview complete');
+    if (responseCount() !== before || app.db.get('SELECT COUNT(*) AS count FROM outbox WHERE type = ?', 'forms.response.created').count !== before) throw new Error('preview created a response or event');
+    await click('[data-index="0"] [data-move="1"]');
+    if (!(await focused('[data-index="1"] [data-move="1"]'))) throw new Error('focus lost after moving down');
+    await waitFor("document.querySelector('#builder-live').innerText.includes('position 2')", 'move announced');
+    await click('[data-index="1"] [data-move="-1"]');
+    if (!(await focused('[data-index="0"] [data-move="1"]'))) throw new Error('focus lost after moving to the top');
+    await click('#save');
+    await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'saved after reorder');
+  });
+  await step('form builder: one panel at a time on mobile', async () => {
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+    const shown = () => evaluate("[getComputedStyle(document.querySelector('.builder-edit')).display, getComputedStyle(document.querySelector('.builder-preview')).display].join()");
+    if ((await shown()) !== 'block,none') throw new Error('edit panel only expected, got ' + await shown());
+    await click('.mobile-switch [data-view="preview"]');
+    if ((await shown()) !== 'none,block') throw new Error('preview panel only expected, got ' + await shown());
+    await click('.mobile-switch [data-view="edit"]');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  });
+  await step('form builder: a conflicting save is not silent', async () => {
+    app.db.run("UPDATE forms SET draft = replace(draft, 'Project intake', 'Edited elsewhere'), draft_revision = draft_revision + 1 WHERE id = ?", formId);
+    await fill('#f-title', 'My local title');
+    await click('#save');
+    await waitFor("document.querySelector('#conflict-load')", 'conflict choice');
+    if (!(await text()).includes('Not saved: changed elsewhere')) throw new Error('conflict state missing');
+    if ((await evaluate("document.querySelector('#f-title').value")) !== 'My local title') throw new Error('local edits lost');
+    await click('#conflict-load');
+    await waitFor("document.querySelector('#f-title').value === 'Edited elsewhere' && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'latest loaded');
   });
   for (const mode of ['classic', 'conversational']) {
     await step(`submit form (${mode})`, async () => {
@@ -189,6 +315,8 @@ try {
       const answer = async (selector, value) => { await fill(selector, value); if (mode === 'conversational') await click('#form-root [type="submit"]'); };
       await click('#form-root [type="submit"]'); // empty submit must show an error, not advance
       await waitFor("document.querySelector('#form-root .field-error')", 'required error');
+      if (mode === 'classic' && !(await focused('[data-error-summary]'))) throw new Error('error summary not focused');
+      if (mode === 'conversational' && !(await focused('[aria-invalid="true"]'))) throw new Error('invalid field not focused');
       await answer('#q-name', 'Mia');
       await waitFor("document.querySelector('#q-email')", 'email question');
       const piped = await evaluate("document.querySelector('label[for=q-email]').innerText");
@@ -199,17 +327,109 @@ try {
       if (mode === 'conversational') await click('#form-root [type="submit"]');
       await waitFor("document.querySelector('#q-details')", 'conditional question');
       await fill('#q-details', 'A garden redesign');
+      const before = responseCount();
+      if (mode === 'classic') {
+        // The server accepts the response but the reply is lost: the page must not claim either outcome.
+        await evaluate("(() => { const original = window.fetch; let once = true; window.fetch = async (...args) => { const response = await original(...args); if (once && String(args[0]).endsWith('/responses')) { once = false; throw new TypeError('Failed to fetch'); } return response; }; })()");
+        await click('#form-root [type="submit"]');
+        await waitFor("document.body.innerText.includes('could not confirm that your response was received')", 'unknown outcome message');
+        if (await evaluate("document.body.innerText.includes('Response received')")) throw new Error('receipt shown without confirmation');
+        if ((await evaluate("document.querySelector('#q-details').value")) !== 'A garden redesign') throw new Error('answers lost after network failure');
+        await layoutCheck('public form retry');
+      }
       await click('#form-root [type="submit"]');
-      await waitFor("document.body.innerText.includes('Thank you')", 'thank-you');
+      await waitFor("document.body.innerText.includes('Response received') && document.body.innerText.includes('Receipt')", 'receipt');
+      if (responseCount() !== before + 1) throw new Error(`expected exactly one new response, got ${responseCount() - before}`);
+      await layoutCheck(`form receipt ${mode}`);
     });
   }
-  await step('responses inbox and CSV', async () => {
+  await step('responses inbox, detail and CSV', async () => {
     await open('/forms', "document.querySelector('.list')");
     await evaluate("[...document.querySelectorAll('a')].find(a => a.textContent === 'Responses').click()");
     await waitFor("document.querySelector('table')", 'responses table');
     await layoutCheck('responses');
-    const csv = await evaluate("fetch(document.querySelector('a[download]').href).then(r => r.text())");
-    if (!csv.includes('A garden redesign')) throw new Error('CSV missing answer');
+    await click('[data-view-response]');
+    await waitFor("document.querySelector('#detail-title')", 'response detail');
+    if (!(await focused('#detail-title'))) throw new Error('detail heading not focused');
+    if (!(await text()).includes('Answered version')) throw new Error('version missing from detail');
+    await layoutCheck('response detail');
+    await click('#export');
+    await waitFor("document.querySelector('#export-status').innerText.includes('Export downloaded')", 'export status');
+    const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${formId}/responses.csv')).then(r => r.text())`);
+    if (!csv.includes('A garden redesign') || !csv.includes('"Form version"')) throw new Error('CSV missing answer or version column');
+  });
+  await step('route a response to Meet and book through the handoff', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('#routing details')");
+    await evaluate("document.querySelector('#routing details').open = true");
+    await click('#add-rule');
+    await waitFor("document.querySelector('[data-rop=\"0\"]')", 'rule row');
+    await evaluate("const s = document.querySelector('[data-rop=\"0\"]'); s.value = 'answered'; s.dispatchEvent(new Event('change', { bubbles: true }))");
+    await waitFor("document.querySelector('[data-aevent=\"0\"]') && !document.querySelector('[data-rvalue=\"0\"]')", 'booking destination');
+    await layoutCheck('form routing');
+    await click('#save-routing');
+    await waitFor("document.querySelector('#builder-status').innerText.includes('not yet published')", 'routing saved as draft');
+    await click('#publish');
+    await waitFor("document.querySelector('dialog button[value=ok]')", 'republish confirmation');
+    await click('dialog button[value=ok]');
+    await waitFor("document.querySelector('#builder-notice').innerText.includes('Version 2 is live')", 'version 2 live');
+    await open(`/f/${formSlug}`, "document.querySelector('#form-root form')");
+    await fill('#q-name', 'Lena'); await fill('#q-email', 'lena@example.com');
+    await evaluate("const o = document.querySelector('[name=topic][value=support]'); o.checked = true; o.dispatchEvent(new Event('change', { bubbles: true }))");
+    await click('#form-root [type="submit"]');
+    await waitFor("document.body.innerText.includes('Response received — choose a time') && document.querySelector('#choose-time')", 'receipt with booking offer');
+    const handoffUrl = await evaluate("document.querySelector('#choose-time').getAttribute('href')");
+    if (await evaluate("document.querySelector('#choose-time').getAttribute('href').includes('lena')")) throw new Error('personal data in booking link');
+    await layoutCheck('form receipt with booking');
+    await click('#choose-time');
+    await waitFor(`location.pathname === '/meet/${workspaceSlug}/${eventSlug}' && document.querySelector('.day[data-available]')`, 'booking page');
+    if (await evaluate("location.search.includes('handoff')")) throw new Error('handoff token left in the address bar');
+    if (!(await text()).includes('Your form response was received')) throw new Error('handoff notice missing');
+    if ((await text()).includes('You are scheduled')) throw new Error('booking shown before booking');
+    await click('.day[data-available]');
+    await click('.slot');
+    await waitFor("document.querySelector('#invitee-form')", 'details form');
+    if ((await evaluate("document.querySelector('#name').value + '|' + document.querySelector('#email').value")) !== 'Lena|lena@example.com') throw new Error('details not pre-filled');
+    await click('#invitee-form [type="submit"]');
+    await waitFor("document.body.innerText.includes('You are scheduled')", 'booking confirmation');
+    await open(`/forms/${formId}/responses`, "document.querySelector('table')");
+    if (!(await text()).includes('Booking confirmed')) throw new Error('inbox does not show the booking');
+    await open(handoffUrl, "document.body.innerText.includes('Booking link unavailable')");
+    if (await evaluate("Boolean(document.querySelector('.day[data-available], #invitee-form'))")) throw new Error('used handoff still offers booking');
+    if (!(await text()).includes('already booked')) throw new Error('used handoff recovery missing');
+    await layoutCheck('used handoff');
+    await open(`/meet/${workspaceSlug}/${eventSlug}?handoff=invalid-token-000000000000`, "document.body.innerText.includes('Booking link unavailable')");
+    if (await evaluate("Boolean(document.querySelector('.day[data-available], #invitee-form'))")) throw new Error('invalid handoff still offers booking');
+    await layoutCheck('invalid handoff');
+  });
+  await step('Flow starters: real draft contracts, no silent enable, replace confirmation and outcome preview', async () => {
+    // Empty Flows list offers the starters; opening one creates nothing.
+    await open('/flow', "document.querySelector('.flow-starter-links')");
+    if ((await evaluate("document.querySelectorAll('.flow-starter-links a').length")) !== 3) throw new Error('empty state does not offer the three starters');
+    await layoutCheck('Flow empty state with starters');
+    await click('.flow-starter-links a[href$="starter=prepare-call"]');
+    await waitFor("document.querySelector('[data-starter=\\'prepare-call\\'][aria-pressed=true]') && document.querySelector('#name').value === 'Prepare for a booked call'", 'starter opened from list');
+    if (app.db.get('SELECT COUNT(*) AS count FROM flows').count !== 0) throw new Error('opening a starter saved a flow');
+    if (!(await evaluate("document.querySelector('#flow-outcome').innerText.includes('When an appointment is booked for any event type, create a task titled') && document.querySelector('#flow-outcome').innerText.includes('Not saved yet')"))) throw new Error('summary does not describe the starter');
+    if (!(await text()).includes('Save the draft to simulate it')) throw new Error('unsaved draft does not explain simulation');
+    await fill('#task-title', 'Call prep: {{invitee.name}}');
+    if (!(await evaluate("document.querySelector('#flow-outcome').innerText.includes('“Call prep: {{invitee.name}}”')"))) throw new Error('summary does not follow edits');
+    if (!(await evaluate('document.body.dataset.dirty === "1"'))) throw new Error('editing a starter is not tracked as unsaved');
+    await evaluate('delete document.body.dataset.dirty'); // the test discards this draft deliberately
+    await open('/flow/new', "document.querySelectorAll('[data-starter]').length === 3");
+    await click('[data-starter="notify-host"]');
+    if (!(await evaluate("document.querySelector('#to').value === 'host' && document.querySelector('#status').value === 'draft' && document.querySelector('#flow-outcome').innerText.includes('email the host') && document.querySelector('#flow-outcome').innerText.includes('local outbox') && !/delivered to an inbox\\./.test(document.querySelector('#flow-outcome').innerText.replace('It is not delivered to an inbox.', '')) && document.activeElement.id === 'name'"))) throw new Error('host email starter does not preserve draft/delivery truth');
+    await click('[data-starter="review-intake"]');
+    await waitFor("document.querySelector('dialog[open]')", 'replace unsaved starter confirmation');
+    await click('dialog[open] button[value=ok]');
+    await waitFor("document.querySelector('#trigger_type').value === 'forms.response.created' && document.querySelector('[name=action_type]:checked').value === 'task' && document.querySelector('#status').value === 'draft'", 'intake starter contract');
+    await layoutCheck('Flow starter draft');
+    await fill('#status', 'paused');
+    if (!(await text()).includes('It is paused: new events are held and run when you resume it.')) throw new Error('outcome preview does not explain paused behaviour');
+    await fill('#status', 'draft');
+    await click('#flow-form [type=submit]');
+    await waitFor("/^\\/flow\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#simulate')", 'saved starter draft');
+    const saved = app.db.get("SELECT trigger_type, action_type, status FROM flows WHERE name = 'Review a new enquiry'");
+    if (saved?.trigger_type !== 'forms.response.created' || saved.action_type !== 'task' || saved.status !== 'draft') throw new Error('starter did not persist as the supported draft');
   });
   await step('create and enable flow', async () => {
     await open('/flow/new', "document.querySelector('#flow-form')");
@@ -231,13 +451,66 @@ try {
     await open('/flow/tasks', "document.querySelector('.list, .empty')");
     if (!(await text()).includes('Prepare for Lee')) throw new Error('task not created');
     await open('/flow/runs', "document.querySelector('table')");
+    if (!(await text()).includes('Task created') || !(await evaluate("Boolean(document.querySelector('#panel a[href=\\'/flow/tasks\\']'))"))) throw new Error('run does not link to the created task');
+    if (/delivered/i.test((await text()).replace(/not delivered|delivery is not tracked/gi, ''))) throw new Error('run history claims delivery');
     await layoutCheck('flow runs');
+  });
+  await step('enquiry trail: response → booking offer → follow-up task, from real local records', async () => {
+    // An enabled response flow creates a review task; the routed form offers a booking.
+    const created = await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + '/flows', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify({ name: 'Review enquiry', trigger_type: 'forms.response.created', trigger_source: ${JSON.stringify(formId)}, action_type: 'task', action_config: { title: 'Review {{form.title}}', details: '' }, status: 'enabled' }) }); return r.status; })()`);
+    if (created !== 201) throw new Error('could not enable the review flow: ' + created);
+    const submitted = await fetch(`${base}/api/public/forms/${formSlug}/responses`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: { name: 'Nia', email: 'nia@example.com', topic: 'support' }, submission_id: 'trail-check-000000001' }) });
+    if (submitted.status !== 201) throw new Error('response not accepted: ' + submitted.status);
+    await waitFor('true', 'tick'); await new Promise(resolve => setTimeout(resolve, 2000));
+    if (!app.db.get("SELECT 1 FROM tasks WHERE title LIKE 'Review %' AND status = 'open'")) throw new Error('worker did not create the review task');
+    await open(`/forms/${formId}/responses`, "document.querySelector('[data-filter=attention]:not([aria-disabled])')");
+    const label = await evaluate("document.querySelector('[data-filter=attention]').textContent");
+    if (!/Needs attention \(1\)/.test(label)) throw new Error('unexpected attention count: ' + label);
+    await click('[data-filter="attention"]');
+    await waitFor("document.querySelectorAll('#responses tbody tr').length === 1 && document.querySelector('#responses tbody').innerText.includes('Nia') && document.querySelector('.attention-note').innerText.includes('Open task (Review enquiry)')", 'filtered to the open task');
+    if (!(await focused('[data-filter="attention"]'))) throw new Error('filter lost focus');
+    await click('[data-view-response]');
+    await waitFor("document.querySelector('.trail')", 'trail in detail');
+    const trail = await evaluate("document.querySelector('.trail').innerText");
+    for (const expected of ['Response received', 'Booking offered, not booked yet', 'Review enquiry', 'Task open: Review']) if (!trail.includes(expected)) throw new Error('trail missing: ' + expected + ' in ' + trail);
+    if (/Booking confirmed/.test(trail)) throw new Error('trail claims a booking that was not made');
+    await layoutCheck('responses with enquiry trail');
+    // Completing the task resolves the attention item; the booking offer stays "waiting".
+    const task = app.db.get("SELECT id FROM tasks WHERE title LIKE 'Review %' AND status = 'open'");
+    await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); await fetch('/api/workspaces/' + me.workspaces[0].id + '/tasks/${task.id}', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify({ status: 'done' }) }); })()`);
+    await open(`/forms/${formId}/responses`, "document.querySelector('[data-filter=attention]:not([aria-disabled])')");
+    if (!/Needs attention \(0\)/.test(await evaluate("document.querySelector('[data-filter=attention]').textContent"))) throw new Error('completed task still needs attention');
   });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");
     await layoutCheck('billing');
     await click('[data-action="checkout"][data-plan="suite"]');
     await waitFor("document.body.innerText.includes('Suite plan')", 'subscription listed');
+  });
+  await step('proposed pricing prototype: labelled, not purchasable, exact annual totals, honest limits', async () => {
+    await open('/pricing/proposal', "document.querySelector('.proposal-plans .proposal-plan')");
+    const order = await evaluate("[document.querySelector('.proposal-label')?.textContent, document.querySelector('.proposal-banner').compareDocumentPosition(document.querySelector('#main h1')) & Node.DOCUMENT_POSITION_FOLLOWING]");
+    if (order[0] !== 'Proposed pricing — not available for purchase' || !order[1]) throw new Error('proposal label missing or not shown first');
+    if (!(await evaluate("document.head.querySelector('meta[name=robots][content=noindex]') !== null"))) throw new Error('proposal page is indexable');
+    if (await evaluate("Boolean(document.querySelector('#main [data-action=checkout], #main form[action], #main a[href*=checkout]')) || [...document.querySelectorAll('#main button')].some(b => /buy|subscribe|checkout|upgrade/i.test(b.textContent))")) throw new Error('prototype offers a purchase control');
+    const prices = await evaluate("[...document.querySelectorAll('.proposal-plan')].map(card => card.querySelector('h2').textContent + ' ' + card.querySelector('.proposal-price').textContent.replace(/\\s+/g, ' ').trim())");
+    if (prices.join('|') !== 'Meet ₹399 per workspace, per month|Forms ₹499 per workspace, per month|Flow ₹699 per workspace, per month|Suite ₹1,199 per workspace, per month') throw new Error('unexpected monthly prices: ' + prices.join('|'));
+    await evaluate("const r = document.querySelector('[name=billing][value=annual]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }))");
+    const annual = await evaluate("document.querySelector('.proposal-plan.meet').innerText");
+    if (!annual.includes('₹3,990') || !annual.includes('paid once a year') || !annual.includes('₹332.50 a month')) throw new Error('annual view hides the full payment: ' + annual);
+    await fill('#est-responses', '-5');
+    await click('#estimate-form [type=submit]');
+    await waitFor("document.querySelector('#est-responses[aria-invalid=true]') && document.querySelector('#estimate-form .field-error')", 'invalid estimate rejected');
+    await fill('#est-responses', '1200');
+    await click('#estimate-form [type=submit]');
+    await waitFor("document.querySelector('#estimate-result').innerText.includes('200 would be refused')", 'estimate result');
+    const estimateText = await evaluate("document.querySelector('#estimate-result').innerText");
+    if (!estimateText.includes('₹4,990') || !/refused, not charged/.test(estimateText)) throw new Error('estimate does not explain cost and limit outcome: ' + estimateText);
+    if (await evaluate("performance.getEntriesByType('resource').some(entry => /\\/api\\/(billing|workspaces\\/[^/]+\\/billing)/.test(entry.name))")) throw new Error('prototype called the billing API');
+    await layoutCheck('proposed pricing');
+    await open('/billing', "document.querySelector('#main h1')");
+    if (await evaluate("Boolean(document.head.querySelector('meta[data-page-meta]'))")) throw new Error('noindex leaked to the next page');
+    if ((await text()).includes('₹399')) throw new Error('proposed prices appear on the live Plans page');
   });
   await step('account page and settings', async () => {
     await open('/account', "document.querySelector('#members .list') && document.querySelector('#brand-form')");

@@ -5,7 +5,7 @@ const products = {
   meet: {
     name: 'Meet', eyebrow: 'Appointments, without the back-and-forth',
     title: 'Make room for your next appointment.',
-    lead: 'Share your availability. Let people choose a time. Keep the details, reminders and changes in one place.',
+    lead: 'For consultations, discovery calls and recurring sessions: publish your availability, let the client choose a time and keep changes understandable.',
     features: [
       ['Your time, your availability', 'Set appointment durations, working hours and buffers. Share one booking link instead of exchanging messages.'],
       ['Keep calendars connected', 'Connect Google Calendar to check busy times and add Google Meet details to your appointments.'],
@@ -24,7 +24,7 @@ const products = {
       ['Keep questions relevant', 'Use conditional logic to show the questions that matter, with validation to help people submit complete answers.'],
       ['Put answers to work', 'Publish a link, embed your form on your website, review responses and export them when you need to.']
     ],
-    steps: ['Add your questions and choose a form style.', 'Publish your form and share or embed it.', 'Review responses and connect the next step with Flow.'],
+    steps: ['Add relevant questions and choose classic or conversational presentation.', 'Preview the questions and logic before publishing.', 'Review responses; optionally offer a Meet booking or add a Flow action.'],
     preview: ['What brings you here?', '01 / 03 · A little about you', 'I’d like to work together', 'I have a question', 'I’m exploring an idea'],
     question: 'Can I put a form on my website?', answer: 'Yes. Use the published form link or its embed option to collect responses from your own website.'
   },
@@ -39,7 +39,7 @@ const products = {
     ],
     steps: ['Choose the event that starts your flow.', 'Configure the email or task that follows.', 'Enable your flow and follow its run history.'],
     preview: ['Your follow-up, connected', 'A small flow for the next step.', 'New form response', 'Send a follow-up email', 'Review run history'],
-    question: 'How do I know whether a flow worked?', answer: 'Flow keeps a history of runs and their statuses, so you can review completed actions and investigate failures.'
+    question: 'How do I know whether a flow worked?', answer: 'Review run history for queued, completed or failed actions. A completed email action is separate from delivery: an outbox stores messages locally, while a connected email provider reports delivery separately.'
   }
 };
 
@@ -57,13 +57,13 @@ export function productLanding(ctx) {
   mount(ctx.main, html`<div class="container product-landing">
     <section class="landing-hero">
       <div><p class="landing-eyebrow">${product.eyebrow}</p>
-        <h1>${headline}</h1><p class="lead">${key === 'meet' ? 'Your availability. One booking link. More time for the conversation.' : key === 'forms' ? 'Ask what matters. Collect clear answers. Start the next step.' : 'Turn bookings and responses into follow-up. Let your work keep moving.'}</p>
+        <h1>${headline}</h1><p class="lead">${key === 'meet' ? 'For discovery calls, consultations and sessions: share availability, confirm the time and give clients a clear way to change it.' : key === 'forms' ? 'Collect the context for a useful next step. Choose a classic form or one question at a time to suit the task.' : 'Start with a booking or response. Create a task or queue an email, then check what actually happened.'}</p>
         <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="landing-text-link" href="#product-demo">See it in action →</a></div>
         <p class="muted landing-note">One Schedora account. Your own ${product.name} workspace.</p>
       </div>
       <figure class="product-image"><a href="/demo/${key}" aria-label="Explore the ${product.name} demo"><img src="/images/${key}-workspace.webp" width="926" height="1400" alt="${product.name} workspace preview showing ${key === 'meet' ? 'appointments, booking links and availability' : key === 'forms' ? 'forms and collected responses' : 'workflows and sample run history'}" fetchpriority="high"></a><figcaption>${product.name} workspace · Sample data <a href="/demo/${key}">Explore demo →</a></figcaption></figure>
     </section>
-    <section class="landing-section product-showcase" id="product-demo" aria-labelledby="showcase-title"><div class="row-between"><div><p class="landing-eyebrow">${product.name.toUpperCase()} IN ACTION · INTERACTIVE PREVIEW</p><h2 id="showcase-title">${key === 'meet' ? 'A booking page that makes time feel simple.' : key === 'forms' ? 'Make answering feel like a conversation.' : 'Watch an event become a useful next step.'}</h2></div><a class="btn" href="/demo/${key}">Explore the full workspace →</a></div><div id="product-showcase"></div></section>
+    <section class="landing-section product-showcase" id="product-demo" aria-labelledby="showcase-title"><div class="row-between"><div><p class="landing-eyebrow">${product.name.toUpperCase()} IN ACTION · INTERACTIVE PREVIEW</p><h2 id="showcase-title">${key === 'meet' ? 'A booking page that makes time feel simple.' : key === 'forms' ? 'Ask in the format that fits the task.' : 'Watch an event become a useful next step.'}</h2></div><a class="btn" href="/demo/${key}">Explore the full workspace →</a></div><div id="product-showcase"></div></section>
     <section class="landing-section" id="features"><p class="landing-eyebrow">Made for your everyday</p><h2>${key === 'meet' ? 'Your availability. Your booking experience.' : key === 'forms' ? 'Your questions. A better way to answer.' : 'Your trigger. Your next step, handled.'}</h2>
       <div class="landing-features">${product.features.map(([title, text]) => html`<article><h3>${title}</h3><p>${text}</p></article>`)}</div>
     </section>

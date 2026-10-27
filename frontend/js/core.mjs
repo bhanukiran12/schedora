@@ -39,21 +39,27 @@ export class ApiError extends Error {
 
 export const session = { user: null, csrf: null, workspaces: [], workspaceId: null };
 
-export async function api(method, path, body, headers = {}) {
+// Status 0 means the outcome is unknown: the request may or may not have reached the server.
+// Pass { timeout } to bound a write; callers must then treat a timeout as unknown, not as failure.
+export async function api(method, path, body, headers = {}, { timeout } = {}) {
   let response;
+  const limit = timeout ?? (method === 'GET' ? 25000 : null);
   try {
     response = await fetch(path, {
       method, credentials: 'same-origin',
-      ...(method === 'GET' ? { signal: AbortSignal.timeout(25000) } : {}),
+      ...(limit ? { signal: AbortSignal.timeout(limit) } : {}),
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(session.csrf ? { 'X-CSRF-Token': session.csrf } : {}), ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined
     });
-  } catch {
+  } catch (error) {
+    if (error?.name === 'TimeoutError') throw new ApiError(0, { code: 'timeout', message: 'Schedora did not answer in time. Check your connection and try again.' });
     throw new ApiError(0, { code: 'network', message: 'Could not reach Schedora. Check your connection and try again.' });
   }
   if (response.status === 204) return null;
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(response.status, data?.error);
+  // A bounded write whose answer could not be read has an unknown outcome.
+  if (timeout && data === null) throw new ApiError(0, { code: 'timeout', message: 'Schedora did not answer in time. Check your connection and try again.' });
   return data;
 }
 

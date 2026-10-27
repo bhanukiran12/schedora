@@ -1,0 +1,381 @@
+# Research-led implementation log
+
+Started 27 October 2026. This log turns the [suite strategy](SUITE_STRATEGY_2026_10_27.md), [feature priorities](FEATURE_PRIORITIES.md), [pricing proposal](PRICING_PROPOSAL.md) and [UX research plan](UX_RESEARCH_PLAN.md) into reviewable frontend slices. Each slice records the problem, the resulting behaviour, its evidence class and what still depends on backend work or research.
+
+**Evidence classes used below:**
+- **Local:** automated tests and headless-browser journeys on this machine.
+- **Mock:** fake providers and synthetic media.
+- **Real provider:** dated staging runs.
+- **Human:** a person's report on their own device.
+
+No customer interviews or experiments have been run; nothing here is a demand or conversion finding.
+
+## Baseline: what works, what is partial, what is a proposal
+
+| Area | State | Notes |
+| --- | --- | --- |
+| Meet event types, availability, booking, cancel/reschedule, appointment-date time zones, exact join times | Works (local); committed | Covered by unit tests and browser journeys |
+| Meet video room, prejoin, devices, recovery | Works locally; real LiveKit staging runs exist | Voice reported good by the user on a physical retest. Sharpness and physical-network recovery are still unverified. Production video and recharge stay disabled |
+| Forms draft/publish/versions, conflict handling, receipts, CSV, Meet handoff | Works locally; **uncommitted** | Preserved untouched by this log's slices |
+| Flow: two triggers, one email or task action, draft/enabled/paused, saved-definition simulation, runs/retries | Works (local); committed | One trigger → one action only |
+| Research draft: homepage and product copy, Flow starters, outcome preview, outbox wording, asset routes | **Partial** (local, uncommitted) | Reviewed in slice 1 |
+| Forms goal templates, logic explanation, linked enquiry trail, pricing/usage prototype | Proposal | Later slices |
+| Multi-step flows, branches, delays, connectors, approved prices, budgets | Proposal only | Need backend contracts or commercial approval first |
+
+## Review of the existing draft
+
+**Kept as is:**
+- The task-led homepage and product copy, with "EXAMPLE", "CONCEPT" and "Sample data" labels.
+- The classic/conversational wording.
+- The narrow static asset and page routing fix with its tests (path-restricted, 404 for missing files).
+- The three starter definitions. They use only supported triggers, actions and recipients: `to: 'host'` is valid for booking triggers. Selecting a starter changes page state only; nothing is saved, enabled or sent.
+
+**Corrected in slice 1:**
+- The run outcome for email said "Email queued; check delivery status" on a **succeeded** run. The engine marks an email run succeeded only after `deliverEmail` returns `sent`, which means the provider accepted it (or the local outbox recorded it). Inbox delivery is not tracked anywhere.
+- The "Configuration preview" was generic (trigger → action) and styled as a warning notice. It also re-announced itself on every redraw.
+- The empty Flows list did not offer the starters.
+- New drafts did not explain why Simulate was missing.
+- On phones, run history squeezed text letter by letter and hid the outcome column (pre-existing).
+
+## Slice 1: Flow native starters and truthful run state
+
+**Problem.** A new user could not predict what a flow would do, could not discover the starters from the empty list, and could misread a succeeded email run as "delivered". On phones the run outcome was unreadable.
+
+**Behaviour now**
+- The empty Flows list offers the three starters as links (`/flow/new?starter=…`), plus Start from scratch. Opening one creates an **unsaved Draft**: no database write (tested), no enablement, no email. Blank creation remains available.
+- The editor shows **What this flow will do**: one sentence naming the actual source, action and recipient. For example: "When an appointment is booked for any event type, email the host." or "…create a task titled 'Prepare for {{invitee.name}}' in Flow › Tasks."
+  - It also states the status consequence (draft, paused, or enabled for new events only).
+  - It also states what email means on this server.
+  - It updates as you type, without re-rendering the form.
+  - It is a labelled region, not a live region.
+- Status explanations match the engine: drafts ignore events; paused flows hold new events and run them on resume; enabled flows run new events only.
+- Simulation:
+  - New drafts say they must be saved before simulating, and that simulation never sends an email or creates a task.
+  - Simulating with unsaved edits says those edits are not included; the server simulates the last saved definition.
+- **Run outcome wording:**
+
+  | Outcome | Wording |
+  | --- | --- |
+  | Task | "Task created", with a link to Tasks |
+  | Email via the local outbox | "Recorded in the local outbox. It is not delivered to an inbox." |
+  | Email via a real provider | "Accepted by the email provider. Inbox delivery is not tracked here." |
+
+  The page never says "delivered". The header explains what *succeeded* means, and that retries reuse the run so a created task or accepted email is not repeated.
+- Run history becomes labelled cards on screens up to 760 px, so the outcome stays readable. Desktop keeps the table. The Retry button names its flow for screen readers.
+- Starters copy only the flow's own fields (name, trigger, action and config); the trigger source resets to "any" and the status to Draft.
+
+**Files:**
+- `frontend/js/flow.mjs`
+- `frontend/js/flow-starters.mjs` (draft, unchanged)
+- `frontend/app.css` (appended Flow block)
+- `backend/scripts/browser-check.mjs` (Flow starter step extended)
+
+**Evidence (local; mock email outbox):**
+- `npm run check`: 113 files pass.
+- Flow and web tests: 8/8 pass.
+- `npm run browser-check` on the full working tree, which includes the uncommitted Forms work: every journey passes, 424 layout checks with no errors or overflow.
+- The extended starter journey asserts:
+  - three starters appear in the empty state, and opening one writes no flow;
+  - the summary text matches the starter and follows edits, and edits mark the page unsaved;
+  - the unsaved-draft simulation note;
+  - the host-email summary and outbox wording;
+  - the replace-draft confirmation and the paused wording;
+  - the saved starter persists as a Draft with the supported trigger and action;
+  - the run links to Tasks, and run history never claims delivery.
+- Before and after screenshots at 1440 and 375 px were reviewed. They are stored with the session's outputs, not the repository.
+
+**Remaining dependencies:**
+- **Delivery evidence:** real email needs a configured provider and a delivery test. "Accepted by provider" is the strongest claim the engine supports.
+- **Respondent acknowledgement starter:** deferred. It needs a chosen source form with an Email question (the existing editor already handles that choice).
+- **Run-to-record links:** linking a run to its booking or response, and a needs-attention filter, need the cross-product trail contract (a later slice).
+- **Research:** whether starters help real users is untested. Measure first valid saved draft, simulation success and accidental enablement in moderated sessions. A template click is not activation.
+
+## Slice 2: Forms goal-based starting points
+
+**Problem.** "Create form" made a generic untitled form. A new creator had to invent structure, and nothing connected the product to the jobs in the strategy. Those jobs are consultation intake, agency briefs, programme enquiries and session feedback.
+
+**Behaviour now**
+- **Create form** opens "Choose a starting point" (`aria-expanded`/`aria-controls`, with focus moved to its heading). With no forms yet, it is shown directly.
+- **Options:** Blank plus four goal templates:
+  - Consultation request (consultants and coaches)
+  - Project brief (small agencies)
+  - Programme enquiry (training teams)
+  - Session feedback (coaches and educators)
+- **Each card shows** its audience, purpose, question count, presentation (classic or one question at a time), and a plain sentence explaining its logic.
+- **Creating a draft** is the explicit action, through the existing draft API. It saves an **unpublished** draft and opens the builder, which says the draft is saved but not published, so nobody can open it until the creator publishes. Viewing templates creates nothing.
+- **Failures:** a failed create keeps the picker open with "The draft was not created" and the server's reason.
+- **Data-minimising questions:**
+  - Optional questions are marked as optional through `required: false`.
+  - "Programme enquiry" states that interest does not reserve a place (there is no capacity model).
+  - "Session feedback" asks for an email only when the person wants a reply.
+- **Supported schema only** (`frontend/js/forms-templates.mjs` is plain data, shared with the server tests). Classic and conversational presentation stay a creator's choice; conversational is suggested only for the short feedback form, not claimed to perform better.
+
+**Files:**
+- `frontend/js/forms-templates.mjs` (new)
+- `frontend/js/forms.mjs` (dashboard picker and builder notice; the file also carries the preserved uncommitted Forms reliability work)
+- `frontend/app.css`
+- `backend/test/forms-templates.test.mjs` (new)
+- `backend/scripts/browser-check.mjs`
+
+**Evidence (local):**
+- `npm run check`: 115 files pass.
+- `forms-templates.test.mjs` (3/3) checks that:
+  - each template passes `definitionProblems` and server normalisation;
+  - the conditional logic matches its card text, including that hidden answers are discarded and the conditionally required email is enforced;
+  - creating every template via the API gives `published_version: null`, a 404 on the public URL, and zero `form_versions`.
+- `npm run browser-check` on the full working tree: all journeys pass, including the new template journey. It checks five options, the toggle and focus, that viewing creates nothing, the builder's unpublished notice, and that no version is published. The updated "build and publish form" journey now starts from Blank. 440 layout checks, no errors or overflow.
+- **Screenshots:** before (committed HEAD, captured in a temporary worktree) and after, at 1440 and 375 px, were reviewed.
+
+**Remaining dependencies:**
+- Template content is a starting hypothesis: no creator has used it. Measure first valid publish and later edits in moderated sessions. Choosing a template is not activation.
+- Programme names ("Programme A/B") are placeholders the creator must replace. A capacity or waitlist model would need its own backend contract.
+- No template wires a Meet handoff or Flow automatically. Doing so would cross products silently; offering it as an explicit next step after publishing is a candidate for the linked-trail slice.
+
+## Slice 3: Enquiry trail (per form, from real records)
+
+**Problem.** After a response arrived, an operator could see the booking handoff status but not what happened next. They could not tell whether a follow-up ran, failed or left an open task, or which responses still needed action. The strategy's proposed distinction depends on answering "what arrived, what happened, what needs attention".
+
+**Behaviour now**
+- **"What happened next"** appears in each response's detail, as an ordered trail:
+  - Response received, with its receipt.
+  - The booking step: none, offered (not booked yet), confirmed, pending payment, canceled, removed, or could not be offered (with the recorded reason).
+  - Each related Flow run: from the response, or from its booking via the booking id, with the run's real outcome (task open or done, email outbox or provider acceptance, failed with error, retrying, held while paused).
+  - Every step has a written state ("Done", "Waiting", "Needs attention", "Not applicable", "Unknown"), not colour alone, and links to Run history, Tasks or Meetings.
+- **"Needs attention" filter** over the loaded responses, with counts. Each row shows its reasons (for example "Open task (Review enquiry)").
+  - **What counts:** a booking problem (canceled or could not be offered), a failed or retrying follow-up, or an open follow-up task.
+  - **What doesn't:** a waiting booking offer is not counted, because nothing has gone wrong yet.
+  - The filter keeps focus, and its empty state says nothing needs attention.
+- **Accuracy rules:**
+  - Follow-up data loads after the inbox, so the inbox is never blocked; open details refresh without moving focus.
+  - Each source loads independently. Unreadable sources show as "Follow-up status unavailable" or "Unknown", never as "No follow-up recorded".
+  - When a member cannot see the booking, the trail says its follow-ups are not visible to their role.
+  - When run or task lists reach their 200-row limit, the page says counts are based on the latest 200.
+
+**Live versus prototype.** Everything shown comes from real records through existing APIs:
+- the response's `next_step`
+- `GET /bookings` (three scopes)
+- `GET /runs`
+- `GET /tasks`
+
+No sample data and no new endpoint. A workspace-wide queue with owners, reconciliation and complete linking needs a backend contract: see [Enquiry trail contract](ENQUIRY_TRAIL_CONTRACT.md).
+
+**Files:**
+- `frontend/js/enquiry-trail.mjs` (new; no browser dependencies, unit-tested)
+- `frontend/js/forms.mjs` (responses page; the file also carries the preserved Forms work)
+- `frontend/app.css`
+- `backend/test/enquiry-trail.test.mjs` (new)
+- `backend/scripts/browser-check.mjs`
+- `docs/ENQUIRY_TRAIL_CONTRACT.md` (new)
+
+**Evidence (local; email via outbox):**
+- `npm run check`: 116 files pass.
+- `enquiry-trail.test.mjs` (5/5) covers each booking state, joining runs through the response id and the booking id, open and done tasks, failed, retrying and paused runs, outbox versus provider wording (never "delivered"), unavailable sources reported as unknown, and the role-visibility note.
+- `npm run browser-check`: all journeys pass, including a new end-to-end journey on real local records:
+  - enable a response → task flow, then submit a response to the routed form, and the worker creates the task;
+  - "Needs attention (1)" appears, the filter keeps focus, and the row explains "Open task (Review enquiry)";
+  - the detail trail shows Response received, Booking offered (not booked yet) and Task open, and does not claim a booking;
+  - completing the task via the API returns "Needs attention (0)".
+  - 448 layout checks, no errors or overflow.
+- **Screenshots:** the trail at 1280 and 375 px was reviewed. The "before" state for this slice is the Task 2/Forms inbox, which showed only the Next step badge.
+
+**Remaining dependencies:**
+- Workspace-wide queue, owners, resolution and notifications: see the contract.
+- Runs and tasks endpoints have no subject filters, so the trail scans the latest 200. A `?subject=` filter would be a small, safe backend addition when needed.
+- Whether operators find this faster than their current tools is untested; it is one of the planned moderated tasks.
+
+## Slice 4: Proposed pricing and usage prototype (interview material)
+
+**Problem.** The strategy needs people to understand units, allowances, resets and limit outcomes before any price is approved. The only pricing surface was the live Plans page, which must not show unapproved amounts.
+
+**Behaviour now.** A separate page at `/pricing/proposal`:
+- **Label first:** it opens with **"Proposed pricing — not available for purchase"** above the heading. The banner says the figures are interview prompts, not approved, not an offer and not purchasable, exclude undecided taxes, and that today's state is on Plans.
+- **Kept out of search:** the page is `noindex` (the tag is removed on navigation) and is not linked from marketing navigation or the sitemap.
+- **Plans:** four cards, Meet ₹399, Forms ₹499, Flow ₹699 and Suite ₹1,199 per workspace per month. Each shows who it fits, who can use it (seats and collaborators as in the proposal; respondents are never seats), the monthly volumes, and a "Proposed · not available" tag.
+- **Annual (labelled a later concept):** shows the **full payment first** (₹3,990 / ₹4,990 / ₹6,990 / ₹11,990 paid once a year), then the monthly equivalent and the difference against 12 monthly payments.
+- **How usage works**, per meter: what counts, what does not, and what happens when the allowance is used up. The limit outcomes match the **current engine**:
+
+  | Meter | At the limit |
+  | --- | --- |
+  | Bookings | New bookings refused; existing appointments and rescheduling keep working |
+  | Responses | Refused without a receipt; accepted responses kept |
+  | Runs | Recorded as failed and not replayed |
+
+  - The reset is stated exactly (00:00 UTC on the 1st, also on annual billing), with the next reset in the viewer's time zone.
+  - The page says the proposed volumes are not today's limits.
+- **Proposed safeguards** (warnings at 50/75/90/100%, no automatic overage, opt-in only with a visible rate and a hard spending limit) carry a "Proposed, not built" tag.
+- **"Estimate a month":**
+  - Enter bookings, responses and runs; invalid numbers get field errors.
+  - It compares only the plans actually needed with Suite, and says when Suite is not needed.
+  - It shows how many items would be **refused** beyond an allowance.
+  - It states that the bill stays at the plan price, because usage beyond an allowance is refused rather than charged, and no extra capacity is proposed for sale.
+- **Not included:** built-in video (no rate proposed and not for sale), SMS/WhatsApp, AI and payment-provider fees. The ₹398 Suite difference is described as relative to these proposed plans only, not against other companies.
+
+**Unchanged:**
+- Checkout, billing, entitlements, allowances, live prices and the Plans page.
+- `frontend/js/pricing-proposal.mjs` is read by nothing in the backend or on the Plans page (tested).
+- The page makes no billing API calls (tested).
+
+**Files:**
+- `frontend/js/pricing-proposal.mjs` (data and arithmetic)
+- `frontend/js/pricing-proposal-page.mjs`
+- `frontend/app.js` (route plus per-page meta cleanup)
+- `backend/src/web.mjs` (page whitelist)
+- `frontend/app.css`
+- `backend/test/pricing-proposal.test.mjs`
+- `backend/scripts/browser-check.mjs`
+
+**Evidence (local):**
+- `pricing-proposal.test.mjs` (4/4) checks:
+  - amounts match `PRICING_PROPOSAL.md`;
+  - annual totals and equivalents (₹332.50 / ₹415.83 / ₹582.50 / ₹999.17), the ₹798 difference and the ₹398 Suite difference;
+  - the reset across month and year boundaries;
+  - estimate options and refused counts, and input validation;
+  - no backend module or the Plans page imports the proposal;
+  - the route and module are served.
+- **Browser journey** checks:
+  - the label comes before the heading, and the page is `noindex`;
+  - there is no purchase control, and the exact monthly prices appear;
+  - annual shows the full payment;
+  - invalid input is flagged, and the estimate shows ₹4,990 a year and "200 would be refused … refused, not charged";
+  - no billing API is called;
+  - the `noindex` tag does not leak to Plans, and Plans does not show proposed prices.
+  - 456 layout checks, no errors or overflow.
+- **Screenshots:** the page top, annual view and estimate at 1440 and 375 px were reviewed.
+
+**Remaining dependencies:**
+- **Before any price is shown as an offer:** owner approval, measured unit economics and tax treatment (see `PRICING_PROPOSAL.md`).
+- **Enforced safeguards:** usage warnings, opt-in overage with spending limits, and seat limits need backend work.
+- **Interview script:** ask participants to predict their bill and the limit outcome from this page *before* explaining it, and record comprehension separately from stated willingness to pay. No sessions have been run.
+
+## Slice 5: Meet "Ready to share?" summary
+
+**Problem.** A host could not answer "what still needs attention before I share this booking link?" without visiting four places: the editor, Calendars & apps, the public page and Delivery. Nothing distinguished "selected" from "working". The save toast said "Your booking page is live" even when no times were open or the plan was inactive.
+
+**Behaviour now**
+- A **Ready to share?** card sits at the top of every saved event type's editor. New event types get a one-line note that the check runs after saving.
+- **Evidence.** The card reads only saved data and server checks, fetched in parallel:
+  - `GET /event-types/:id`;
+  - the host-view `GET /event-types/:id/slots`;
+  - `GET /calendar` (the viewer's own connections);
+  - `GET /integrations`;
+  - the boot flags for video, email provider and test payments;
+  - the workspace Meet entitlement.
+- **Four areas.** Each area and each item shows one status, using icon, text and colour:
+  - Statuses: Ready, Needs attention, Not verified or Not required.
+  - Issue tags: **Required** (would stop booking), **Optional** (a recommendation) or **Unknown**.
+
+  | Area | What is checked |
+  | --- | --- |
+  | **Event details** | Title, duration and kind; each location; payment. Schedora Meet with the server gate off is Required. With the gate on it is only Not verified, because a room's quality is known only when a meeting starts. Google Meet, Zoom and Teams are Ready only when the viewer is the sole host and that integration is `active`. A revoked or failed integration is Required; other hosts' connections are Not verified. Paid events need an active Stripe or Razorpay connection; without one, the summary names the test-checkout consequence. |
+  | **Availability** | Friendly time-zone label; weekly hours (for example "Mon–Fri 09:00–17:00"), specific times and upcoming date exceptions; notice, horizon, buffers and caps. The authoritative check is the server's own slot calculation. It names the exact range checked: from today (or the "bookable from" date) to the horizon (or the "bookable until" date). No open times in that range is Required. A start date beyond the window is Not verified, not "broken". An expired link or a past end date is Required. |
+  | **Calendar and conflicts** | Each of the viewer's own connections, by state (see the list below this table). No calendar at all is an Optional limitation, never a blocker. A note says what conflict checking covers. Other hosts' calendars are Not verified, as is every host's calendar when an admin views someone else's event. |
+  | **Sharing** | An inactive Meet/Suite plan is Required. A draft is Required, with "Go to Visibility"; nothing is ever published automatically. A published event is Ready, with hidden and single-use notes. Email through the local outbox is Optional ("not delivered"); through a real provider it is Not verified, with "Send a test email" for admins. Sharing actions are listed below this table. |
+
+  **Calendar connection states:**
+
+  | Connection | Status | Notes |
+  | --- | --- | --- |
+  | `active`, checked within the last hour | Ready | Shows the time of the last *successful* busy-time check |
+  | `active`, checked longer ago | Not verified | |
+  | `pending` | Not verified | |
+  | `error` | Optional | The previous good copy is still used |
+  | `revoked` | Optional | Busy times are dropped |
+
+  **Sharing actions:**
+  - The real booking link sits in a read-only field.
+  - **Copy link** appears only when the event is published. It announces success or failure, plus "Copying the link does not show that booking, email or video works".
+  - **Preview booking page** is a separate new-tab link. It does not publish, book or send anything.
+
+- **Headline.** It counts required items, optional recommendations and unverified items.
+  - There is no percentage and no all-green state.
+  - With no blockers it says "Nothing in the saved settings stops invitees from booking", followed by what is unverified.
+- **Interaction:**
+  - **Unsaved changes.** Any edit adds "You have unsaved changes. This summary describes the last saved version."
+  - **Re-checking.** Saving re-renders the editor, which re-runs the check. **Check again** re-fetches everything, including the event type, and announces the headline in a status region. The first load does not announce.
+  - **Fix actions.** These move focus to the matching editor section heading (Details, Availability or Visibility). Links to other pages use the existing tabs; browser Back returns to the editor, which re-checks. A **Review readiness** button next to Save returns to the card.
+  - **Loading and failures.** While loading, the card says "Checking saved settings…". A failed source becomes Not verified with **Check again**. If the event type itself cannot be re-read, the whole card says nothing is marked ready.
+- **Permissions.** No backend changes: the summary uses only endpoints the viewer can already call.
+  - Members see no admin-only actions (Review plans, Set up payments, Send a test email). They get "Ask an owner or admin…" instead.
+  - Locked managed fields say "Your administrator manages this setting."
+  - Nothing is added to public booking pages.
+- **Save toast.** After a published save it now reads "Saved and published. Check “Ready to share?” before sending the link." instead of "Your booking page is live".
+
+**Authoritative vs not verified**
+
+Authoritative:
+- server-validated saved fields;
+- the host-view slot calculation (hours, exceptions, notice, horizon, buffers, caps, existing meetings and stored busy times);
+- the viewer's own calendar connection status and last successful sync;
+- the viewer's own integration status, and the workspace payment connection status;
+- the server video gate, the email provider mode and the workspace entitlement.
+
+Not verified:
+- email delivery to inboxes;
+- native video room quality and connection;
+- whether auto-links are actually created (only the connection status is known);
+- other hosts' calendars, integrations and personal hours;
+- real payment completion;
+- calendar freshness after the last successful sync.
+
+An open time now can still be taken before someone books; the summary says so.
+
+**Missing backend contracts** (proposals; not built):
+- **Readiness endpoint.** `GET /event-types/:id/readiness` would evaluate every host's calendars and integrations on the server, so team events and admins could see them without exposing credentials. It would return per host `{ calendars: [{ status, last_success_at, last_attempt_at }], integrations: { google|microsoft|zoom: status } }`.
+- **Last successful sync.** `calendar_connections.last_synced_at` is also written on failed attempts. A separate `last_success_at` is needed to state "last successful check" for `error` connections.
+- **Email delivery evidence.** A workspace-level "last confirmed email delivery" (from provider webhooks) is needed before email can be anything other than Not verified.
+- **Auto-link check.** A dry-run link check for Google Meet, Zoom and Teams, per host.
+- **Accepting reason.** The host-view slots response could return `accepting` with its reason (plan inactive or preview), instead of the client combining the entitlement and published flags.
+
+**Files:**
+- `frontend/js/meet-readiness.mjs` (new; pure rules)
+- `frontend/js/meet.mjs` (editor card, section ids, save toast)
+- `frontend/app.css` (appended readiness block)
+- `backend/test/meet-readiness.test.mjs` (new)
+- `backend/scripts/browser-check.mjs` (new readiness step)
+
+**Evidence (local; outbox email, fake providers, ICS feeds from the test harness)**
+
+`meet-readiness.test.mjs`: 11 of 11 pass. They cover:
+- a verified published event;
+- a draft;
+- saved values rather than form values;
+- missing hours, no open times, a past end date, a start date beyond the window, and passed specific times;
+- an optional disconnected calendar;
+- revoked, failed, pending and stale calendars;
+- the video gate off and on, and a revoked Zoom connection;
+- API failures becoming Not verified with a retry;
+- no side effects;
+- member and admin visibility.
+
+One end-to-end test runs over the real local API:
+- an ICS calendar is connected, then failing, then revoked;
+- a draft is still slot-checked for the host, but returns 404 to the public;
+- members get 404 for another host's event type and slots;
+- members see only their own calendars and cannot send delivery tests.
+
+The browser journey confirms:
+- four areas and no percentage;
+- the optional calendar does not block, and the missing location is flagged;
+- an unsaved title edit adds the notice and does not change the summary;
+- fix links move focus to the right section;
+- for a draft:
+  - the Required "Not published" item appears;
+  - Copy is absent;
+  - Visibility has publish unticked;
+  - the anonymous public API returns 404;
+- Preview link attributes are correct, Copy gives feedback, and Check again announces;
+- preview, copy and re-check leave the booking, email, meeting and published counts unchanged;
+- native video is Required with the gate off and Not verified with it on.
+
+Full checks ran on the working tree, which includes the uncommitted Forms reliability work:
+- `npm run check`: 122 files.
+- `npm test`: 154 tests; 151 pass, 0 fail, 3 skipped (PostgreSQL).
+- `npm run browser-check`: every journey passes. 472 layout checks across 320, 375, 768 and 1280 px in light and dark, with no runtime errors or overflow.
+
+Screenshots reviewed, before and after, at 1440 and 375 px: a published event, a draft with a long title, and the video gate off.
+
+**Known limitations:**
+- Keyboard access uses native buttons and links, and fix actions move focus. The `:focus-visible` styling is the existing design-system rule and was not separately measured.
+- The card is long on phones, with four stacked areas; the headline comes first.
+- In headless Chrome the Copy outcome depends on clipboard permission, so the test accepts either message.
+- None of this is real-provider or human evidence.
