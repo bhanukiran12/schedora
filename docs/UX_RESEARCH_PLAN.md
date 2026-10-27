@@ -59,7 +59,7 @@ Use current tokens/components and original assets. Verify keyboard navigation, f
 
 | Phase | Intervention | Evidence required to proceed |
 | --- | --- | --- |
-| 1: local draft available for Claude review; full redesign not implemented | Delivery of existing assets/routes; concrete positioning; booking/task, response/task and booking/host-email starters with outcome preview | Syntax passed 113 modules; unit suite 131 total/128 passed/three PostgreSQL skipped; all browser journeys/416 layout checks passed in the working tree including Forms work, not an isolated change set. No commit/push/deployment in this research iteration; further implementation stops at the user's request |
+| 1: released increments, no customer-demand evidence | Flow starters, templates, readiness, linked enquiry trail and pricing-comprehension prototype; server publish checks added in eb7fd06 | Latest local: 169 pass, three PostgreSQL skips, 496 layout checks. GitHub Linux CI passed; both hosts verified. See implementation log for exact scope; no interviews or causal conversion result |
 | 2: moderated task tests | Publish consultation event/form; choose/edit/simulate native flow; diagnose a failure; predict a bill | Observe unaided success/errors/time; five sessions identify usability defects, not population conversion rates |
 | 3: linked-trail prototype | Find “what needs attention?” across response/booking/run | Faster/correct diagnosis against current UI, no invented status; agree backend state contract |
 | 4: opt-in pilot | Real supported providers, spend limits and retained weekly workflow | Measured dropped handoffs, support effort, provider costs and repeat use; no critical reliability defects |
