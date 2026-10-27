@@ -5,7 +5,7 @@
 // build/publish/submit a form (both presentations), create a flow, and billing.
 // Usage: CHROME_PATH=<browser executable> npm run browser-check [-- --screenshots <dir>]
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.mjs';
@@ -46,6 +46,12 @@ socket.addEventListener('message', ({ data }) => {
   if (message.method === 'Runtime.exceptionThrown') problems.push(`${currentLabel}: exception ${message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text}`);
   if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') problems.push(`${currentLabel}: console.error ${message.params.args.map(arg => arg.value ?? arg.description).join(' ')}`);
   if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error' && !/status of 4\d\d/.test(message.params.entry.text)) problems.push(`${currentLabel}: ${message.params.entry.text} ${message.params.entry.url || ''}`);
+});
+// Browser-check fixture: when enabled, the SDK module request is answered with a stand-in Room.
+const fakeRoomModule = Buffer.from(readFileSync(new URL('./browser-fixtures/livekit-fake-room.mjs', import.meta.url), 'utf8')).toString('base64');
+socket.addEventListener('message', ({ data }) => {
+  const message = JSON.parse(data);
+  if (message.method === 'Fetch.requestPaused') send('Fetch.fulfillRequest', { requestId: message.params.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/javascript; charset=utf-8' }, { name: 'Cache-Control', value: 'no-store' }], body: fakeRoomModule }).catch(() => {});
 });
 const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++nextId; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })); });
 const evaluate = async expression => {
@@ -369,7 +375,7 @@ try {
     if (!/camera=\(\)/.test(strict)) throw new Error('camera allowed outside meetings');
     await layoutCheck('video prejoin');
     await click('#toggle-camera');
-    await waitFor("!document.querySelector('#preview-off').hidden && document.querySelector('#toggle-camera').getAttribute('aria-pressed') === 'false'", 'camera off');
+    await waitFor("!document.querySelector('#preview-off').hidden && document.querySelector('#toggle-camera').textContent === 'Turn camera on' && document.querySelector('#media-state').textContent.includes('Camera off')", 'camera off');
     await click('#toggle-camera');
     await waitFor("document.querySelector('#preview')?.srcObject?.getVideoTracks()[0]?.readyState === 'live'", 'camera back on', 10000);
   });
@@ -377,7 +383,8 @@ try {
     const before = problems.length;
     await fill('#display-name', 'Asha');
     await click('#join-form [type="submit"]');
-    await waitFor("document.body.innerText.includes('could not be reached') || document.body.innerText.includes('Connection lost')", 'connection failure state', 20000);
+    await waitFor("document.body.innerText.includes('could not connect to the video service') || document.body.innerText.includes('You were disconnected')", 'connection failure state', 20000);
+    if (await evaluate("document.body.innerText.includes('paused or not set up')")) throw new Error('failure screen guesses a cause');
     if (await evaluate("Boolean(document.querySelector('#preview'))")) throw new Error('prejoin still mounted');
     problems.splice(before, problems.length - before, ...problems.slice(before).filter(problem => !expectedConnectionNoise.test(problem)));
     await layoutCheck('video connection failed');
@@ -392,6 +399,145 @@ try {
     await waitFor("document.body.innerText.includes('Waiting for the host')", 'waiting for host');
     await open('/meet', "document.querySelector('.tabs')");
   });
+  // Meeting room UI with a fake-connected Room (fixture above): layout, controls, devices, recovery.
+  // Synthetic camera/microphone and no media server: this checks the interface, not real media.
+  const pageApi = (path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const response = await fetch(${JSON.stringify(path)}.replace(':ws', me.workspaces[0].id), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body ?? {}))} }); return response.status === 204 ? null : response.json(); })()`);
+  const inView = selector => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.top >= 0 && r.bottom <= innerHeight + 1 && r.right <= innerWidth + 1; })()`);
+  const viewport = (width, height = 800) => send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 768 });
+  const shot = async name => {
+    if (!shotsDir) return;
+    for (const width of [375, 1440]) {
+      await viewport(width, width < 768 ? 800 : 900);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const { data } = await send('Page.captureScreenshot', { format: 'png' });
+      writeFileSync(join(shotsDir, `task4-${name}-${width}.png`), Buffer.from(data, 'base64'));
+    }
+  };
+  const withFakeRoom = async fn => {
+    await send('Network.enable'); await send('Network.setCacheDisabled', { cacheDisabled: true });
+    await send('Fetch.enable', { patterns: [{ urlPattern: '*/vendor/livekit-client.esm.mjs', requestStage: 'Request' }] });
+    try { await fn(); } finally {
+      await send('Fetch.disable'); await send('Network.setCacheDisabled', { cacheDisabled: false });
+      await viewport(1280, 900);
+    }
+  };
+  const enterRoom = async () => {
+    await click('#join-form [type="submit"]');
+    await waitFor("document.querySelector('#video-room') && document.querySelector('#connection')?.dataset.state === 'connected'", 'meeting room connected', 15000);
+  };
+  await step('video room (fake-connected fixture): prejoin labels, meter, full-viewport room, controls, devices, share guidance, recovery, end', async () => {
+    await withFakeRoom(async () => {
+      await viewport(375);
+      const room = await pageApi('/api/workspaces/:ws/meet-video/rooms', { title: 'Room check' });
+      await open(new URL(room.host_url).pathname, "document.querySelector('#join-form')");
+      await waitFor("document.body.dataset.micMeter === 'on' && document.querySelector('#preview')?.srcObject", 'microphone meter running', 10000);
+      if ((await evaluate("[document.querySelector('#toggle-camera').textContent, document.querySelector('#toggle-mic').textContent].join()")) !== 'Turn camera off,Mute microphone') throw new Error('prejoin labels');
+      if (!(await evaluate("document.querySelector('#mic-level') && document.querySelector('label[for=mic-level]').textContent === 'Microphone level'"))) throw new Error('meter has no label');
+      if (!(await inView('#join-button'))) throw new Error('Join is not visible without scrolling at 375 px');
+      await click('#toggle-mic');
+      await waitFor("document.querySelector('#toggle-mic').textContent === 'Unmute microphone' && document.querySelector('#media-state').textContent.includes('Microphone muted') && !document.body.dataset.micMeter", 'mic muted and meter stopped');
+      await click('#toggle-mic');
+      await waitFor("document.body.dataset.micMeter === 'on'", 'meter restarted');
+      await shot('prejoin');
+      await layoutCheck('prejoin with meter');
+      await enterRoom();
+      if (await evaluate('Boolean(document.body.dataset.micMeter)')) throw new Error('meter still running after joining');
+      for (const width of [375, 1440]) {
+        await viewport(width, width < 768 ? 800 : 900);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const layout = await evaluate("({ header: getComputedStyle(document.querySelector('#site-header')).display, scroll: document.documentElement.scrollHeight - innerHeight, wide: document.documentElement.scrollWidth - innerWidth })");
+        if (layout.header !== 'none' || layout.scroll > 0 || layout.wide > 0) throw new Error(`room is not a full-viewport surface at ${width}: ${JSON.stringify(layout)}`);
+        for (const control of ['#mic', '#cam', '#share', '#devices-toggle', '#people-toggle', '#leave', '#end-all']) if (!(await inView(control))) throw new Error(`${control} not visible at ${width}px`);
+      }
+      if (!(await evaluate("Boolean(document.querySelector('.video-bar #end-all')) && !document.querySelector('.video-controls #end-all') && document.querySelector('#leave').closest('.video-controls')"))) throw new Error('Leave and End for everyone are not separated');
+      if ((await evaluate("getComputedStyle(document.querySelector('#enable-audio')).display")) !== 'none') throw new Error('sound prompt shown while playback is allowed');
+      await evaluate("window.__fakeRoom.addRemote('Ravi')");
+      await waitFor("document.querySelectorAll('.video-tile').length === 2", 'remote tile');
+      await shot('room');
+      await viewport(375);
+      await click('#mic');
+      await waitFor("document.querySelector('#mic').textContent === 'Unmute microphone' && document.querySelector('#room-media-state').textContent.includes('Microphone muted')", 'muted in room');
+      // Device menu: switching keeps the muted microphone muted; Escape returns focus.
+      await click('#devices-toggle');
+      await waitFor("!document.querySelector('#devices-panel').hidden && document.querySelector('#devices-panel').contains(document.activeElement)", 'devices panel focused');
+      await waitFor("document.querySelector('#dev-audioinput').options.length > 1", 'microphones listed');
+      await evaluate("{ const s = document.querySelector('#dev-audioinput'); s.value = s.options[s.options.length - 1].value; s.dispatchEvent(new Event('change', { bubbles: true })) }");
+      await waitFor("document.querySelector('#device-message').innerText.includes('Switched microphone')", 'switched');
+      const switched = await evaluate('window.__fakeSwitches.at(-1)');
+      if (switched[0] !== 'audioinput' || switched[2] !== false || switched[3] !== true) throw new Error('switch did not preserve state: ' + JSON.stringify(switched));
+      if ((await evaluate("document.querySelector('#mic').textContent")) !== 'Unmute microphone') throw new Error('mute state lost after switching');
+      if (!(await evaluate("Boolean(document.querySelector('#dev-audiooutput') || document.querySelector('#no-output'))"))) throw new Error('speaker choice or explanation missing');
+      await evaluate("{ const s = document.querySelector('#dev-videoinput'); s.add(new Option('Broken camera', 'fail')); s.value = 'fail'; s.dispatchEvent(new Event('change', { bubbles: true })) }");
+      await waitFor("document.querySelector('#device-message').innerText.includes('could not start')", 'switch failure explained');
+      if (await evaluate("/join with/i.test(document.querySelector('#device-message').innerText)")) throw new Error('prejoin wording shown inside the meeting');
+      await shot('devices');
+      await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+      if (!(await evaluate("document.querySelector('#devices-panel').hidden && document.activeElement.id === 'devices-toggle'"))) throw new Error('Escape did not close the panel and return focus');
+      // Screen sharing: OS block and cancelled picker get different guidance.
+      await evaluate("window.__fakeShareError = { name: 'NotAllowedError', message: 'Permission denied by system' }");
+      await click('#share');
+      await waitFor("document.querySelector('#room-alerts').innerText.includes('Screen Recording')", 'system share guidance');
+      await shot('share-blocked');
+      await evaluate("window.__fakeShareError = { name: 'NotAllowedError', message: 'Permission denied' }");
+      await click('#share');
+      await waitFor("document.querySelector('#room-alerts').innerText.includes('If you chose Cancel')", 'cancelled picker guidance');
+      await evaluate('window.__fakeShareError = null');
+      await click('#share');
+      await waitFor("document.querySelector('#share').textContent === 'Stop sharing'", 'sharing');
+      await click('#share');
+      // Reconnecting, then a recoverable drop: the server still lists us, so Rejoin is offered.
+      await evaluate("window.__fakeRoom.emit('reconnecting')");
+      await waitFor("document.querySelector('#connection').textContent === 'Reconnecting…' && document.querySelector('#room-alerts').innerText.includes('Reconnecting')", 'reconnecting state');
+      await evaluate("window.__fakeRoom.emit('reconnected')");
+      await waitFor("document.querySelector('#connection').textContent === 'Connected'", 'reconnected');
+      await evaluate("window.__fakeRoom.drop('UNKNOWN_REASON')");
+      await waitFor("document.body.innerText.includes('You were disconnected') && document.querySelector('#rejoin')", 'recoverable disconnect with rejoin');
+      if (await evaluate("Boolean(document.body.dataset.inMeeting) || getComputedStyle(document.querySelector('#site-header')).display === 'none'")) throw new Error('room chrome not restored');
+      await shot('disconnected');
+      // Rejoin goes through admission again, then the host ends the meeting for everyone.
+      await click('#rejoin');
+      await waitFor("document.querySelector('#join-form')", 'prejoin after rejoin');
+      await enterRoom();
+      await click('#end-all');
+      await waitFor("document.querySelector('dialog[open]')?.innerText.includes('End the meeting for everyone?')", 'end confirmation');
+      await click('dialog[open] button[value=ok]');
+      await waitFor("document.body.innerText.includes('You ended the meeting for everyone')", 'ended');
+      if (await evaluate("Boolean(document.querySelector('#rejoin'))")) throw new Error('rejoin offered after the meeting ended');
+    });
+  });
+  await step('video room (fake-connected fixture): removal is named only when the server confirms it; no rejoin', async () => {
+    await withFakeRoom(async () => {
+      const room = await pageApi('/api/workspaces/:ws/meet-video/rooms', { title: 'Removal check' });
+      const invite = await pageApi(`/api/meet-video/rooms/${room.public_id}/invites`, { seats: 2 });
+      app.db.run('UPDATE video_rooms SET host_joined_at = ? WHERE public_id = ?', Date.now(), room.public_id);
+      await open(new URL(invite.url).pathname, "document.querySelector('#join-form')");
+      await fill('#display-name', 'Removable guest');
+      await enterRoom();
+      const guest = app.db.get("SELECT id FROM video_participants WHERE display_name = 'Removable guest'");
+      await pageApi(`/api/meet-video/rooms/${room.public_id}/participants/${guest.id}/remove`);
+      await evaluate("window.__fakeRoom.drop('PARTICIPANT_REMOVED')");
+      await waitFor("document.body.innerText.includes('A host removed you from this meeting')", 'confirmed removal');
+      if (await evaluate("Boolean(document.querySelector('#rejoin'))")) throw new Error('rejoin offered after removal');
+      await shot('removed');
+    });
+  });
+  await step('video prejoin: denied camera and microphone give guidance and still allow joining', async () => {
+    const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', { source: "navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));" });
+    try {
+      await withFakeRoom(async () => {
+        await viewport(375);
+        const room = await pageApi('/api/workspaces/:ws/meet-video/rooms', { title: 'Denied check' });
+        await open(new URL(room.host_url).pathname, "document.querySelector('#join-form')");
+        await waitFor("document.querySelector('#device-status').innerText.includes('blocking the camera') && document.querySelector('#device-status').innerText.includes('blocking the microphone')", 'denial guidance');
+        if ((await evaluate("[document.querySelector('#toggle-camera').textContent, document.querySelector('#toggle-mic').textContent].join()")) !== 'Turn camera on,Unmute microphone') throw new Error('toggles do not show media off');
+        await shot('permission-denied');
+        await enterRoom();
+        if ((await evaluate("document.querySelector('#room-media-state').textContent")) !== 'Camera off · Microphone muted') throw new Error('joined with unexpected media state');
+        await click('#leave');
+        await waitFor("document.body.innerText.includes('You left the meeting') && document.querySelector('#rejoin')", 'left');
+      });
+    } finally { await send('Page.removeScriptToEvaluateOnNewDocument', { identifier }); }
+  });
   await step('video: pending media permission cannot submit the prejoin page as a GET', async () => {
     const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', { source: "navigator.mediaDevices.getUserMedia = () => new Promise(() => {});" });
     const before = problems.length;
@@ -401,9 +547,10 @@ try {
       await click('#toggle-camera');
       await click('#toggle-mic');
       await click('#join-form [type="submit"]');
-      await waitFor("document.querySelector('#video-room') || document.body.innerText.includes('could not be reached')", 'join without media permission');
+      await waitFor("document.querySelector('#video-room') || document.body.innerText.includes('could not connect to the video service')", 'join without media permission');
       if (await evaluate("location.search.includes('display_name')")) throw new Error('prejoin submitted the name in the URL');
-      await waitFor("document.body.innerText.includes('could not be reached') || document.body.innerText.includes('Connection lost')", 'connection failure state', 20000);
+      await waitFor("document.body.innerText.includes('could not connect to the video service') || document.body.innerText.includes('You were disconnected')", 'connection failure state', 20000);
+    if (await evaluate("document.body.innerText.includes('paused or not set up')")) throw new Error('failure screen guesses a cause');
       problems.splice(before, problems.length - before, ...problems.slice(before).filter(problem => !expectedConnectionNoise.test(problem)));
     } finally { await send('Page.removeScriptToEvaluateOnNewDocument', { identifier }); }
   });

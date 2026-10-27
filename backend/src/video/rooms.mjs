@@ -202,7 +202,18 @@ function guestState(app, invite, room) {
   return 'open';
 }
 
-export function roomView(app, room, { role = null, guestInvite = null } = {}) {
+// Coarse, non-sensitive reasons a room ended, safe to show every participant.
+const END_CAUSES = { ended_by_host: 'host', max_duration: 'time_limit', kill_switch: 'paused', booking_canceled: 'canceled' };
+// What happened to one participant, for their own client after a disconnect. Matched by room AND
+// the caller's own credential (their guest invite or their account), so it reveals nobody else.
+function selfStatus(app, room, participantId, { guestInvite, userId }) {
+  if (typeof participantId !== 'string' || !participantId) return null;
+  const row = app.db.get('SELECT status, removed_reason FROM video_participants WHERE id = ? AND room_id = ? AND (invite_id = ? OR user_id = ?)',
+    participantId, room.id, guestInvite?.id ?? '', userId ?? '');
+  return row ? { status: row.status, removed_reason: row.status === 'removed' ? row.removed_reason : null } : null;
+}
+
+export function roomView(app, room, { role = null, guestInvite = null, participantId = null, userId = null } = {}) {
   const workspace = app.db.get('SELECT name, brand_color, logo FROM workspaces WHERE id = ?', room.workspace_id);
   const now = app.now();
   const state = guestInvite ? guestState(app, guestInvite, room)
@@ -213,7 +224,8 @@ export function roomView(app, room, { role = null, guestInvite = null } = {}) {
     join_opens_at: room.join_opens_at, max_ends_at: room.max_ends_at, host_present: Boolean(room.host_joined_at), guest_policy: room.guest_policy,
     workspace: { name: workspace.name, brand_color: workspace.brand_color, logo: workspace.logo },
     video: { available: app.config.video.enabled && Boolean(app.config.video.deployment) && app.config.video.killSwitch === 'off', max_video_height: app.config.video.maxVideoHeight },
-    role
+    role, end_cause: room.end_reason ? END_CAUSES[room.end_reason] || 'other' : null,
+    you: selfStatus(app, room, participantId, { guestInvite, userId })
   };
   if (role === 'host') {
     view.host_url = hostUrl(app, room);

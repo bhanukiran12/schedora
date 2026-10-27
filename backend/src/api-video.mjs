@@ -31,8 +31,9 @@ export function registerVideoRoutes(app, router, { member, limit }) {
     return { status: 201, body: roomView(app, room, { role: 'host' }) };
   });
   get('/api/meet-video/rooms/:room', ctx => {
-    const { room, role } = roomForMember(app, roomActor(ctx), ctx.params.room);
-    return roomView(app, room, { role });
+    const actor = roomActor(ctx);
+    const { room, role } = roomForMember(app, actor, ctx.params.room);
+    return roomView(app, room, { role, participantId: ctx.query.get('participant'), userId: actor.userId });
   });
   post('/api/meet-video/rooms/:room/join', async ctx => {
     limit(ctx, 'video-join', 20);
@@ -49,7 +50,7 @@ export function registerVideoRoutes(app, router, { member, limit }) {
   get('/api/public/meet-video/join/:token', ctx => {
     limit(ctx, 'video-guest', 120);
     const { invite, room } = inviteByToken(app, ctx.params.token);
-    return roomView(app, room, { guestInvite: invite });
+    return roomView(app, room, { guestInvite: invite, participantId: ctx.query.get('participant') });
   }, { public: true });
   post('/api/public/meet-video/join/:token', async ctx => {
     limit(ctx, 'video-join', 20);

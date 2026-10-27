@@ -20,13 +20,15 @@ export function leaveMeeting(reason = 'navigate') {
 window.addEventListener('pagehide', () => leaveMeeting('pagehide'));
 
 const STATES = {
-  too_early: ['This meeting has not opened yet', 'You can join a few minutes before the scheduled start. This page checks again automatically.'],
+  too_early: ['This meeting has not opened yet', 'This page checks again automatically and opens the meeting when joining starts.'],
   ended: ['This meeting has ended', 'Thanks for joining. You can close this page.'],
   canceled: ['This appointment was canceled', 'Its meeting link no longer works. Contact the host if you think this is a mistake.'],
   rescheduled: ['This appointment was rescheduled', 'Use the meeting link in your newest confirmation email.'],
   revoked: ['This meeting link is no longer valid', 'Ask the host for a new link.'],
   payment_pending: ['Payment is still pending', 'Complete payment for your appointment, then use the link in your confirmation email.'],
-  unavailable: ['Video is not available right now', 'Schedora Meet video is paused or not set up. Your appointment itself is unaffected; contact the host for another way to meet.'],
+  unavailable: ['Video is not available right now', 'Schedora Meet video is switched off for this meeting. Your appointment itself is unaffected; contact the host for another way to meet.'],
+  // The service did not answer: the cause is unknown, so none is named.
+  unreachable: ['We could not connect to the video service', 'This may be a network problem or a temporary service issue. Your appointment itself is unaffected.'],
   unsupported: ['This browser cannot join video meetings', 'Use a recent version of Chrome, Edge, Firefox or Safari on a computer or phone.']
 };
 const ERROR_STATES = { meeting_ended: 'ended', meeting_canceled: 'canceled', booking_canceled: 'canceled', booking_rescheduled: 'rescheduled', link_revoked: 'revoked', payment_pending: 'payment_pending', video_unavailable: 'unavailable', too_early: 'too_early' };
@@ -57,7 +59,7 @@ export async function hostRoom(ctx) {
   if (!ctx.alive()) return;
   meetingFlow(ctx, {
     info, host: info.role === 'host', defaultName: session.user.name,
-    load: () => api('GET', `/api/meet-video/rooms/${encodeURIComponent(publicId)}`),
+    load: participant => api('GET', `/api/meet-video/rooms/${encodeURIComponent(publicId)}${participant ? '?participant=' + encodeURIComponent(participant) : ''}`),
     join: body => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/join`, body),
     end: () => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/end`),
     remove: id => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/participants/${encodeURIComponent(id)}/remove`),
@@ -85,7 +87,7 @@ export async function guestRoom(ctx) {
   const seat = { get: () => { try { return key && sessionStorage.getItem(key); } catch { return null; } }, set: id => { try { if (key) sessionStorage.setItem(key, id); } catch { /* storage blocked */ } } };
   meetingFlow(ctx, {
     info, host: false, defaultName: '',
-    load: () => api('GET', `/api/public/meet-video/join/${encodeURIComponent(token)}`),
+    load: participant => api('GET', `/api/public/meet-video/join/${encodeURIComponent(token)}${participant ? '?participant=' + encodeURIComponent(participant) : ''}`),
     join: async body => { const result = await api('POST', `/api/public/meet-video/join/${encodeURIComponent(token)}`, { ...body, resume: seat.get() || undefined }); seat.set(result.participant_id); return result; }
   });
 }
@@ -116,42 +118,93 @@ function waitAndRetry(ctx, flow, extra, delay) {
   active = { dispose: () => clearTimeout(timer) };
 }
 
+// Shared vocabulary for media controls, so prejoin and the room say the same thing. The button
+// names the action; the state is announced separately.
+const MEDIA = {
+  camera: on => on ? 'Turn camera off' : 'Turn camera on',
+  microphone: on => on ? 'Mute microphone' : 'Unmute microphone',
+  state: (camera, microphone) => `Camera ${camera ? 'on' : 'off'} · Microphone ${microphone ? 'on' : 'muted'}`
+};
+
+// Guidance for getUserMedia failures. Only the browser's error name is used; no cause is guessed.
+function deviceAdvice(error, device, { joining = true } = {}) {
+  const name = error?.name;
+  const without = joining ? ` You can join with the ${device} off.` : '';
+  if (name === 'NotAllowedError' || /permission/i.test(error?.message || '')) {
+    return `Your browser is blocking the ${device}. To allow it, select the camera or lock icon in the address bar, allow the ${device}, then reload this page.${without}`;
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return `No ${device} was found. Connect one and choose it in the device settings.${without}`;
+  if (name === 'NotReadableError' || name === 'AbortError') return `Your ${device} could not start. Another app may be using it; close that app and try again.${without}`;
+  return `Your ${device} could not be started.${without}`;
+}
+
 async function prejoin(ctx, flow) {
   const { info } = flow;
   const LK = await sdk().catch(() => null);
   if (!ctx.alive()) return;
-  if (!LK) return stateScreen(ctx, info, 'unavailable', html`<p class="hint">The meeting software could not be loaded. Check your connection and reload.</p>`);
+  if (!LK) return stateScreen(ctx, info, 'unreachable', html`<p class="hint">The meeting software could not be loaded. Check your connection and reload.</p>`);
   if (!LK.isBrowserSupported()) return stateScreen(ctx, info, 'unsupported');
-  const preview = { video: null, audio: null, camera: true, microphone: true, disposed: false, joining: false };
-  const stopPreview = () => { preview.video?.stop(); preview.audio?.stop(); preview.video = preview.audio = null; };
+  const preview = { video: null, audio: null, camera: true, microphone: true, disposed: false, joining: false, meter: null, problems: {} };
+  const stopMeter = () => { preview.meter?.(); preview.meter = null; delete document.body.dataset.micMeter; };
+  const stopPreview = () => { stopMeter(); preview.video?.stop(); preview.audio?.stop(); preview.video = preview.audio = null; };
   active = { dispose: () => { preview.disposed = true; stopPreview(); } };
 
-  mount(ctx.main, html`<div class="container page"><div class="prejoin">
-    <section class="prejoin-preview card">
+  mount(ctx.main, html`<div class="container page prejoin-page"><div class="prejoin">
+    <section class="prejoin-preview card" aria-label="Camera and microphone check">
       <div class="video-frame"><video id="preview" class="video-el mirrored" autoplay muted playsinline aria-label="Your camera preview"></video><div id="preview-off" class="video-placeholder" hidden>Camera off</div></div>
       <div class="row video-toggles">
-        <button class="btn" id="toggle-camera" aria-pressed="true">Camera on</button>
-        <button class="btn" id="toggle-mic" aria-pressed="true">Microphone on</button>
+        <button class="btn" type="button" id="toggle-camera" aria-describedby="media-state">${MEDIA.camera(true)}</button>
+        <button class="btn" type="button" id="toggle-mic" aria-describedby="media-state">${MEDIA.microphone(true)}</button>
       </div>
-      <div id="device-status" aria-live="polite"></div>
+      <p class="media-state" id="media-state" role="status">${MEDIA.state(true, true)}</p>
+      <div class="mic-meter"><label for="mic-level">Microphone level</label><meter id="mic-level" min="0" max="1" low="0.08" high="0.7" optimum="0.4" value="0"></meter></div>
+      <p class="hint" id="mic-quiet" hidden>We can't hear anything yet. Check that the right microphone is selected and isn't muted on the device.</p>
+      <div id="device-status" aria-live="polite"><p class="hint">Your browser may ask to use your camera and microphone. Allow them to be seen and heard, or join with them off.</p></div>
     </section>
-    <section class="card card-plain">
+    <section class="card card-plain prejoin-details">
       ${info.workspace ? html`<span class="tag">${info.workspace.name}</span>` : ''}
       <h1>${info.title}</h1>
       ${info.starts_at ? html`<p class="lead">${fmtFull(info.starts_at)}</p>` : ''}
       <form id="join-form" novalidate>
         <label for="display-name">Your name</label><input id="display-name" name="display_name" required maxlength="60" autocomplete="name" value="${flow.defaultName || ''}">
-        <div class="inline-fields">
-          <div><label for="camera-select">Camera</label><select id="camera-select"><option value="">Default camera</option></select></div>
-          <div><label for="mic-select">Microphone</label><select id="mic-select"><option value="">Default microphone</option></select></div>
-        </div>
         <div data-form-status tabindex="-1" id="join-status" aria-live="polite"></div>
         <div class="actions"><button class="btn btn-primary" type="submit" id="join-button">Join meeting</button></div>
+        <details class="device-settings"><summary>Camera and microphone settings</summary>
+          <label for="camera-select">Camera</label><select id="camera-select"><option value="">Default camera</option></select>
+          <label for="mic-select">Microphone</label><select id="mic-select"><option value="">Default microphone</option></select>
+        </details>
         <p class="hint">Meetings are charged to the host's workspace by connected time. Guests never pay.</p>
       </form>
     </section></div></div>`);
 
-  const status = message => mount($('#device-status'), message);
+  const status = () => {
+    const notes = Object.values(preview.problems).filter(Boolean);
+    mount($('#device-status'), notes.length ? notice('warn', html`${notes.map(note => html`<p>${note}</p>`)}`) : '');
+  };
+  function syncToggles() {
+    $('#toggle-camera').textContent = MEDIA.camera(preview.camera);
+    $('#toggle-mic').textContent = MEDIA.microphone(preview.microphone);
+    $('#media-state').textContent = MEDIA.state(preview.camera, preview.microphone);
+  }
+  // Local-only level meter: an analyser on the preview track, closed whenever the track changes.
+  function startMeter() {
+    stopMeter();
+    if (!preview.audio) return;
+    let analyser;
+    try { analyser = LK.createAudioAnalyser(preview.audio); } catch { return; }
+    const meter = $('#mic-level');
+    const started = Date.now();
+    let loudest = 0;
+    const timer = setInterval(() => {
+      const level = Math.min(1, analyser.calculateVolume() * 3);
+      loudest = Math.max(loudest, level);
+      if (meter) meter.value = level;
+      const quiet = $('#mic-quiet');
+      if (quiet) quiet.hidden = !(Date.now() - started > 5000 && loudest < 0.02);
+    }, 120);
+    document.body.dataset.micMeter = 'on';
+    preview.meter = () => { clearInterval(timer); analyser.cleanup().catch(() => {}); if (meter) meter.value = 0; };
+  }
   async function startCamera() {
     preview.video?.stop(); preview.video = null;
     if (!preview.camera) { $('#preview-off').hidden = false; return; }
@@ -162,9 +215,12 @@ async function prejoin(ctx, flow) {
       preview.video = track;
       preview.video.attach($('#preview'));
       $('#preview-off').hidden = true;
-    } catch (error) { if (preview.disposed) return; preview.camera = false; deviceProblem(error, 'camera'); $('#preview-off').hidden = false; syncToggles(); }
+      preview.problems.camera = null;
+    } catch (error) { if (preview.disposed) return; preview.camera = false; preview.problems.camera = deviceAdvice(error, 'camera'); $('#preview-off').hidden = false; syncToggles(); }
+    status();
   }
   async function startMic() {
+    stopMeter();
     preview.audio?.stop(); preview.audio = null;
     if (!preview.microphone) return;
     try {
@@ -172,32 +228,24 @@ async function prejoin(ctx, flow) {
       if (preview.disposed || !preview.microphone) { track.stop(); return; }
       preview.audio?.stop();
       preview.audio = track;
-    } catch (error) { if (preview.disposed) return; preview.microphone = false; deviceProblem(error, 'microphone'); syncToggles(); }
-  }
-  function deviceProblem(error, device) {
-    const denied = error?.name === 'NotAllowedError' || /permission/i.test(error?.message || '');
-    const missing = error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError';
-    status(notice('warn', html`<p>${denied ? `Access to your ${device} is blocked. Allow it in your browser's site settings and reload, or join with it off.` : missing ? `No ${device} was found. You can join with it off.` : `Your ${device} could not be started. It may be in use by another app. You can join with it off.`}</p>`));
-  }
-  function syncToggles() {
-    $('#toggle-camera').setAttribute('aria-pressed', String(preview.camera));
-    $('#toggle-camera').textContent = preview.camera ? 'Camera on' : 'Camera off';
-    $('#toggle-mic').setAttribute('aria-pressed', String(preview.microphone));
-    $('#toggle-mic').textContent = preview.microphone ? 'Microphone on' : 'Microphone off';
+      preview.problems.microphone = null;
+      startMeter();
+    } catch (error) { if (preview.disposed) return; preview.microphone = false; preview.problems.microphone = deviceAdvice(error, 'microphone'); syncToggles(); }
+    status();
   }
   async function listDevices() {
     try {
       const [cameras, mics] = await Promise.all([LK.Room.getLocalDevices('videoinput', false), LK.Room.getLocalDevices('audioinput', false)]);
       if (preview.disposed) return;
-      const fill = (select, devices, label) => { const value = select.value; mount(select, html`<option value="">${label}</option>${devices.filter(device => device.deviceId).map((device, index) => html`<option value="${device.deviceId}">${device.label || `${label.replace('Default ', '')} ${index + 1}`}</option>`)}`); select.value = value; };
-      fill($('#camera-select'), cameras, 'Default camera');
-      fill($('#mic-select'), mics, 'Default microphone');
-    } catch { /* device labels need permission; defaults still work */ }
+      fillDevices($('#camera-select'), cameras, 'Default camera');
+      fillDevices($('#mic-select'), mics, 'Default microphone');
+    } catch { /* device names need permission; the defaults still work */ }
   }
   $('#toggle-camera').onclick = async () => { preview.camera = !preview.camera; syncToggles(); await startCamera(); };
   $('#toggle-mic').onclick = async () => { preview.microphone = !preview.microphone; syncToggles(); await startMic(); };
   $('#camera-select').onchange = startCamera;
   $('#mic-select').onchange = startMic;
+  // Bound before any permission prompt resolves, so Join never falls back to a GET submission.
   $('#join-form').addEventListener('submit', async event => {
     event.preventDefault();
     if (preview.disposed || preview.joining) return;
@@ -209,7 +257,8 @@ async function prejoin(ctx, flow) {
     try {
       const admission = await flow.join({ display_name: name });
       if (!ctx.alive() || preview.disposed) return;
-      const tracks = { video: preview.video, audio: preview.audio };
+      stopMeter(); // the meeting takes over the track; the analyser must not outlive the prejoin page
+      const tracks = { video: preview.video, audio: preview.audio, devices: { videoinput: $('#camera-select').value, audioinput: $('#mic-select').value } };
       preview.disposed = true;
       preview.video = preview.audio = null; // ownership moves to the meeting
       await meeting(ctx, flow, LK, admission, tracks);
@@ -218,14 +267,20 @@ async function prejoin(ctx, flow) {
       $('#join-button')?.removeAttribute('aria-disabled');
       if (error.code === 'waiting_for_host') return waitForHost(ctx, flow);
       if (ERROR_STATES[error.code] && error.code !== 'too_early') { leaveMeeting(); return stateScreen(ctx, info, ERROR_STATES[error.code]); }
-      const message = error.code === 'insufficient_credits' ? (flow.host ? html`<p>${error.message}</p><p><a href="/billing" data-external>Review Meet credits</a></p>` : html`<p>${error.message}</p>`)
-        : error.code === 'room_full' || error.code === 'workspace_limit' || error.code === 'capacity_limit' || error.code === 'entitlement_required' || error.code === 'removed_from_meeting' ? html`<p>${error.message}</p>`
-          : error.code === 'too_early' ? html`<p>This meeting is not open yet.</p>` : html`<p>${error.message}</p>`;
+      const message = error.code === 'insufficient_credits' && flow.host ? html`<p>${error.message}</p><p><a href="/billing" data-external>Review Meet credits</a></p>`
+        : error.code === 'too_early' ? html`<p>This meeting is not open yet.</p>` : error.status === 0 ? html`<p>Schedora could not be reached. Check your connection and try again.</p>` : html`<p>${error.message}</p>`;
       mount($('#join-status'), notice('bad', message));
     } finally { preview.joining = false; }
   });
   await Promise.all([startCamera(), startMic()]);
   if (!preview.disposed) await listDevices();
+}
+
+function fillDevices(select, devices, label) {
+  if (!select) return;
+  const value = select.value;
+  mount(select, html`<option value="">${label}</option>${devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => html`<option value="${device.deviceId}">${device.label || `${label.replace('Default ', '')} ${index + 1}`}</option>`)}`);
+  select.value = [...select.options].some(option => option.value === value) ? value : '';
 }
 
 function waitForHost(ctx, flow) {
@@ -253,6 +308,16 @@ function preset(LK, maxHeight) {
   return maxHeight >= 720 ? presets.h720 : maxHeight >= 540 ? presets.h540 : maxHeight >= 360 ? presets.h360 : presets.h180;
 }
 
+// Screen-share failures. Browsers report both a cancelled picker and an OS-level block as
+// NotAllowedError; Chrome marks the OS case with "by system", so only then is that cause named.
+function shareAdvice(error) {
+  if (!navigator.mediaDevices?.getDisplayMedia) return ['info', 'This browser cannot share its screen. Most phones and tablets cannot; use a computer to share.'];
+  if (error?.name === 'NotAllowedError' && /system/i.test(error.message || '')) return ['warn', 'Your computer is blocking screen sharing for this browser. On a Mac, open System Settings › Privacy & Security › Screen Recording, allow this browser, then restart it and try again.'];
+  if (error?.name === 'NotAllowedError') return ['info', 'Screen sharing did not start. If you chose Cancel, nothing is shared; select Share screen to try again.'];
+  if (error?.name === 'NotReadableError' || error?.name === 'AbortError') return ['warn', 'The screen could not be captured. Close other apps that may be recording the screen, then try again.'];
+  return ['warn', 'Screen sharing could not start. Try again, or share a different window or tab.'];
+}
+
 // ---------------------------------------------------------------------------------------------
 // Meeting
 
@@ -260,10 +325,12 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   const maxHeight = flow.info.video.max_video_height;
   const room = new LK.Room({
     adaptiveStream: true, dynacast: true, disconnectOnPageLeave: true,
-    videoCaptureDefaults: { resolution: preset(LK, maxHeight).resolution },
+    videoCaptureDefaults: { resolution: preset(LK, maxHeight).resolution, ...(tracks.devices?.videoinput ? { deviceId: tracks.devices.videoinput } : {}) },
+    audioCaptureDefaults: tracks.devices?.audioinput ? { deviceId: tracks.devices.audioinput } : undefined,
     publishDefaults: { simulcast: true, videoEncoding: preset(LK, maxHeight).encoding, screenShareEncoding: { maxBitrate: 1500000, maxFramerate: 15 }, dtx: true }
   });
-  const state = { disposed: false, ended: null, pollTimer: null, host: admission.role === 'host' };
+  const participantId = admission.participant_id;
+  const state = { disposed: false, ended: null, pollTimer: null, host: admission.role === 'host', settling: false, connected: false };
   const remoteAudio = new Map();
   const detachAudio = entry => { entry.track.detach(entry.element); entry.element.remove(); };
   const dispose = () => {
@@ -275,28 +342,40 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     remoteAudio.clear();
     tracks.video?.stop(); tracks.audio?.stop();
     room.disconnect(true).catch(() => {});
+    delete document.body.dataset.inMeeting;
   };
   active = { dispose };
+  document.body.dataset.inMeeting = '1';
+  const shareSupported = Boolean(navigator.mediaDevices?.getDisplayMedia);
 
   mount(ctx.main, html`<div class="video-room" id="video-room">
-    <header class="video-bar"><div><strong>${flow.info.title}</strong> <span id="connection" class="muted" aria-live="polite">Connecting…</span></div>
-      <div id="room-alerts" aria-live="assertive"></div></header>
-    <section class="video-grid" id="grid" aria-label="Participants' video"></section>
+    <header class="video-bar"><div class="video-title"><strong>${flow.info.title}</strong><span id="connection" class="connection-chip" data-state="connecting" role="status">Connecting…</span></div>
+      ${state.host ? html`<button class="btn btn-small btn-end" type="button" id="end-all">End for everyone</button>` : ''}</header>
+    <div id="room-alerts" class="room-alerts" aria-live="assertive"></div>
+    <section class="video-stage" aria-label="Participants' video"><div class="video-grid" id="grid"></div></section>
     <div id="remote-audio"></div>
-    <aside class="video-people card card-plain" id="people-panel" hidden aria-label="People in this meeting"><h2>People</h2><ul class="list" id="people"></ul>
-      ${state.host ? html`<button class="btn btn-small" id="copy-invite">Copy guest link</button>` : ''}</aside>
+    <aside class="room-panel card" id="people-panel" hidden aria-labelledby="people-heading"><div class="row-between"><h2 id="people-heading">People</h2><button class="btn btn-small" type="button" data-close-panel>Close</button></div><ul class="list" id="people"></ul>
+      ${state.host ? html`<button class="btn btn-small" type="button" id="copy-invite">Copy guest link</button>` : ''}</aside>
+    <aside class="room-panel card" id="devices-panel" hidden aria-labelledby="devices-heading"><div class="row-between"><h2 id="devices-heading">Devices</h2><button class="btn btn-small" type="button" data-close-panel>Close</button></div>
+      <label for="dev-audioinput">Microphone</label><select id="dev-audioinput" data-kind="audioinput"></select>
+      <label for="dev-videoinput">Camera</label><select id="dev-videoinput" data-kind="videoinput"></select>
+      ${LK.supportsAudioOutputSelection() ? html`<label for="dev-audiooutput">Speaker</label><select id="dev-audiooutput" data-kind="audiooutput"></select>`
+        : html`<p class="hint" id="no-output">This browser does not let websites choose a speaker. Use your device's sound settings instead.</p>`}
+      <div id="device-message" role="status"></div></aside>
     <nav class="video-controls" aria-label="Meeting controls">
-      <button class="btn" id="enable-audio" hidden>Enable meeting audio</button>
-      <button class="btn" id="mic" aria-pressed="false">Mute</button>
-      <button class="btn" id="cam" aria-pressed="false">Stop video</button>
-      <button class="btn" id="share" aria-pressed="false">Share screen</button>
-      <button class="btn" id="people-toggle" aria-expanded="false" aria-controls="people-panel">People</button>
-      ${state.host ? html`<button class="btn btn-danger" id="end-all">End for everyone</button>` : ''}
-      <button class="btn btn-danger" id="leave">Leave</button>
+      <button class="btn" type="button" id="enable-audio" hidden>Turn on meeting sound</button>
+      <button class="btn" type="button" id="mic" aria-describedby="room-media-state">${MEDIA.microphone(true)}</button>
+      <button class="btn" type="button" id="cam" aria-describedby="room-media-state">${MEDIA.camera(true)}</button>
+      <button class="btn" type="button" id="share" ${shareSupported ? '' : raw('aria-disabled="true"')}>Share screen</button>
+      <button class="btn" type="button" id="devices-toggle" aria-expanded="false" aria-controls="devices-panel">Devices</button>
+      <button class="btn" type="button" id="people-toggle" aria-expanded="false" aria-controls="people-panel">People</button>
+      <button class="btn btn-leave" type="button" id="leave">Leave</button>
+      <span class="visually-hidden" id="room-media-state" role="status"></span>
     </nav></div>`);
 
-  const connection = text => { const element = $('#connection'); if (element) element.textContent = text; };
-  const alertBox = content => { const element = $('#room-alerts'); if (element) mount(element, content); };
+  const CONNECTION = { connecting: 'Connecting…', connected: 'Connected', reconnecting: 'Reconnecting…', disconnected: 'Disconnected' };
+  const connection = value => { const element = $('#connection'); if (element) { element.dataset.state = value; element.textContent = CONNECTION[value]; } };
+  const alertBox = (kind, message) => { const element = $('#room-alerts'); if (element) mount(element, message ? notice(kind, html`<p>${message}</p>`) : ''); };
   const tiles = new Map();
   function tileFor(participant, source = 'camera') {
     const key = participant.identity + ':' + source;
@@ -353,12 +432,17 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     if ($('#enable-audio')) $('#enable-audio').hidden = room.canPlaybackAudio;
     $('#grid')?.setAttribute('data-count', String(Math.min(9, tiles.size)));
     const local = room.localParticipant;
-    setPressed('#mic', !local.isMicrophoneEnabled, local.isMicrophoneEnabled ? 'Mute' : 'Unmute');
-    setPressed('#cam', !local.isCameraEnabled, local.isCameraEnabled ? 'Stop video' : 'Start video');
-    setPressed('#share', local.isScreenShareEnabled, local.isScreenShareEnabled ? 'Stop sharing' : 'Share screen');
+    const label = (selector, text) => { const button = $(selector); if (button && button.textContent !== text) button.textContent = text; };
+    label('#mic', MEDIA.microphone(local.isMicrophoneEnabled));
+    label('#cam', MEDIA.camera(local.isCameraEnabled));
+    label('#share', local.isScreenShareEnabled ? 'Stop sharing' : 'Share screen');
+    $('#share')?.classList.toggle('is-active', local.isScreenShareEnabled);
+    $('#mic')?.classList.toggle('is-off', !local.isMicrophoneEnabled);
+    $('#cam')?.classList.toggle('is-off', !local.isCameraEnabled);
+    const media = MEDIA.state(local.isCameraEnabled, local.isMicrophoneEnabled) + (local.isScreenShareEnabled ? ' · Sharing screen' : '');
+    if ($('#room-media-state') && $('#room-media-state').textContent !== media) $('#room-media-state').textContent = media;
     drawPeople(participants);
   }
-  function setPressed(selector, pressed, label) { const button = $(selector); if (button) { button.setAttribute('aria-pressed', String(pressed)); button.textContent = label; } }
   function drawPeople(participants) {
     const list = $('#people');
     if (!list) return;
@@ -373,10 +457,11 @@ async function meeting(ctx, flow, LK, admission, tracks) {
         if (row) {
           const button = document.createElement('button');
           button.className = 'btn btn-small';
+          button.type = 'button';
           button.textContent = 'Remove';
           button.setAttribute('aria-label', 'Remove ' + (participant.name || 'guest'));
           button.onclick = async () => {
-            if (!(await ask({ title: 'Remove this person?', body: 'They are disconnected now. A guest link they used stops working.', confirm: 'Remove', danger: true }))) return;
+            if (!(await ask({ title: 'Remove this person?', body: 'They are disconnected now and cannot rejoin this meeting. A guest link they used stops working.', confirm: 'Remove', danger: true }))) return;
             try { await flow.remove(row.id); toast('Removed.'); } catch (error) { toast(error.message); }
           };
           item.append(button);
@@ -385,16 +470,106 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       return item;
     }));
   }
-  function finish(kind, message) {
+
+  // Panels: one at a time; Escape or Close returns focus to the button that opened it.
+  const panels = { 'people-panel': '#people-toggle', 'devices-panel': '#devices-toggle' };
+  function setPanel(id, open) {
+    for (const [panelId, toggle] of Object.entries(panels)) {
+      const show = panelId === id && open;
+      const panel = $('#' + panelId);
+      if (!panel) continue;
+      const wasOpen = !panel.hidden;
+      panel.hidden = !show;
+      $(toggle).setAttribute('aria-expanded', String(show));
+      if (show && !wasOpen) panel.querySelector('select, button:not([data-close-panel]), [data-close-panel]')?.focus();
+      if (!show && wasOpen && panelId === id) $(toggle).focus();
+    }
+    if (open && id === 'devices-panel') loadDevices();
+  }
+  $('#video-room').addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    const open = Object.keys(panels).find(id => !$('#' + id).hidden);
+    if (open) { event.preventDefault(); setPanel(open, false); }
+  });
+  $$('[data-close-panel]').forEach(button => button.onclick = () => setPanel(button.closest('.room-panel').id, false));
+  $('#people-toggle').onclick = () => setPanel('people-panel', $('#people-panel').hidden);
+  $('#devices-toggle').onclick = () => setPanel('devices-panel', $('#devices-panel').hidden);
+
+  // Devices: the SDK switches the active device in place, keeping mute and camera state.
+  const KIND_NAMES = { audioinput: 'microphone', videoinput: 'camera', audiooutput: 'speaker' };
+  const deviceMessage = (kind, message) => mount($('#device-message'), message ? notice(kind, html`<p>${message}</p>`) : '');
+  let known = {};
+  async function loadDevices({ announceRemoved = false } = {}) {
+    for (const select of $$('#devices-panel select')) {
+      const kind = select.dataset.kind;
+      let devices = [];
+      try { devices = await LK.Room.getLocalDevices(kind, false); } catch { /* permission not granted: defaults only */ }
+      if (state.disposed) return;
+      const ids = devices.map(device => device.deviceId);
+      const activeId = room.getActiveDevice(kind);
+      if (announceRemoved && activeId && activeId !== 'default' && known[kind]?.includes(activeId) && !ids.includes(activeId)) {
+        alertBox('warn', `Your ${KIND_NAMES[kind]} was disconnected. Choose another one under Devices.`);
+      }
+      known[kind] = ids;
+      fillDevices(select, devices, `Default ${KIND_NAMES[kind]}`);
+      if (activeId && ids.includes(activeId) && activeId !== 'default') select.value = activeId;
+    }
+  }
+  $('#devices-panel').addEventListener('change', async event => {
+    const kind = event.target.dataset.kind;
+    if (!kind) return;
+    const id = event.target.value || 'default';
+    deviceMessage('', '');
+    try {
+      const switched = await room.switchActiveDevice(kind, id);
+      deviceMessage(switched === false ? 'warn' : 'ok', switched === false ? `The ${KIND_NAMES[kind]} could not be switched. Try another one.` : `Switched ${KIND_NAMES[kind]}.`);
+    } catch (error) {
+      deviceMessage('warn', kind === 'audiooutput' ? 'This speaker could not be selected. Use your device sound settings instead.' : deviceAdvice(error, KIND_NAMES[kind], { joining: false }));
+      await loadDevices();
+    }
+    refresh();
+  });
+
+  function finish(kind, message, { rejoin = false } = {}) {
     if (state.disposed && state.ended) return;
     state.ended = kind;
     dispose();
     active = null;
     if (!ctx.alive()) return;
-    const titles = { left: 'You left the meeting', ended: 'The meeting has ended', removed: 'You were removed from the meeting', duplicate: 'You joined from another tab or device', failed: 'Connection lost' };
-    mount(ctx.main, html`<div class="container page narrow"><div class="card video-state" role="status"><h1>${titles[kind]}</h1>${message ? html`<p>${message}</p>` : ''}
-      <div class="actions">${['left', 'failed', 'duplicate'].includes(kind) ? html`<a class="btn btn-primary" href="${location.pathname}" data-external>Rejoin</a>` : ''}${session.user ? html`<a class="btn" href="/meet?tab=video" data-external>Back to Meet</a>` : ''}</div></div></div>`);
+    const titles = { left: 'You left the meeting', ended: 'The meeting has ended', removed: 'You were removed from the meeting', duplicate: 'You joined from another tab or device', failed: 'You were disconnected', canceled: 'This appointment was canceled' };
+    mount(ctx.main, html`<div class="container page narrow"><div class="card video-state" role="status"><h1 tabindex="-1">${titles[kind]}</h1>${message ? html`<p>${message}</p>` : ''}
+      <div class="actions">${rejoin ? html`<a class="btn btn-primary" href="${location.pathname}" data-external id="rejoin">Rejoin</a>` : ''}${session.user ? html`<a class="btn" href="/meet?tab=video" data-external>Back to Meet</a>` : ''}</div>
+      ${rejoin ? html`<p class="hint">Rejoining checks your access again before you reconnect.</p>` : ''}</div></div>`);
     $('#main h1')?.focus?.();
+  }
+
+  // After the provider disconnects us, ask the server what it recorded before naming a cause.
+  const ENDED = { host: 'The host ended the meeting for everyone.', time_limit: 'The meeting reached its time limit.', paused: 'Schedora Meet video was paused by the service.', canceled: 'The appointment was canceled.' };
+  const REMOVED = { removed_by_host: 'A host removed you from this meeting.', credits_exhausted: "The host's workspace ran out of Meet credits, so your connection was stopped. Contact the host.",
+    booking_canceled: 'The appointment was canceled.', booking_rescheduled: 'The appointment was rescheduled. Use the link in your newest confirmation email.' };
+  function confirmedOutcome(info) {
+    if (!info) return null;
+    if (info.you?.status === 'removed') return ['removed', REMOVED[info.you.removed_reason] || 'Your access to this meeting was stopped.'];
+    if (['ended', 'canceled'].includes(info.state) || ['ended', 'ending', 'canceled'].includes(info.status)) return [info.state === 'canceled' ? 'canceled' : 'ended', ENDED[info.end_cause] || 'This meeting has ended.'];
+    if (['rescheduled', 'revoked'].includes(info.state)) return ['removed', STATES[info.state][1]];
+    return null;
+  }
+  async function settle(reason) {
+    if (state.settling || state.disposed) return;
+    state.settling = true;
+    connection('disconnected');
+    const R = LK.DisconnectReason;
+    if (reason === R.CLIENT_INITIATED) return finish('left', '', { rejoin: true });
+    if (reason === R.DUPLICATE_IDENTITY) return finish('duplicate', 'This tab was disconnected because you joined again elsewhere.', { rejoin: true });
+    let info = null;
+    try { info = await flow.load(participantId); } catch { /* the server could not be asked */ }
+    const confirmed = confirmedOutcome(info);
+    if (confirmed) return finish(confirmed[0], confirmed[1]);
+    // Without confirmation, removal and room deletion are still final from the provider's side,
+    // but no cause is named.
+    if (reason === R.PARTICIPANT_REMOVED) return finish('removed', 'The meeting service disconnected you.');
+    if (reason === R.ROOM_DELETED) return finish('ended', 'This meeting has ended.');
+    finish('failed', 'Your connection to the meeting was lost.', { rejoin: true });
   }
 
   room
@@ -404,34 +579,28 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     .on(LK.RoomEvent.TrackMuted, refresh).on(LK.RoomEvent.TrackUnmuted, refresh)
     .on(LK.RoomEvent.LocalTrackPublished, refresh).on(LK.RoomEvent.LocalTrackUnpublished, refresh) // includes screen share stopped from the browser's own control
     .on(LK.RoomEvent.ActiveSpeakersChanged, refresh)
-    .on(LK.RoomEvent.Reconnecting, () => { connection('Reconnecting…'); alertBox(notice('warn', html`<p>Connection interrupted. Reconnecting…</p>`)); })
-    .on(LK.RoomEvent.Reconnected, () => { connection('Connected'); alertBox(''); })
-    .on(LK.RoomEvent.MediaDevicesError, error => alertBox(notice('warn', html`<p>${error?.name === 'NotAllowedError' ? 'Camera or microphone access was blocked.' : 'A camera or microphone stopped working.'}</p>`)))
-    .on(LK.RoomEvent.Disconnected, reason => {
-      if (state.disposed) return;
-      const R = LK.DisconnectReason;
-      if (reason === R.CLIENT_INITIATED) return finish('left');
-      if (reason === R.ROOM_DELETED) return finish('ended', 'The host ended the meeting, or it reached its time limit.');
-      if (reason === R.PARTICIPANT_REMOVED) return finish('removed', 'A host removed you, or the workspace ran out of Meet credits.');
-      if (reason === R.DUPLICATE_IDENTITY) return finish('duplicate', 'This tab was disconnected because you joined again elsewhere.');
-      finish('failed', 'We could not reconnect you to the meeting.');
-    });
+    .on(LK.RoomEvent.MediaDevicesChanged, () => loadDevices({ announceRemoved: true }))
+    .on(LK.RoomEvent.Reconnecting, () => { connection('reconnecting'); alertBox('warn', 'Connection interrupted. Reconnecting… You do not need to do anything.'); })
+    .on(LK.RoomEvent.Reconnected, () => { connection('connected'); alertBox('', ''); })
+    .on(LK.RoomEvent.MediaDevicesError, error => alertBox('warn', deviceAdvice(error, 'camera or microphone', { joining: false })))
+    // Before the first successful connection, a failure is reported by connect() below instead.
+    .on(LK.RoomEvent.Disconnected, reason => { if (!state.disposed && state.connected) settle(reason); });
 
   $('#leave').onclick = () => { room.disconnect(true); };
   $('#enable-audio').onclick = async () => {
     try { await room.startAudio(); refresh(); }
-    catch { alertBox(notice('warn', html`<p>Meeting audio is blocked. Allow sound in this browser and try again.</p>`)); }
+    catch { alertBox('warn', 'Meeting sound is blocked. Allow sound for this site in the browser, then try again.'); }
   };
-  $('#mic').onclick = async () => { try { await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled); } catch (error) { alertBox(notice('warn', html`<p>${micError(error)}</p>`)); } refresh(); };
-  $('#cam').onclick = async () => { try { await room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled, { resolution: preset(LK, maxHeight).resolution }); } catch (error) { alertBox(notice('warn', html`<p>${micError(error, 'camera')}</p>`)); } refresh(); };
+  $('#mic').onclick = async () => { try { await room.localParticipant.setMicrophoneEnabled(!room.localParticipant.isMicrophoneEnabled); } catch (error) { alertBox('warn', deviceAdvice(error, 'microphone', { joining: false })); } refresh(); };
+  $('#cam').onclick = async () => { try { await room.localParticipant.setCameraEnabled(!room.localParticipant.isCameraEnabled, { resolution: preset(LK, maxHeight).resolution }); } catch (error) { alertBox('warn', deviceAdvice(error, 'camera', { joining: false })); } refresh(); };
   $('#share').onclick = async () => {
-    try { await room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled, { audio: true, resolution: { width: 1920, height: Math.min(1080, maxHeight), frameRate: 15 } }); }
-    catch (error) { if (error?.name !== 'NotAllowedError') alertBox(notice('warn', html`<p>Screen sharing could not start.</p>`)); }
+    if (!shareSupported) return alertBox(...shareAdvice(null));
+    try { await room.localParticipant.setScreenShareEnabled(!room.localParticipant.isScreenShareEnabled, { audio: true, resolution: { width: 1920, height: Math.min(1080, maxHeight), frameRate: 15 } }); alertBox('', ''); }
+    catch (error) { alertBox(...shareAdvice(error)); }
     refresh();
   };
-  $('#people-toggle').onclick = () => { const panel = $('#people-panel'); panel.hidden = !panel.hidden; $('#people-toggle').setAttribute('aria-expanded', String(!panel.hidden)); };
   $('#end-all')?.addEventListener('click', async () => {
-    if (!(await ask({ title: 'End the meeting for everyone?', body: 'Everyone is disconnected and the meeting link stops working.', confirm: 'End meeting', danger: true }))) return;
+    if (!(await ask({ title: 'End the meeting for everyone?', body: 'Everyone is disconnected and the meeting links stop working. To leave without ending it, choose Leave instead.', confirm: 'End meeting for everyone', danger: true }))) return;
     try { await flow.end(); finish('ended', 'You ended the meeting for everyone.'); } catch (error) { toast(error.message); }
   });
   $('#copy-invite')?.addEventListener('click', async () => { try { copy((await flow.invite()).url, 'Guest link'); } catch (error) { toast(error.message); } });
@@ -442,37 +611,35 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     dispose();
     active = null;
     if (!ctx.alive()) return;
-    return stateScreen(ctx, flow.info, 'unavailable', html`<p class="hint">The video service could not be reached. Check your connection and try again.</p><div class="actions"><a class="btn btn-primary" href="${location.pathname}" data-external>Try again</a></div>`);
+    return stateScreen(ctx, flow.info, 'unreachable', html`<div class="actions"><a class="btn btn-primary" href="${location.pathname}" data-external>Try again</a></div>`);
   }
   admission.token = null; // reconnects use the provider's own refreshed token
   if (state.disposed || !ctx.alive()) { dispose(); return; }
-  connection('Connected');
+  state.connected = true;
+  connection('connected');
   await room.startAudio().catch(() => {});
   try {
     if (tracks.audio) await room.localParticipant.publishTrack(tracks.audio);
     if (tracks.video) await room.localParticipant.publishTrack(tracks.video, { simulcast: true });
-  } catch { alertBox(notice('warn', html`<p>Your camera or microphone could not be shared. Use the buttons below to try again.</p>`)); }
+  } catch { alertBox('warn', 'Your camera or microphone could not be shared. Use the buttons below to try again.'); }
   tracks.video = tracks.audio = null; // the room owns them now and stops them on disconnect
   refresh();
 
-  // Hosts: roster (for removal) and low-credit warnings; everyone: meeting ended from elsewhere.
+  // Server state every 30 s: a meeting ended elsewhere, this person's removal, and (hosts) roster and credits.
   const poll = async () => {
     if (state.disposed) return;
     try {
-      const info = await flow.load();
+      const info = await flow.load(participantId);
       if (state.disposed) return;
-      if (info.state === 'ended' || info.state === 'canceled') return finish('ended', 'This meeting has ended.');
+      const confirmed = confirmedOutcome(info);
+      if (confirmed) return finish(confirmed[0], confirmed[1]);
       state.roster = info.participants;
-      if (info.low_balance) alertBox(notice('warn', html`<p><strong>Meet credits are running low.</strong> People will be removed when the reserved time runs out. ${state.host ? html`<a href="/billing" target="_blank" rel="noopener">Recharge credits</a>` : ''}</p>`));
+      if (info.low_balance) alertBox('warn', 'Meet credits are running low. People will be disconnected when the reserved time runs out.' + (state.host ? ' Recharge from the Plans page.' : ''));
       refresh();
     } catch { /* transient */ }
   };
   state.pollTimer = setInterval(poll, 30000);
   poll();
-}
-
-function micError(error, device = 'microphone') {
-  return error?.name === 'NotAllowedError' ? `Access to your ${device} is blocked in the browser's site settings.` : `Your ${device} could not be started.`;
 }
 
 // ---------------------------------------------------------------------------------------------
