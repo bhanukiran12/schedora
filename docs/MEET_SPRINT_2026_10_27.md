@@ -1,6 +1,6 @@
 # Meet sprint verification — 27 October 2026
 
-Status: real-provider automated verification passed; physical-device acceptance is pending. Production video and recharge remain disabled. This is not a production-readiness certification.
+Status: real-provider automated verification passed; physical-device screenshots reviewed, but reported video/audio quality issues and remaining device acceptance are unresolved. Production video and recharge remain disabled. This is not a production-readiness certification.
 
 ## Fix from real-provider testing
 
@@ -43,3 +43,13 @@ The optional `STAGING_PUBLIC_BASE_URL` accepts only a temporary HTTPS trycloudfl
 ## Still required
 
 Human confirmation of two-way speech and physical camera video; phone layout and recovery from a physical network interruption; real device/speaker switching and unplugging; native screen-picker cancellation and macOS denial; Safari/iOS as applicable; screen-reader review. Production additionally needs PostgreSQL verification, permanent callbacks, monitoring, approved commercial configuration and the existing release gates. Do not enable video/recharge based solely on this report.
+
+## Physical-device feedback and layout follow-up
+
+User-supplied desktop/Android Chrome screenshots show camera images displayed on both devices and receipt of desktop screen sharing on the phone. They do not establish motion, audio quality or recovery from a network interruption. Both microphones were muted in the supplied frames. The user subsequently reported low incoming video quality and quiet phone-to-computer speech while using wired phone earphones. Those reports remain open defects; do not infer successful audio acceptance from the earlier generic positive feedback.
+
+The mobile screen-sharing screenshot exposed camera tiles overlapping and cropping. The grid now gives tiles intrinsic-height rows and uses a separate thumbnail row during sharing, with the shared content below and controls retained. Regression coverage checks for tile overlap/collapse at 375×667, 375×800, 768×800 and 1440×900, then checks restoration after sharing stops. The fake-room fixture now creates an actual synthetic share track so these tests exercise the screen tile rather than only the share button.
+
+Devices → Check call quality reports received camera resolution/decoded frames, browser playback level and cumulative audio packet loss when exposed. Missing statistics are explicitly unavailable. It neither records speech nor measures operating-system speaker volume. It uses the installed SDK's public track stats methods. The first real-provider check returned 640×360 video and 100% browser playback level; this is evidence from synthetic media, not diagnosis of the earlier physical call.
+
+The capture cap remains 720p, adaptive streaming remains enabled, and no blind audio gain or forced high-bandwidth setting was added. SDK defaults already enable automatic gain, echo cancellation and noise suppression. A repeat physical comparison should test the phone's built-in microphone versus the wired headset at similar speaking distance and record the call-check readings while the issue is present.

@@ -491,7 +491,22 @@ try {
       await evaluate('window.__fakeShareError = null');
       await click('#share');
       await waitFor("document.querySelector('#share').textContent === 'Stop sharing'", 'sharing');
+      await waitFor("document.querySelectorAll('.video-tile').length === 3 && document.querySelector('#grid').dataset.sharing === 'true'", 'screen tile alongside two cameras');
+      for (const [width, height] of [[375, 667], [375, 800], [768, 800], [1440, 900]]) {
+        await viewport(width, height);
+        const geometry = await evaluate("(() => { const tiles=[...document.querySelectorAll('.video-tile')].map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height}}); return {tiles,overlap:tiles.some((a,i)=>tiles.slice(i+1).some(b=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>1 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1)),pageOverflow:document.documentElement.scrollHeight-innerHeight}; })()");
+        if (geometry.overlap || geometry.tiles.some(tile => tile.height < 40) || geometry.pageOverflow > 0) throw new Error(`Overlapping/collapsed share layout at ${width}x${height}: ${JSON.stringify(geometry)}`);
+        for (const control of ['#mic', '#cam', '#devices-toggle', '#leave']) if (!(await inView(control))) throw new Error(`${control} hidden while sharing at ${width}`);
+        await shot(`sharing-layout-${width}-${height}`);
+      }
+      await viewport(375);
       await click('#share');
+      await waitFor("document.querySelector('#grid').dataset.sharing === 'false' && !document.querySelector('.video-tile-screen')", 'camera layout restored after sharing');
+      await click('#devices-toggle');
+      await click('#call-check summary');
+      await click('#refresh-call-check');
+      await waitFor("document.querySelector('#call-check-result').innerText.includes('Camera limit: up to') && document.querySelector('#call-check-result').innerText.includes('not available')", 'call check handles unavailable browser statistics honestly');
+      await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
       // Reconnecting, then a recoverable drop: the server still lists us, so Rejoin is offered.
       await evaluate("window.__fakeRoom.emit('reconnecting')");
       await waitFor("document.querySelector('#connection').textContent === 'Reconnecting…' && document.querySelector('#room-alerts').innerText.includes('Reconnecting')", 'reconnecting state');

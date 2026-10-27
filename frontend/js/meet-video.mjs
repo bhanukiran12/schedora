@@ -361,7 +361,10 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       <label for="dev-videoinput">Camera</label><select id="dev-videoinput" data-kind="videoinput"></select>
       ${LK.supportsAudioOutputSelection() ? html`<label for="dev-audiooutput">Speaker</label><select id="dev-audiooutput" data-kind="audiooutput"></select>`
         : html`<p class="hint" id="no-output">This browser does not let websites choose a speaker. Use your device's sound settings instead.</p>`}
-      <div id="device-message" role="status"></div></aside>
+      <div id="device-message" role="status"></div>
+      <details id="call-check"><summary>Check call quality</summary><p class="hint">Shows what this device is receiving. A connected call can still have low resolution or quiet sound.</p>
+        <button class="btn btn-small" type="button" id="refresh-call-check">Refresh call check</button><div id="call-check-result" role="status"></div>
+        <p class="hint">Quiet sound? Check the computer's output volume. On the phone, compare its built-in microphone with the wired headset microphone while speaking at the same distance. Browser playback level cannot measure your hardware volume.</p></details></aside>
     <nav class="video-controls" aria-label="Meeting controls">
       <button class="btn" type="button" id="enable-audio" hidden>Turn on meeting sound</button>
       <button class="btn" type="button" id="mic" aria-describedby="room-media-state">${MEDIA.microphone(true)}</button>
@@ -431,6 +434,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     for (const [key, entry] of remoteAudio) if (!heard.has(key)) { detachAudio(entry); remoteAudio.delete(key); }
     if ($('#enable-audio')) $('#enable-audio').hidden = room.canPlaybackAudio;
     $('#grid')?.setAttribute('data-count', String(Math.min(9, tiles.size)));
+    $('#grid')?.setAttribute('data-sharing', String([...tiles.keys()].some(key => key.endsWith(':screen'))));
     const local = room.localParticipant;
     const label = (selector, text) => { const button = $(selector); if (button && button.textContent !== text) button.textContent = text; };
     label('#mic', MEDIA.microphone(local.isMicrophoneEnabled));
@@ -494,6 +498,28 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   $$('[data-close-panel]').forEach(button => button.onclick = () => setPanel(button.closest('.room-panel').id, false));
   $('#people-toggle').onclick = () => setPanel('people-panel', $('#people-panel').hidden);
   $('#devices-toggle').onclick = () => setPanel('devices-panel', $('#devices-panel').hidden);
+  $('#refresh-call-check').onclick = async () => {
+    const target = $('#call-check-result');
+    mount(target, html`<p>Checking…</p>`);
+    const rows = [];
+    for (const participant of room.remoteParticipants.values()) {
+      const camera = participant.getTrackPublication(LK.Track.Source.Camera)?.track;
+      const microphone = [...participant.audioTrackPublications.values()].find(publication => publication.source === LK.Track.Source.Microphone)?.track;
+      let video, audio;
+      try { video = await camera?.getReceiverStats?.(); } catch { /* browser may not expose stats */ }
+      try {
+        const report = await microphone?.getRTCStatsReport?.();
+        if (report) for (const row of report.values()) if (row.type === 'inbound-rtp' && (row.kind === 'audio' || row.mediaType === 'audio')) { audio = row; break; }
+      } catch { /* show unavailable rather than guessing */ }
+      if (state.disposed) return;
+      const packets = (audio?.packetsReceived || 0) + Math.max(0, audio?.packetsLost || 0);
+      const volume = microphone?.getVolume?.();
+      rows.push(html`<li><strong>${participant.name || 'Guest'}</strong>
+        <p>Incoming camera: ${video?.frameWidth && video?.frameHeight ? `${video.frameWidth} × ${video.frameHeight}` : 'not available'} · ${video?.framesDecoded === undefined ? 'frame count unavailable' : `${video.framesDecoded} frames decoded on this stream`}.</p>
+        <p>Audio playback: ${typeof volume === 'number' ? `${Math.round(volume * 100)}% browser level` : 'not available'} · ${packets ? `${(Math.max(0, audio.packetsLost || 0) / packets * 100).toFixed(1)}% packets lost on this stream` : 'packet data not available'}.</p></li>`);
+    }
+    if (!state.disposed) mount(target, html`<p>Camera limit: up to ${maxHeight}p. Resolution adapts to the tile size, source camera and connection.</p>${rows.length ? html`<ul class="list">${rows}</ul>` : html`<p>No remote participants to measure.</p>`}`);
+  };
 
   // Devices: the SDK switches the active device in place, keeping mute and camera state.
   const KIND_NAMES = { audioinput: 'microphone', videoinput: 'camera', audiooutput: 'speaker' };

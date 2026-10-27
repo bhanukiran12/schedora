@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { client, signUp } from '../test/helpers.mjs';
 
 if (process.env.RUN_LIVEKIT_STAGING !== 'true') throw new Error('Set RUN_LIVEKIT_STAGING=true and start scripts/livekit-staging.mjs first.');
-const base = 'http://localhost:3100';
+const base = process.env.STAGING_PUBLIC_BASE_URL || 'http://localhost:3100';
+if (base !== 'http://localhost:3100') {
+  const address = new URL(base);
+  assert.ok(address.protocol === 'https:' && address.hostname.endsWith('.trycloudflare.com') && !address.username && !address.password && address.pathname === '/' && !address.search && !address.hash, 'Only an approved temporary staging origin may override localhost.');
+}
 const config = await (await fetch(base + '/api/config')).json();
 assert.equal(config.video?.enabled, true, 'The isolated staging backend must enable video.');
 const binary = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome', '/usr/bin/chromium'].find(path => path && existsSync(path));
@@ -161,6 +165,12 @@ try {
     previous = current;
   }
   steps.push({ check: 'Sustained two-way synthetic audio/video over real LiveKit Cloud, six 10-second windows', windows });
+  await host.click('#devices-toggle');
+  await host.click('#call-check summary');
+  await host.click('#refresh-call-check');
+  await host.wait("document.querySelector('#call-check-result')?.innerText.includes('frames decoded on this stream') && document.querySelector('#call-check-result')?.innerText.includes('100% browser level')", 'Call quality statistics did not show received video and full browser audio level.');
+  steps.push({ check: 'Real-provider call-check statistics', details: await host.evaluate("document.querySelector('#call-check-result').innerText") });
+  await host.click('#devices-toggle');
   await host.click('#mic');
   await host.wait("document.querySelector('#mic').textContent==='Unmute microphone'", 'Mute failed.');
   await host.click('#mic');
@@ -172,6 +182,12 @@ try {
   steps.push({ check: 'Microphone and camera controls', passed: true });
   await host.click('#share');
   await guest.wait("[...document.querySelectorAll('#grid video')].filter(video=>video.videoWidth>0).length>=3", 'Synthetic screen was not decoded by the guest.');
+  await guest.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 667, deviceScaleFactor: 1, mobile: true });
+  const overlap = await guest.evaluate("(() => {const boxes=[...document.querySelectorAll('.video-tile')].map(e=>e.getBoundingClientRect());return boxes.some((a,i)=>boxes.slice(i+1).some(b=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1))})()");
+  assert.equal(overlap, false, 'Mobile camera and screen-share tiles overlap.');
+  const shareScreenshot = await guest.send('Page.captureScreenshot', { format: 'png' });
+  writeFileSync(new URL('../data/livekit-cloud-share-mobile.png', import.meta.url), Buffer.from(shareScreenshot.data, 'base64'));
+  await guest.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await host.click('#share');
   await guest.wait("document.querySelectorAll('#grid video').length===2", 'Screen share did not stop.');
   steps.push({ check: 'Synthetic screen publish, remote decoding and stop over Cloud', passed: true });

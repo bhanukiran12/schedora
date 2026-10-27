@@ -41,7 +41,8 @@ export class Room {
       setCameraEnabled: enabled => toggle(Track.Source.Camera, enabled, () => Real.createLocalVideoTrack()),
       async setScreenShareEnabled(enabled) {
         if (enabled && window.__fakeShareError) throw new DOMException(window.__fakeShareError.message, window.__fakeShareError.name);
-        if (enabled) local.publications.set(Track.Source.ScreenShare, { track: null, isMuted: false }); else local.publications.delete(Track.Source.ScreenShare);
+        if (enabled) local.publications.set(Track.Source.ScreenShare, { track: await Real.createLocalVideoTrack(), isMuted: false });
+        else { local.publications.get(Track.Source.ScreenShare)?.track?.stop(); local.publications.delete(Track.Source.ScreenShare); }
         room.emit(enabled ? RoomEvent.LocalTrackPublished : RoomEvent.LocalTrackUnpublished);
       }
     });
