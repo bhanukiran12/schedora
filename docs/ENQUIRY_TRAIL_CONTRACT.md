@@ -6,11 +6,11 @@ Status: **proposal, not implemented.** Slices 3 and 7 of the [implementation log
 
 | Limit today | Consequence |
 | --- | --- |
-| Built per form, in the browser, from `GET /runs` and `GET /tasks` (latest 200 each) plus three `GET /bookings` scopes | Older follow-ups fall out of view; there is no workspace-wide "needs attention" queue across forms |
+| Workspace list and per-form trails are built in the browser from at most 20 forms × 50 responses, latest 200 runs/tasks and three booking scopes | The released workspace queue cannot establish complete historical coverage; older enquiries and follow-ups may fall outside its loaded windows |
 | Linking a response to its booking goes through the booking reference from `next_step`, then a booking list lookup | Members who do not host the booking cannot see its follow-ups (shown as "not visible to your role") |
 | No owner or assignment | "Needs attention" cannot say who should act |
 | Attention rules are computed client-side | Rules can drift between screens; counts are not available to notifications or reports |
-| Bookings made directly (not through a form) and their runs are not enquiries | A consultant using only Meet + Flow has no trail view |
+| Direct bookings and their follow-ups are included in the released Enquiries list, but ordering uses appointment time because the API lacks booking creation time | Meet + Flow has a trail view; a dependable arrival-ordered inbox still needs an authoritative creation timestamp and pagination |
 
 ## Data and state model
 
