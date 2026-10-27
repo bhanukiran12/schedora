@@ -19,7 +19,7 @@ const shotsDir = shotsIndex > 0 ? process.argv[shotsIndex + 1] : null;
 if (shotsDir) mkdirSync(shotsDir, { recursive: true });
 
 const workDir = mkdtempSync(join(tmpdir(), 'schedora-browser-'));
-const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
+const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { port: 0, workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
 await app.start();
 await new Promise(resolve => app.server.close(resolve));
 await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -27,13 +27,24 @@ const base = `http://127.0.0.1:${app.server.address().port}`;
 app.config.baseUrl = base; // links in emails and payment redirects point at this test server
 
 const port = 9300 + Math.floor(Math.random() * 500);
-const browser = spawn(browserPath, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${join(workDir, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'], { stdio: 'ignore' });
+const browser = spawn(browserPath, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${join(workDir, 'profile')}`, '--no-first-run', '--no-default-browser-check', '--disable-gpu', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+let browserDiagnostic = '';
+let browserSpawnError;
+browser.stderr.setEncoding('utf8');
+browser.stderr.on('data', chunk => { browserDiagnostic = (browserDiagnostic + chunk).slice(-8192); });
+browser.on('error', error => { browserSpawnError = error; });
 let target;
-for (let attempt = 0; attempt < 50 && !target; attempt++) {
+for (let attempt = 0; attempt < 150 && !target; attempt++) {
+  if (browserSpawnError || browser.exitCode !== null || browser.signalCode !== null) break;
   await new Promise(resolve => setTimeout(resolve, 200));
   try { target = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(item => item.type === 'page'); } catch { /* starting */ }
 }
-if (!target) throw new Error('Browser did not start.');
+if (!target) {
+  browser.kill();
+  await app.stop();
+  try { rmSync(workDir, { recursive: true, force: true }); } catch { /* browser may still be closing */ }
+  throw new Error(`Browser did not start: ${browserPath}; exit=${browser.exitCode}; signal=${browser.signalCode}; ${browserSpawnError?.message || ''}\n${browserDiagnostic || 'No browser diagnostic output.'}`);
+}
 
 const socket = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
