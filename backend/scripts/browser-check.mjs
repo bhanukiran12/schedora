@@ -68,6 +68,9 @@ const waitFor = async (expression, label, timeout = 8000) => {
   throw new Error(`Timed out waiting for ${label}`);
 };
 await send('Runtime.enable'); await send('Page.enable'); await send('Log.enable');
+// CI parity: CI runs in UTC with an en-US browser. Set BROWSER_TIMEZONE / BROWSER_LOCALE to reproduce it locally.
+if (process.env.BROWSER_TIMEZONE) await send('Emulation.setTimezoneOverride', { timezoneId: process.env.BROWSER_TIMEZONE });
+if (process.env.BROWSER_LOCALE) await send('Emulation.setLocaleOverride', { locale: process.env.BROWSER_LOCALE });
 
 async function open(path, ready = "document.querySelector('#main h1')") {
   currentLabel = path;
@@ -433,7 +436,11 @@ try {
       await waitFor("document.body.dataset.micMeter === 'on' && document.querySelector('#preview')?.srcObject", 'microphone meter running', 10000);
       if ((await evaluate("[document.querySelector('#toggle-camera').textContent, document.querySelector('#toggle-mic').textContent].join()")) !== 'Turn camera off,Mute microphone') throw new Error('prejoin labels');
       if (!(await evaluate("document.querySelector('#mic-level') && document.querySelector('label[for=mic-level]').textContent === 'Microphone level'"))) throw new Error('meter has no label');
-      if (!(await inView('#join-button'))) throw new Error('Join is not visible without scrolling at 375 px');
+      for (const height of [800, 667]) { // includes a small phone; fonts differ between platforms
+        await viewport(375, height);
+        if (!(await inView('#join-button'))) throw new Error(`Join is not visible without scrolling at 375×${height}`);
+      }
+      await viewport(375);
       await click('#toggle-mic');
       await waitFor("document.querySelector('#toggle-mic').textContent === 'Unmute microphone' && document.querySelector('#media-state').textContent.includes('Microphone muted') && !document.body.dataset.micMeter", 'mic muted and meter stopped');
       await click('#toggle-mic');

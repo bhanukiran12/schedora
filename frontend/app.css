@@ -531,6 +531,9 @@ body[data-in-meeting] #site-header, body[data-in-meeting] #site-footer, body[dat
 }
 @media (max-width: 760px) {
   .prejoin { grid-template-columns: 1fr; gap: 12px; }
+  /* Name and Join first on phones, so joining never depends on font metrics or guidance length;
+     the camera and microphone check follows directly below. */
+  .prejoin-details { order: -1; }
   .prejoin-page { padding-top: 12px; }
   .prejoin-page .card { padding: 12px; }
   .prejoin-details h1 { font-size: 24px; margin: 4px 0; }
