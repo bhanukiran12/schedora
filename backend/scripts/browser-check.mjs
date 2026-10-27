@@ -239,6 +239,24 @@ try {
   for (const tab of ['meetings', 'video', 'polls', 'contacts', 'workflows', 'analytics', 'integrations', 'insights']) {
     await step(`Meet tab: ${tab}`, async () => { await open(`/meet?tab=${tab}`, "document.querySelector('#tab-panel') && !document.querySelector('#tab-panel > .loading')"); await layoutCheck(`meet ${tab}`); });
   }
+  await step('Meet navigation: every section reachable on mobile, keyboard menu, quiet cancel still confirms', async () => {
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+    await open('/meet?tab=meetings', "document.querySelector('.tab-more summary') && !document.querySelector('#tab-panel > .loading')");
+    const shown = await evaluate("[...document.querySelectorAll('.meet-tabs > a')].filter(a => a.getClientRects().length).map(a => a.textContent).join()");
+    if (shown !== 'Event types,Meetings,Video') throw new Error('unexpected visible tabs: ' + shown);
+    if ((await evaluate('document.documentElement.scrollWidth - innerWidth')) > 0) throw new Error('mobile navigation overflows');
+    await click('.tab-more summary');
+    const menu = await evaluate("[...document.querySelectorAll('.tab-more li a')].filter(a => a.getClientRects().length).map(a => a.getAttribute('href').split('tab=')[1]).join()");
+    if (menu !== 'polls,contacts,workflows,analytics,integrations,insights,emails') throw new Error('menu is missing sections: ' + menu);
+    await evaluate("document.querySelector('.tab-more li a').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+    if (await evaluate("document.querySelector('.tab-more').open || !document.activeElement.matches('.tab-more summary')")) throw new Error('Escape did not close the menu and return focus');
+    await click('[data-cancel]');
+    await waitFor("document.querySelector('dialog[open]')?.innerText.includes('Cancel this meeting?')", 'cancel confirmation');
+    await click('dialog[open] button[value=cancel]');
+    await open('/meet?tab=analytics', "document.querySelector('.tab-more summary[aria-current=page]')");
+    if (!(await evaluate("document.querySelector('.tab-more summary').innerText.includes('More: Analytics') && document.querySelector('h1').innerText === 'Analytics'"))) throw new Error('active section not shown in the menu or heading');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  });
   await step('poll: create, vote, view results', async () => {
     await open('/meet?tab=polls', "document.querySelector('#new-poll')");
     await click('#new-poll');
@@ -285,6 +303,54 @@ try {
     await layoutCheck('test checkout');
     await click('#simulate-pay');
     await waitFor("document.body.innerText.includes('Payment received')", 'payment confirmed');
+  });
+  // Create → book → join for a Schedora Meet event (fake provider, isolated test server only).
+  let videoManage;
+  await step('video booking: create event, book, exact join instructions, email and join link', async () => {
+    await open('/meet/event-types/new', "document.querySelector('#new-location')");
+    if (!(await evaluate("document.querySelector('#new-location').closest('section').querySelector('#title') !== null"))) throw new Error('location is not in the details section');
+    await fill('#title', 'Video consult'); await fill('#min_notice_hours', '0');
+    await evaluate("document.querySelector('[name=published]').checked = true");
+    await evaluate("const s = document.querySelector('#new-location'); s.value = 'schedora_meet'; s.dispatchEvent(new Event('change', { bubbles: true }))");
+    if (!(await evaluate("document.querySelector('#location-help').innerText.includes('personal join link')"))) throw new Error('location help missing');
+    await layoutCheck('event editor location');
+    await click('#add-location');
+    await click('#event-form [type="submit"]');
+    await waitFor("/^\\/meet\\/event-types\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('#slug')", 'saved video event');
+    const videoSlug = await evaluate("document.querySelector('#slug').value");
+    await open(`/meet/${workspaceSlug}/${videoSlug}`, "document.querySelector('.day[data-available]')");
+    const zoneText = await evaluate("document.querySelector('#invitee-zone').selectedOptions[0].textContent");
+    if (!/\(UTC[+-]\d\d:\d\d\)/.test(zoneText)) throw new Error('zone option is not friendly: ' + zoneText);
+    await evaluate("[...document.querySelectorAll('.day[data-available]')].pop().click()");
+    await evaluate("[...document.querySelectorAll('.slot')].pop().click()");
+    await waitFor("document.querySelector('#invitee-form')", 'details form');
+    if (!(await evaluate("/\\(UTC[+-]\\d\\d:\\d\\d\\)/.test(document.querySelector('#selection-summary').innerText)"))) throw new Error('selection summary lacks a friendly zone');
+    await fill('#name', 'Vid Invitee'); await fill('#email', 'vid@example.com');
+    await click('#invitee-form [type="submit"]');
+    await waitFor("document.body.innerText.includes('You are scheduled') && document.querySelector('.join-block a')", 'video confirmation');
+    await layoutCheck('video booking confirmation');
+    const page = await evaluate("({ text: document.querySelector('#booking-main').innerText, href: document.querySelector('.join-block a').getAttribute('href') })");
+    for (const expected of ['Starts', 'Link opens', 'How to join the video meeting', 'If you arrive before the host']) if (!page.text.includes(expected)) throw new Error('confirmation missing: ' + expected);
+    if (/a few minutes/i.test(page.text) || /Asia\/Calcutta/.test(page.text)) throw new Error('vague or raw-zone wording remains');
+    const booking = app.db.get("SELECT id, starts_at FROM bookings WHERE invitee_email = 'vid@example.com'");
+    const room = app.db.get('SELECT r.join_opens_at FROM video_rooms r JOIN bookings b ON b.meeting_id = r.meeting_id WHERE b.id = ?', booking.id);
+    if (room.join_opens_at !== booking.starts_at - app.config.video.joinEarlyMinutes * 60000) throw new Error('room window does not match the configured policy');
+    const email = app.db.get("SELECT body FROM emails WHERE kind = 'confirmation' AND to_address = 'vid@example.com'").body;
+    if (!email.includes(page.href) || !/The link opens .*\(UTC[+-]\d\d:\d\d\)/.test(email)) throw new Error('email join link or opening time missing');
+    videoManage = await evaluate("[...document.querySelectorAll('a')].find(a => a.textContent.includes('Reschedule')).getAttribute('href')");
+    await open(new URL(page.href, base).pathname, "document.querySelector('#main h1')");
+    await waitFor("document.body.innerText.includes('Opens at') || document.querySelector('#join-form')", 'join page shows its opening time or prejoin');
+    await layoutCheck('video join page before opening');
+  });
+  await step('video booking: video switched off shows no join link (isolated server setting)', async () => {
+    app.config.video.enabled = false;
+    try {
+      await open(videoManage, "document.querySelector('.confirm-facts')");
+      if (await evaluate("Boolean(document.querySelector('.join-block a'))")) throw new Error('join link offered while video is off');
+      if (!(await text()).includes('video link for this appointment is not available right now')) throw new Error('no explanation while video is off');
+      await open('/meet/event-types/new', "document.querySelector('#new-location')");
+      if (!(await evaluate("document.querySelector('#new-location option[disabled]')?.textContent.includes('not available yet') && document.querySelector('#video-unavailable')"))) throw new Error('disabled video option or explanation missing');
+    } finally { app.config.video.enabled = true; }
   });
   // Schedora Meet video with the fake provider: real prejoin, devices (fake camera/microphone),
   // headers and cleanup. The fake provider has no media server, so connecting must fail cleanly.

@@ -235,8 +235,10 @@ test('booking integration: rescheduling replaces the link; paid bookings get a l
     const slot = (await off.client().get(base + '/slots')).body.slots[0];
     const booked = await off.client().post(base + '/bookings', { name: 'Zed', email: 'zed@example.test', timezone: 'UTC', start: slot }, idem());
     assert.equal(booked.status, 201);
+    assert.equal(booked.body.booking.video, null, 'no join link is offered while video is off');
+    const { bookingJoinUrl } = await import('../src/video/rooms.mjs');
     off.clock.now = Date.parse(slot);
-    const join = await off.client().post('/api/public/meet-video/join/' + tokenFrom(booked.body.booking.video.join_url), { display_name: 'Zed' });
+    const join = await off.client().post('/api/public/meet-video/join/' + tokenFrom(bookingJoinUrl(off.app, booked.body.booking.id)), { display_name: 'Zed' });
     assert.equal(join.status, 503);
     assert.equal(join.body.error.code, 'video_unavailable');
     assert.equal((await host.post(`/api/workspaces/${ws.id}/meet-video/rooms`, {})).status, 503);

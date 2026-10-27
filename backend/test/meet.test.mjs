@@ -123,7 +123,7 @@ test('confirmation and timezone: one UTC instant shown in the invitee zone', asy
     assert.equal(booking.email.status, 'queued', 'email status is reported separately from the booking');
     await env.app.worker.tick();
     const confirmation = env.sent.find(message => message.subject.startsWith('Confirmed'));
-    assert.match(confirmation.body, /Sunday, 25 October 2026 at 23:30 \(America\/New_York\)/);
+    assert.match(confirmation.body, /Sunday, 25 October 2026 at 23:30, Eastern Daylight Time \(UTC-04:00\)/, 'friendly zone with the offset in effect on that date');
     assert.match(confirmation.body, /http:\/\/localhost:3000\/meet\/manage\/[A-Za-z0-9_-]{40,}/);
     assert.match(confirmation.ics, /DTSTART:20261026T033000Z/);
     assert.ok(env.sent.some(message => message.subject.startsWith('New appointment')), 'host notified');

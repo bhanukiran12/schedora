@@ -112,6 +112,14 @@ export function bookingJoinUrl(app, bookingId) {
   return invite ? joinUrl(app, inviteToken(app, invite)) : null;
 }
 
+// The attendance window the server enforces for a booking's room (join_opens_at to max_ends_at),
+// or null when the booking has no usable link (canceled, rescheduled, revoked or video off).
+export function bookingJoinWindow(app, bookingId) {
+  const room = app.db.get(`SELECT r.join_opens_at, r.max_ends_at, r.guest_policy FROM video_rooms r JOIN bookings b ON b.meeting_id = r.meeting_id
+    JOIN video_invites i ON i.booking_id = b.id AND i.revoked_at IS NULL WHERE b.id = ? AND b.status = 'confirmed' AND r.status NOT IN ('ended', 'ending', 'canceled')`, bookingId);
+  return room ? { opens_at: room.join_opens_at, closes_at: room.max_ends_at, waits_for_host: room.guest_policy === 'host_first' } : null;
+}
+
 export function meetingHostUrl(app, meetingId) {
   const room = app.db.get('SELECT public_id FROM video_rooms WHERE meeting_id = ?', meetingId);
   return room ? hostUrl(app, room) : null;

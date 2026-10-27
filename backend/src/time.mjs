@@ -16,6 +16,23 @@ function formatter(timeZone) {
   return cached;
 }
 
+// Older IANA names that browsers and systems still report. Stored values are kept as given; these
+// only make labels and comparisons treat both spellings as the same place.
+export const ZONE_ALIASES = { 'Asia/Calcutta': 'Asia/Kolkata', 'Asia/Saigon': 'Asia/Ho_Chi_Minh', 'Asia/Katmandu': 'Asia/Kathmandu', 'Asia/Rangoon': 'Asia/Yangon',
+  'Europe/Kiev': 'Europe/Kyiv', 'America/Buenos_Aires': 'America/Argentina/Buenos_Aires', 'Etc/UTC': 'UTC', 'Etc/GMT': 'UTC', GMT: 'UTC' };
+export const canonicalZone = timeZone => ZONE_ALIASES[timeZone] || timeZone;
+
+// "India Standard Time (UTC+05:30)" for the given instant, so daylight-saving offsets are those in
+// effect on the appointment date. Zones without an English name fall back to the city.
+export function zoneLabel(timeZone, ms = Date.now()) {
+  const zone = canonicalZone(timeZone);
+  const part = style => new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: style }).formatToParts(new Date(ms)).find(item => item.type === 'timeZoneName')?.value || '';
+  const offset = part('longOffset').replace(/^GMT$/, 'GMT+00:00').replace('GMT', 'UTC');
+  const name = part('long');
+  const place = zone.split('/').pop().replace(/_/g, ' ');
+  return `${/^GMT|^UTC/.test(name) ? (zone === 'UTC' ? 'Coordinated Universal Time' : place) : name} (${offset})`;
+}
+
 export function isValidTimeZone(timeZone) {
   if (typeof timeZone !== 'string' || !timeZone || timeZone.length > 64) return false;
   try { formatter(timeZone); return true; } catch { return false; }

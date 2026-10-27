@@ -190,13 +190,31 @@ export async function copy(text, label = 'Link') {
 }
 
 // ---- Time ----
-export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+// Older IANA names browsers still report (Chrome in India reports Asia/Calcutta). Mirrors
+// ZONE_ALIASES in backend/src/time.mjs so the page and emails name a zone the same way.
+const ZONE_ALIASES = { 'Asia/Calcutta': 'Asia/Kolkata', 'Asia/Saigon': 'Asia/Ho_Chi_Minh', 'Asia/Katmandu': 'Asia/Kathmandu', 'Asia/Rangoon': 'Asia/Yangon',
+  'Europe/Kiev': 'Europe/Kyiv', 'America/Buenos_Aires': 'America/Argentina/Buenos_Aires', 'Etc/UTC': 'UTC', 'Etc/GMT': 'UTC', GMT: 'UTC' };
+export const canonicalZone = timeZone => ZONE_ALIASES[timeZone] || timeZone;
+const zonePlace = zone => zone === 'UTC' ? 'UTC' : zone.split('/').pop().replace(/_/g, ' ');
+// "India Standard Time (UTC+05:30)" with the offset in effect at the given instant (daylight saving).
+export function zoneLabel(timeZone, at = Date.now()) {
+  const zone = canonicalZone(timeZone);
+  const part = style => { try { return new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: style }).formatToParts(new Date(at)).find(item => item.type === 'timeZoneName')?.value || ''; } catch { return ''; } };
+  const offset = part('longOffset').replace(/^GMT$/, 'GMT+00:00').replace('GMT', 'UTC');
+  const name = part('long');
+  return `${/^GMT|^UTC/.test(name) || !name ? (zone === 'UTC' ? 'Coordinated Universal Time' : zonePlace(zone)) : name}${offset ? ` (${offset})` : ''}`;
+}
+export const browserZone = () => canonicalZone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
 export function timeZones(extra = []) {
   let zones = [];
   try { zones = Intl.supportedValuesOf('timeZone'); } catch { zones = ['UTC', 'Asia/Kolkata', 'Europe/London', 'America/New_York']; }
-  return [...new Set([...extra.filter(Boolean), 'UTC', ...zones])].sort((a, b) => a.localeCompare(b));
+  return [...new Set([...extra.filter(Boolean), 'UTC', ...zones].map(canonicalZone))].sort((a, b) => a.localeCompare(b));
 }
-export const zoneOptions = (selected, extra = []) => timeZones([selected, ...extra]).map(zone => html`<option value="${zone}" ${zone === selected ? raw('selected') : ''}>${zone.replace(/_/g, ' ')}</option>`);
+// Options keep the stored IANA value; the text names the place and its current offset.
+export const zoneOptions = (selected, extra = []) => {
+  const chosen = canonicalZone(selected);
+  return timeZones([selected, ...extra]).map(zone => html`<option value="${zone}" ${zone === chosen ? raw('selected') : ''}>${zonePlace(zone)} · ${zoneLabel(zone)}</option>`);
+};
 export const fmt = (value, timeZone, options) => new Intl.DateTimeFormat(undefined, { timeZone, ...options }).format(new Date(value));
 export const fmtDateTime = (value, timeZone) => fmt(value, timeZone, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 export const fmtFull = (value, timeZone) => fmt(value, timeZone, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' });

@@ -453,6 +453,49 @@ dialog::backdrop { background: #0008; }
 .video-state { text-align: left; }
 .credit-figure { font-size: 32px; font-weight: 700; margin: 4px 0; }
 .list > li.highlight { background: var(--accent-tint); }
+
+/* Meet host dashboard: section header, grouped navigation and booking rows (scoped to .meet-dashboard). */
+.meet-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px 24px; flex-wrap: wrap; }
+.meet-head h1 { margin: 0 0 4px; }
+.meet-head .tag { margin-bottom: 12px; }
+.meet-lead { margin: 0; color: var(--muted); font-size: 16px; }
+.meet-tabs { overflow: visible; flex-wrap: nowrap; gap: 0; margin: 24px 0 20px; }
+.meet-tabs a, .tab-more summary { padding-inline: 12px; }
+.meet-tabs a[aria-current="page"], .meet-tabs summary[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
+.meet-tabs a:hover, .meet-tabs summary:hover { color: var(--ink); }
+.tab-more { display: none; position: relative; }
+.tab-more summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 10px 14px; min-height: 44px; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; cursor: pointer; }
+.tab-more summary::-webkit-details-marker { display: none; }
+.tab-more summary::after { content: ""; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.tab-more[open] summary::after { transform: translateY(2px) rotate(-135deg); }
+.tab-more ul { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 220px; margin: 0; padding: 6px; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.tab-more li a { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 6px; color: var(--ink); text-decoration: none; font-weight: 600; }
+.tab-more li a:hover { background: var(--surface-2); }
+.tab-more li a[aria-current="page"] { background: var(--accent-tint); color: var(--accent); }
+.booking-row { display: flex; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
+.booking-row-main { flex: 1 1 320px; min-width: 0; }
+.booking-row-side { display: grid; gap: 10px; justify-items: end; align-content: start; }
+.booking-when { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
+.booking-with { font-weight: 500; color: var(--muted); }
+.booking-actions { justify-content: flex-end; }
+.btn-quiet { border-color: transparent; background: none; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.btn-quiet:hover { color: var(--bad); background: var(--surface-2); }
+.video-unavailable { text-align: left; }
+.editor-subhead { font-size: 18px; margin: 24px 0 4px; padding-top: 16px; border-top: 1px solid var(--line); }
+.join-block { margin: 16px 0; padding: 16px 20px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius-sm); background: var(--surface); }
+.join-block h3 { margin: 0 0 8px; font-size: 18px; }
+.join-block .confirm-facts { margin: 8px 0 12px; }
+@media (max-width: 1099px) {
+  .meet-tabs .tab-secondary { display: none; }
+  .meet-tabs .tab-more { display: block; margin-left: auto; }
+}
+@media (max-width: 719px) {
+  .meet-tabs a, .tab-more summary { padding-inline: 8px; font-size: 15px; }
+  .meet-head-actions { width: 100%; }
+  .meet-head-actions .btn { flex: 1 1 auto; }
+  .booking-row-side { justify-items: start; width: 100%; }
+  .booking-actions { justify-content: flex-start; }
+}
 @media (max-width: 760px) {
   .prejoin { grid-template-columns: 1fr; }
   .video-room { padding: 8px; min-height: calc(100vh - 120px); }

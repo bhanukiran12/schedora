@@ -480,7 +480,10 @@ function micError(error, device = 'microphone') {
 
 export async function videoTab(ctx, panel) {
   if (!boot.video?.enabled) {
-    return mount(panel, notice('info', html`<p>Schedora Meet video is not enabled on this server yet. Event types can still use Google Meet, Zoom, Teams or your own video link.</p>`));
+    return mount(panel, html`<div class="empty video-unavailable"><h2>Built-in video is not available yet</h2>
+      <p>Schedora Meet video rooms are not enabled on this server, so instant meetings and the Schedora Meet location cannot be used. Nothing is charged for video while it is off.</p>
+      <p>Your event types can still use Google Meet, Zoom, Microsoft Teams or your own video link.</p>
+      <div class="actions"><a class="btn" href="/meet?tab=integrations">Connect a video app</a><a class="btn" href="/meet?tab=types">Review event types</a></div></div>`);
   }
   const scope = ctx.query.get('scope') === 'past' ? 'past' : 'current';
   const rooms = await api('GET', wsPath('/meet-video/rooms?scope=' + scope));
