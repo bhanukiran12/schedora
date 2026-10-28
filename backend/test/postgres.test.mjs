@@ -216,3 +216,24 @@ test('PostgreSQL: Forms quota boundary and submission retries under concurrency'
     db.close();
   }
 });
+
+
+test('PostgreSQL: legacy calendar attempts stay unknown across the nullable success upgrade and reconnect', {skip:process.env.RUN_POSTGRES_TESTS !== 'true',timeout:120000}, async () => {
+  const config=loadConfig(); const schemaName='schedora_test_'+randomUUID().replaceAll('-','');
+  let db=openPostgres(config.databaseUrl,{ca:config.databaseCa,schemaName});
+  try {
+    db.run("INSERT INTO workspaces (id,slug,name,created_at) VALUES ('calendar-ws','calendar-ws','Legacy calendar',1)");
+    db.run("INSERT INTO users (id,email,name,password_hash,created_at) VALUES ('calendar-user','calendar@example.test','Calendar','unused',1)");
+    db.run("INSERT INTO calendar_connections (id,workspace_id,user_id,provider,label,status,last_synced_at,created_at) VALUES ('calendar-c','calendar-ws','calendar-user','ics','Work','active',12345,1)");
+    db.run("INSERT INTO busy_blocks (connection_id,host_id,starts_at,ends_at) VALUES ('calendar-c','calendar-user',50000,60000)");
+    db.exec('ALTER TABLE calendar_connections DROP COLUMN last_success_at');
+    db.run("DELETE FROM schema_migrations WHERE name = 'postgres_v12_calendar_success'");
+    db.close(); db=openPostgres(config.databaseUrl,{ca:config.databaseCa,schemaName});
+    assert.deepEqual(db.get("SELECT last_synced_at,last_success_at,status FROM calendar_connections WHERE id = 'calendar-c'"),{last_synced_at:12345,last_success_at:null,status:'active'});
+    assert.equal(db.get('SELECT COUNT(*) AS count FROM busy_blocks').count,1);
+    db.run("UPDATE calendar_connections SET last_success_at = 23456 WHERE id = 'calendar-c'");
+    db.close(); db=openPostgres(config.databaseUrl,{ca:config.databaseCa,schemaName});
+    assert.equal(db.get("SELECT last_success_at FROM calendar_connections WHERE id = 'calendar-c'").last_success_at,23456);
+    assert.equal(db.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE name = 'postgres_v12_calendar_success'").count,1);
+  } finally {db.exec('DROP SCHEMA "'+schemaName+'" CASCADE');db.close();}
+});

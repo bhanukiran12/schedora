@@ -62,7 +62,7 @@ export async function fetchFeed(url, fetchImpl = fetch, resolve = lookup) {
 const MAX_CALENDARS = 6;
 
 export function listConnections(app, workspaceId, userId) {
-  return app.db.all(`SELECT id, provider, label, status, last_synced_at, last_error, created_at,
+  return app.db.all(`SELECT id, provider, label, status, last_synced_at, last_success_at, last_error, created_at,
       (SELECT COUNT(*) FROM busy_blocks b WHERE b.connection_id = c.id) AS busy_count
     FROM calendar_connections c WHERE workspace_id = ? AND user_id = ? ORDER BY created_at`, workspaceId, userId);
 }
@@ -107,7 +107,7 @@ export async function syncConnection(app, id) {
       if (!app.db.get('SELECT 1 FROM calendar_connections WHERE id = ?', id)) return;
       app.db.run('DELETE FROM busy_blocks WHERE connection_id = ?', id);
       for (const period of busy.slice(0, 20000)) app.db.run('INSERT INTO busy_blocks (connection_id, host_id, starts_at, ends_at) VALUES (?, ?, ?, ?)', id, connection.user_id, period.starts_at, period.ends_at);
-      app.db.run("UPDATE calendar_connections SET status = 'active', last_synced_at = ?, last_error = NULL WHERE id = ?", now, id);
+      app.db.run("UPDATE calendar_connections SET status = 'active', last_synced_at = ?, last_success_at = ?, last_error = NULL WHERE id = ?", now, now, id);
     });
   } catch (error) {
     // Revoked access removes stale busy data and is surfaced to the host; transient errors keep the last good copy.

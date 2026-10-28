@@ -51,7 +51,7 @@ function stepStatusSummary(stepKey, state) {
   const { records } = state;
   if (stepKey === 'products') return `${state.selected_products.map(key => PRODUCT_INFO[key].name).join(', ')}`;
   if (stepKey === 'calendar') {
-    if (records.meet.connections.length) return `Connected (${records.meet.connections.length})`;
+    if (records.meet.connections.length) return records.meet.connections.every(c => c.status === 'active' && c.last_success_at) ? 'Busy times checked' : 'Calendar check needed';
     if (state.meet_calendar_skipped) return 'Skipped · not verified';
     return 'Optional';
   }
@@ -198,7 +198,7 @@ export async function liveOnboarding(ctx) {
       <section class="card card-plain">
         <h2>Connect a calendar (optional)</h2>
         <p class="muted">Connecting a calendar lets Meet check your busy times before offering slots. This step is optional: you can skip it now and connect a calendar later.</p>
-        ${connections.length ? html`<div class="notice notice-ok"><p><strong>Connected (${connections.length}):</strong> ${connections.map(c => `${c.label || c.provider} (${c.status})`).join(', ')}.</p></div>`
+        ${connections.length ? html`<div class="notice ${connections.every(c => c.status === 'active' && c.last_success_at) ? 'notice-ok' : 'notice-warn'}"><p><strong>Calendar connections (${connections.length}):</strong> ${connections.map(c => `${c.label || c.provider} (${c.status}${c.last_success_at ? '; successful check recorded' : '; successful check not verified'})`).join(', ')}.</p></div>`
           : state.meet_calendar_skipped ? notice('warn', html`<p><strong>Calendar connection skipped (not verified):</strong> No external calendar is connected. External conflicts are not checked; only Schedora bookings in ${ws.name} are checked.</p>`)
           : notice('info', html`<p><strong>No external calendar connected yet.</strong> Connect an ICS feed or OAuth calendar below, or skip this optional step.</p>`)}
 
@@ -553,9 +553,10 @@ export async function liveOnboarding(ctx) {
     if (currentStep === 'calendar') {
       if ($('#live-calendar-form')) {
         handleSubmit($('#live-calendar-form'), async values => {
-          await api('POST', wsPath('/calendar'), { url: values.url.trim(), label: values.label?.trim() || 'Work calendar' });
-          await saveState({ meet_calendar_skipped: false, active_step: 'availability' });
-          toast('Calendar connected and busy times checked.');
+          const result = await api('POST', wsPath('/calendar'), { feed_url: values.url.trim(), label: values.label?.trim() || 'Work calendar' });
+          const checked = result.connection?.status === 'active' && result.connection?.last_success_at;
+          await saveState({ meet_calendar_skipped: false, active_step: checked ? 'availability' : 'calendar' });
+          toast(checked ? 'Calendar connected and busy times checked.' : 'Calendar saved, but its busy-time check failed. Review it here or skip this optional step.');
         });
       }
       if ($('#disconnect-live-calendar')) {

@@ -1160,6 +1160,33 @@ try {
     await open('/start/products', "document.querySelector('#product-selection')");
     if ((await evaluate("document.querySelectorAll('#product-selection input[type=checkbox]').length")) !== 3) throw new Error('Suite must retain all product choices');
   });
+  await step('live calendar setup: failed first sync stays unverified; valid feed advances and records success', async () => {
+    const originalFetch = app.fetchCalendar;
+    let fail = true;
+    app.fetchCalendar = async () => { if (fail) throw new Error('Synthetic calendar unavailable'); return 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n'; };
+    try {
+      await open('/setup/meet?step=calendar', "document.querySelector('#live-calendar-form')");
+      await fill('#live-ics-url', 'https://calendar.example.com/setup.ics');
+      await fill('#live-ics-label', 'Setup calendar');
+      await click('#live-calendar-form [type=submit]');
+      await waitFor("document.querySelector('#live-calendar-form') && document.querySelector('#live-setup')?.textContent.includes('successful check not verified') || document.querySelector('#live-calendar-form') && document.body.textContent.includes('successful check not verified')", 'failed sync remains unverified');
+      if (await evaluate("Boolean(document.querySelector('#live-meet-form'))")) throw new Error('failed sync advanced onboarding');
+      await layoutCheck('calendar first sync failed');
+      fail = false;
+      await fill('#live-ics-url', 'https://calendar.example.com/setup.ics');
+      await fill('#live-ics-label', 'Setup calendar');
+      await click('#live-calendar-form [type=submit]');
+      await waitFor("document.querySelector('#live-meet-form')", 'successful sync advances');
+      const stored = app.db.get("SELECT status,last_synced_at,last_success_at FROM calendar_connections WHERE label = 'Setup calendar'");
+      if (stored.status !== 'active' || !stored.last_success_at || stored.last_synced_at !== stored.last_success_at) throw new Error('success not persisted separately');
+      await open('/meet?tab=integrations', "document.querySelector('#calendar-form')");
+      if (!(await text()).includes('Last successful check')) throw new Error('calendar settings hide success evidence');
+      await layoutCheck('calendar success evidence');
+      await open('/setup/meet?step=calendar', "document.querySelector('#disconnect-live-calendar')");
+      await click('#disconnect-live-calendar');
+      await waitFor("!document.querySelector('#disconnect-live-calendar')", 'test calendar disconnected');
+    } finally { app.fetchCalendar = originalFetch; }
+  });
   await step('persisted live onboarding: Suite product choice, optional calendar skip, draft records, simulation and refresh persistence', async () => {
     await open('/setup?step=products', "document.querySelector('#live-product-selection')");
     await layoutCheck('live onboarding products');

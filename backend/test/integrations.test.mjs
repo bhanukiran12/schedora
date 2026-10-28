@@ -109,6 +109,12 @@ test('Google: OAuth connect, busy times, calendar events with Meet links, cleanu
     await host.post(`/api/workspaces/${ws.id}/calendar/sync`);
     assert.equal(env.app.db.get("SELECT status FROM integrations WHERE provider = 'google'").status, 'revoked');
     assert.equal((await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections[0].status, 'revoked');
+    google.state.refreshFails = false;
+    const reconnect = new URL((await host.get(`/api/workspaces/${ws.id}/integrations/google/start`)).body.url);
+    await fetch(`${env.base}/api/oauth/google/callback?code=reconnect&state=${encodeURIComponent(reconnect.searchParams.get('state'))}`, { headers: { Cookie: await sessionCookie(env, host) }, redirect: 'manual' });
+    const reset = (await host.get(`/api/workspaces/${ws.id}/calendar`)).body.connections[0];
+    assert.equal(reset.status, 'pending'); assert.equal(reset.last_success_at, null); assert.equal(reset.last_synced_at, null);
+    assert.equal(reset.label, 'host@gmail.com', 'reconnection updates the account label and invalidates past success evidence');
     assert.ok(user);
   } finally { await env.close(); }
 });

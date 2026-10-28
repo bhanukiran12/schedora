@@ -25,7 +25,8 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
         ...postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)))] },
       { name: 'postgres_v9_enquiry_feed', statements: ENQUIRY_FEED_INDEXES },
       { name: 'postgres_v10_task_deadlines', statements: TASK_ASSIGNEE_INDEXES },
-      { name: 'postgres_v11_live_onboarding', statements: postgresUpgrade(tables.filter(table => ONBOARDING_TABLES.includes(table.name)), indexes.filter(index => ONBOARDING_TABLES.includes(index.tbl_name))) }];
+      { name: 'postgres_v11_live_onboarding', statements: postgresUpgrade(tables.filter(table => ONBOARDING_TABLES.includes(table.name)), indexes.filter(index => ONBOARDING_TABLES.includes(index.tbl_name))) },
+      { name: 'postgres_v12_calendar_success', statements: ['ALTER TABLE calendar_connections ADD COLUMN IF NOT EXISTS last_success_at BIGINT'] }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

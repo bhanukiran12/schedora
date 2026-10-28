@@ -98,7 +98,7 @@ export async function finishOAuth(app, provider, query, sessionUser) {
       app.db.run("INSERT INTO calendar_connections (id, workspace_id, user_id, provider, integration_id, label, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
         randomUUID(), state.ws, state.user, provider, id, account || PROVIDERS[provider].label, now);
     } else if (PROVIDERS[provider].calendar) {
-      app.db.run("UPDATE calendar_connections SET status = 'pending' WHERE integration_id = ?", id);
+      app.db.run("UPDATE calendar_connections SET status = 'pending', label = ?, last_synced_at = NULL, last_success_at = NULL WHERE integration_id = ?", account || PROVIDERS[provider].label, id);
     }
   });
   app.nudge?.();

@@ -17,7 +17,7 @@ const savedType = (overrides = {}) => ({
   start_date: null, end_date: null, expires_at: null, price_cents: null, currency: 'inr', managed_template: false, managed_parent_id: null, locked_fields: [],
   hosts: [{ user_id: HOST, name: 'Asha' }], use_host_schedules: false, ...overrides
 });
-const freshCalendar = ok({ connections: [{ id: 'c1', provider: 'ics', label: 'Work', status: 'active', last_synced_at: now - 5 * 60000, busy_count: 3 }] });
+const freshCalendar = ok({ connections: [{ id: 'c1', provider: 'ics', label: 'Work', status: 'active', last_synced_at: now - 5 * 60000, last_success_at: now - 5 * 60000, busy_count: 3 }] });
 const verified = (overrides = {}) => ({
   type: savedType(), viewer: { id: HOST, admin: true }, now,
   flags: { videoEnabled: true, emailProvider: 'http', testPayments: true, meetActive: true },
@@ -78,11 +78,11 @@ test('5. a disconnected optional calendar is a visible limitation, not a blocker
 });
 
 test('6. revoked, failed, waiting and stale calendar checks are distinguished from a recent success', () => {
-  const connection = (status, last) => ({ id: status, provider: 'google', label: '', status, last_synced_at: last, busy_count: 0 });
+  const connection = (status, last) => ({ id: status, provider: 'google', label: '', status, last_synced_at: last, last_success_at: last, busy_count: 0 });
   const result = assessReadiness(verified({ calendar: ok({ connections: [connection('revoked', now - 60000), connection('error', now - 60000), connection('pending', null), connection('active', now - 3 * 3600000)] }) }));
   const texts = area(result, 'calendar').items.map(item => [item.status, item.text]);
   assert.match(texts[0][1], /^Google Calendar: access was revoked or has expired\. Its busy times are no longer checked\./);
-  assert.match(texts[1][1], /the last busy-time check failed .+ previous successful check, if any, are still used/);
+  assert.match(texts[1][1], /the last busy-time check failed .+ last successful check .+ are still used/);
   assert.deepEqual(texts[2], ['unverified', 'Google Calendar: connected, waiting for its first busy-time check.']);
   assert.equal(texts[3][0], 'unverified', 'connected but not checked recently is not "Ready"');
   assert.equal(issues(result, 'blocker').length, 0);
@@ -174,4 +174,60 @@ test('real local API data: host-view slots and ICS calendar states feed the summ
     assert.deepEqual((await memberHttp.get(`/api/workspaces/${ws.id}/calendar`)).body.connections, [], 'a member sees only their own calendars');
     assert.equal((await memberHttp.post(`/api/workspaces/${ws.id}/emails/test`, { target: 'account' })).status, 403);
   } finally { await env.close(); }
+});
+
+
+test('calendar readiness never substitutes an attempt for successful-sync evidence', () => {
+  const legacy = { provider: 'ics', label: 'Legacy', status: 'active', last_synced_at: now - 1000, last_success_at: null };
+  assert.equal(area(assessReadiness(verified({ calendar: ok({ connections: [legacy] }) })), 'calendar').items[0].status, 'unverified');
+  const failed = { ...legacy, status: 'error', last_success_at: now - 4 * 3600000 };
+  const text = area(assessReadiness(verified({ calendar: ok({ connections: [failed] }) })), 'calendar').items[0].text;
+  assert.match(text, /last busy-time check failed/); assert.match(text, /last successful check/);
+  assert.equal(area(assessReadiness(verified({ calendar: ok({ connections: [{ ...legacy, last_success_at: now + 1000 }] }) })), 'calendar').items[0].status, 'unverified', 'future timestamps cannot prove freshness');
+});
+
+test('calendar API keeps the successful timestamp through failures and revocation, then advances it on recovery', async () => {
+  const env = await setup();
+  try {
+    const owner=env.client(); const {ws}=await signUp(owner,'Calendar evidence'); const base=`/api/workspaces/${ws.id}`;
+    const url='https://calendar.example.com/evidence.ics';
+    env.feeds.set(url,new Error('temporarily unavailable'));
+    const first=(await owner.post(`${base}/calendar`,{feed_url:url})).body.connection;
+    assert.equal(first.status,'error'); assert.equal(first.last_success_at,null); assert.equal(first.last_synced_at,env.clock.now);
+    env.clock.now+=1000; env.feeds.set(url,'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n');
+    const good=(await owner.post(`${base}/calendar/sync`)).body.connection;
+    assert.equal(good.last_success_at,env.clock.now); assert.equal(good.busy_count,0,'empty calendar is still a successful check');
+    env.clock.now+=1000; env.feeds.set(url,new Error('provider unavailable'));
+    const failed=(await owner.post(`${base}/calendar/sync`)).body.connection;
+    assert.equal(failed.last_synced_at,env.clock.now); assert.equal(failed.last_success_at,good.last_success_at);
+    env.clock.now+=1000; env.feeds.set(url,Object.assign(new Error('revoked'),{revoked:true}));
+    const revoked=(await owner.post(`${base}/calendar/sync`)).body.connection;
+    assert.equal(revoked.status,'revoked'); assert.equal(revoked.last_success_at,good.last_success_at);
+    env.clock.now+=1000; env.feeds.set(url,'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n');
+    const recovered=(await owner.post(`${base}/calendar/sync`)).body.connection;
+    assert.equal(recovered.status,'active'); assert.equal(recovered.last_success_at,env.clock.now);
+    const outsider=env.client(); await signUp(outsider,'OtherCalendar');
+    assert.equal((await outsider.get(`${base}/calendar`)).status,404);
+  } finally {await env.close();}
+});
+
+
+test('SQLite upgrade preserves calendar attempts and busy blocks without inventing historical success', async () => {
+  const {openDatabase}=await import('../src/db.mjs'); const {tmpdir}=await import('node:os'); const {join}=await import('node:path');
+  const {unlinkSync,existsSync}=await import('node:fs'); const {randomUUID}=await import('node:crypto');
+  const file=join(tmpdir(),'schedora-calendar-upgrade-'+randomUUID()+'.db'); let db=openDatabase(file);
+  try {
+    db.run("INSERT INTO workspaces (id,slug,name,created_at) VALUES ('cw','cw','Calendar',1)");
+    db.run("INSERT INTO users (id,email,name,password_hash,created_at) VALUES ('cu','calendar@example.test','Calendar','unused',1)");
+    db.run("INSERT INTO calendar_connections (id,workspace_id,user_id,provider,label,status,last_synced_at,created_at) VALUES ('cc','cw','cu','ics','Work','active',12345,1)");
+    db.run("INSERT INTO busy_blocks (connection_id,host_id,starts_at,ends_at) VALUES ('cc','cu',50000,60000)");
+    db.exec('ALTER TABLE calendar_connections DROP COLUMN last_success_at');
+    db.run("DELETE FROM schema_migrations WHERE name = '013_calendar_success.sql'");
+    db.close(); db=openDatabase(file);
+    const row=db.get("SELECT last_synced_at,last_success_at FROM calendar_connections WHERE id = 'cc'");
+    assert.equal(row.last_synced_at,12345); assert.equal(row.last_success_at,null);
+    assert.equal(db.get('SELECT COUNT(*) AS count FROM busy_blocks').count,1);
+    db.close(); db=openDatabase(file);
+    assert.equal(db.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE name = '013_calendar_success.sql'").count,1);
+  } finally {db.close(); if(existsSync(file)) unlinkSync(file);}
 });

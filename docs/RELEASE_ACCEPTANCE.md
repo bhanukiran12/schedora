@@ -45,3 +45,8 @@ No new feature, provider test, customer finding or production configuration is a
 ## Forms history increment — 28 October 2026
 
 Commit a6d0fc8 fixes per-form history coverage and tied-arrival paging. Branch CI 40683016103 succeeded for its exact SHA, including PostgreSQL and Linux browser. Local tests: 211 total, 207 pass, four PostgreSQL skips locally; browser: 744 layout checks. Follow-ups are selected by loaded response/authorized linked-booking ids, not the latest 200 workspace records. Paging stays usable under an empty attention filter and announces its result. No schema migration or provider change. This closes the per-form cap engineering gap; large-history latency and human validation remain open. The release checkpoint records whether this increment has reached production; the earlier 328ed25 matrix evidence remains historical.
+
+
+## Calendar evidence increment — 28 October 2026 (branch verification)
+
+The current increment adds a separate successful calendar-sync timestamp and fixes the live onboarding feed field/first-sync failure behavior. See CALENDAR_SYNC_EVIDENCE.md for its API, migration and rollback contract. Local regression and responsive checks pass; PostgreSQL upgrade/CI and production remain gates until their checkpoints are inspected. This addresses own-host successful-sync evidence, not the team-host readiness endpoint, real-provider or human-validation requirements.

@@ -184,8 +184,9 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
     if (!connections.length) calendars.push({ status: 'attention', kind: 'recommendation', text: 'No calendar is connected. Events in your other calendars are not checked, so they could overlap new bookings.', action: connect });
     for (const connection of connections) {
       const label = connection.label || CALENDAR_NAMES[connection.provider] || connection.provider;
-      const at = connection.last_synced_at ? f.dateTime(connection.last_synced_at, type.timezone) : null;
-      if (connection.status === 'active' && connection.last_synced_at && now - connection.last_synced_at <= CALENDAR_STALE_MS) {
+      const at = connection.last_success_at ? f.dateTime(connection.last_success_at, type.timezone) : null;
+      const attempted = connection.last_synced_at ? f.dateTime(connection.last_synced_at, type.timezone) : null;
+      if (connection.status === 'active' && connection.last_success_at && now >= connection.last_success_at && now - connection.last_success_at <= CALENDAR_STALE_MS) {
         calendars.push({ status: 'ready', text: `${label}: connected; busy times last checked successfully ${at} (${plural(connection.busy_count || 0, 'busy period')}).` });
       } else if (connection.status === 'active') {
         calendars.push({ status: 'unverified', kind: 'unknown', text: `${label}: connected, but the last successful busy-time check was ${at || 'not recorded'}. Changes since then are not known.`, action: connect });
@@ -194,7 +195,7 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
       } else if (connection.status === 'revoked') {
         calendars.push({ status: 'attention', kind: 'recommendation', text: `${label}: access was revoked or has expired. Its busy times are no longer checked.`, action: { label: 'Reconnect', href: '/meet?tab=integrations' } });
       } else {
-        calendars.push({ status: 'attention', kind: 'recommendation', text: `${label}: the last busy-time check failed${at ? ` (${at})` : ''}. Busy times from its previous successful check, if any, are still used.`, action: connect });
+        calendars.push({ status: 'attention', kind: 'recommendation', text: `${label}: the last busy-time check failed${attempted ? ` (${attempted})` : ''}. ${at ? `Busy times from the last successful check (${at}) are still used.` : 'No successful check is recorded; conflict coverage is not verified.'}`, action: connect });
       }
     }
     calendars.push({ text: `Conflicts are checked against your Schedora meetings across all event types${connections.length ? ` and ${plural(connections.length, 'connected calendar')}` : ''}. Calendars you have not connected are not checked.` });
