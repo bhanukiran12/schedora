@@ -549,6 +549,29 @@ try {
     if (/delivered/i.test((await text()).replace(/not delivered|delivery is not tracked/gi, ''))) throw new Error('run history claims delivery');
     await layoutCheck('flow runs');
   });
+  await step('Flow tasks: deadline and assignee are saved, labelled and shown; "assigned to me" filters', async () => {
+    await open('/flow/new', "document.querySelector('#flow-form')");
+    if (!(await evaluate("Boolean(document.querySelector('label[for=due_in_hours]') && document.querySelector('label[for=assign_to]'))"))) throw new Error('task deadline/assignee fields missing in the editor');
+    if (!(await evaluate("document.querySelector('#flow-outcome').innerText.includes('with no deadline')"))) throw new Error('summary does not state the deadline');
+    await open('/flow/tasks', "document.querySelector('[data-assignee]')");
+    const id = await evaluate("document.querySelector('[data-assignee]').dataset.assignee");
+    if (!(await evaluate(`Boolean(document.querySelector('label[for="assignee-${id}"]') && document.querySelector('label[for="due-${id}"]'))`))) throw new Error('task controls are not labelled');
+    const me = await evaluate("(async () => (await (await fetch('/api/me')).json()).user.id)()");
+    await evaluate(`(() => { const select = document.querySelector('[data-assignee="${id}"]'); select.focus(); select.value = ${JSON.stringify(me)}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitFor(`document.querySelector('[data-assignee="${id}"]')?.value === ${JSON.stringify(me)}`, 'assignee saved');
+    if (app.db.get('SELECT assignee_id FROM tasks WHERE id = ?', id).assignee_id !== me) throw new Error('assignee not stored');
+    if (!(await evaluate(`document.activeElement.id === 'assignee-${id}'`))) throw new Error('focus lost after saving the assignee');
+    await evaluate(`(() => { const input = document.querySelector('[data-due="${id}"]'); input.value = '2020-01-01T09:00'; input.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await waitFor(`document.querySelector('[data-clear-due="${id}"]') && document.body.innerText.includes('Overdue')`, 'deadline saved and overdue shown');
+    if (!app.db.get('SELECT due_at FROM tasks WHERE id = ?', id).due_at) throw new Error('deadline not stored');
+    await layoutCheck('flow tasks with deadline');
+    await open('/flow/tasks?assignee=me', "document.querySelector('.task-list, .empty')");
+    if (!(await evaluate(`Boolean(document.querySelector('[data-task="${id}"]'))`))) throw new Error('assigned task missing from "assigned to me"');
+    await click(`[data-clear-due="${id}"]`);
+    await waitFor(`!document.querySelector('[data-clear-due="${id}"]') && document.querySelector('[data-due="${id}"]').value === ''`, 'deadline cleared');
+    if (app.db.get('SELECT due_at FROM tasks WHERE id = ?', id).due_at !== null) throw new Error('deadline not cleared');
+    if (!(await evaluate(`document.activeElement.id === 'due-${id}'`))) throw new Error('focus not moved to the deadline after clearing it');
+  });
   await step('enquiry trail: response → booking offer → follow-up task, from real local records', async () => {
     // An enabled response flow creates a review task; the routed form offers a booking.
     const created = await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + '/flows', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: JSON.stringify({ name: 'Review enquiry', trigger_type: 'forms.response.created', trigger_source: ${JSON.stringify(formId)}, action_type: 'task', action_config: { title: 'Review {{form.title}}', details: '' }, status: 'enabled' }) }); return r.status; })()`);

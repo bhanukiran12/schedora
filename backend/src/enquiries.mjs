@@ -1,7 +1,7 @@
 import { fail } from './http.mjs';
 import { can } from './platform/workspaces.mjs';
 import { nextStepSummary } from './forms/service.mjs';
-import { runsForSubjects } from './flow/service.mjs';
+import { runsForSubjects, TASK_SELECT } from './flow/service.mjs';
 
 // Workspace-wide enquiry feed: every form response and every direct booking (not made from a
 // response, not superseded by a reschedule), newest arrival first, with keyset pagination, so no
@@ -101,7 +101,7 @@ export function listEnquiries(app, actor, { before, limit } = {}) {
   const subjects = [...items.map(item => item.id), ...linked.filter(id => visible.has(id))];
   const runs = runsForSubjects(app, workspaceId, subjects);
   const taskIds = runs.map(run => run.result?.task).filter(Boolean);
-  const tasks = taskIds.length ? app.db.all(`SELECT id, title, status, source_run_id, created_at, completed_at FROM tasks WHERE workspace_id = ? AND id IN (${taskIds.map(() => '?').join(', ')})`, workspaceId, ...taskIds) : [];
+  const tasks = taskIds.length ? app.db.all(`${TASK_SELECT} WHERE t.workspace_id = ? AND t.id IN (${taskIds.map(() => '?').join(', ')})`, workspaceId, ...taskIds) : [];
   const last = items[items.length - 1];
   return { items, next: merged.length > size ? `${last.at}.${last.id}` : null, runs, tasks, now: app.now() };
 }

@@ -31,6 +31,10 @@ export const ENQUIRY_FEED_INDEXES = [
   'CREATE INDEX IF NOT EXISTS flow_runs_subject ON flow_runs(workspace_id, subject_id)',
   'CREATE INDEX IF NOT EXISTS tasks_source_run ON tasks(source_run_id)'
 ];
+// Migration 011 (task assignee index); new databases get it from the base schema.
+export const TASK_ASSIGNEE_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS tasks_assignee ON tasks(workspace_id, assignee_id, status)'
+];
 export const EMAIL_REPORT_COLUMNS = [
   "ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_status TEXT CHECK (delivery_status IN ('delayed', 'delivered', 'complained', 'bounced', 'provider_failed', 'suppressed'))",
   'ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_event_at BIGINT',

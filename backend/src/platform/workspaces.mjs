@@ -121,6 +121,8 @@ export function removeMember(app, actor, workspaceId, userId) {
   app.db.transaction(() => {
     app.db.run('DELETE FROM memberships WHERE workspace_id = ? AND user_id = ?', workspaceId, userId);
     assertOwnerRemains(app, workspaceId);
+    // Tasks assigned to someone who left go back to the unassigned list.
+    app.db.run('UPDATE tasks SET assignee_id = NULL WHERE workspace_id = ? AND assignee_id = ?', workspaceId, userId);
   });
 }
 

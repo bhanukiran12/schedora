@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
-import { email as validEmail, invalid, oneOf, text } from '../validate.mjs';
+import { email as validEmail, integer, invalid, oneOf, text } from '../validate.mjs';
 import { deliverEmail, queueEmail } from '../platform/email.mjs';
 import { entitlementsFor, consumeQuota } from '../billing/entitlements.mjs';
 import { answerText } from '../shared/forms-logic.mjs';
@@ -16,7 +16,13 @@ const backoff = attempts => Math.min(3600000, 30000 * 2 ** (attempts - 1));
 function normalizeAction(type, config, triggerType) {
   if (!config || typeof config !== 'object') invalid('action_config', 'Configure the action.');
   if (type === 'task') {
-    return { title: text(config.title, 'action_config.title', { min: 1, max: 200 }), details: text(config.details, 'action_config.details', { max: 2000, multiline: true }) };
+    // Optional deadline (hours after the task is created) and assignee: nobody, the booking's host,
+    // or a fixed member (checked against the workspace in normalize).
+    const dueInHours = config.due_in_hours === undefined || config.due_in_hours === null || config.due_in_hours === '' ? null : integer(config.due_in_hours, 'action_config.due_in_hours', 1, 720);
+    const assignTo = config.assign_to || 'none';
+    if (assignTo === 'host' && !triggerType.startsWith('meet.booking.')) invalid('action_config.assign_to', 'Assigning to the host needs a Meet booking trigger.');
+    if (!['none', 'host'].includes(assignTo) && !/^member:[A-Za-z0-9-]{1,64}$/.test(assignTo)) invalid('action_config.assign_to', 'Choose who the task is assigned to.');
+    return { title: text(config.title, 'action_config.title', { min: 1, max: 200 }), details: text(config.details, 'action_config.details', { max: 2000, multiline: true }), due_in_hours: dueInHours, assign_to: assignTo };
   }
   let to = config.to;
   if (to === 'invitee' || to === 'host') {
@@ -45,6 +51,8 @@ function normalize(app, workspaceId, body, current) {
   if (!current || body.action_type !== undefined) value.action_type = oneOf(body.action_type, 'action_type', ['email', 'task']);
   if (!current || body.action_config !== undefined || body.action_type !== undefined || body.trigger_type !== undefined) {
     value.action_config = normalizeAction(value.action_type, body.action_config ?? current?.action_config, value.trigger_type);
+    const member = value.action_config.assign_to?.startsWith('member:') && value.action_config.assign_to.slice(7);
+    if (member && !isMember(app, workspaceId, member)) invalid('action_config.assign_to', 'Choose a current member of this workspace.');
   }
   if (body.status !== undefined) value.status = oneOf(body.status, 'status', ['draft', 'enabled', 'paused']);
   else if (!current) value.status = 'draft';
@@ -52,6 +60,7 @@ function normalize(app, workspaceId, body, current) {
 }
 
 const presentFlow = row => row && { ...row, action_config: JSON.parse(row.action_config) };
+const isMember = (app, workspaceId, userId) => Boolean(app.db.get('SELECT 1 AS member FROM memberships WHERE workspace_id = ? AND user_id = ?', workspaceId, userId));
 
 export function listFlows(app, workspaceId) {
   return app.db.all(`SELECT f.*, (SELECT COUNT(*) FROM flow_runs r WHERE r.flow_id = f.id) AS run_count,
@@ -104,7 +113,7 @@ function loadContext(app, run) {
         'booking.start': formatInstant(row.starts_at, row.invitee_timezone), 'booking.start_host': formatInstant(row.starts_at, row.host_timezone),
         'event.title': row.event_title, 'event.location': row.location, 'host.name': row.host_name
       },
-      recipients: { invitee: row.invitee_email, host: row.host_email }
+      recipients: { invitee: row.invitee_email, host: row.host_email }, hostId: row.host_id
     };
   }
   const row = app.db.get(`SELECT r.*, v.definition FROM responses r JOIN form_versions v ON v.form_id = r.form_id AND v.version = r.form_version
@@ -175,8 +184,13 @@ async function performAction(app, flow, run) {
   if (!context) throw Object.assign(new Error('The booking or response no longer exists.'), { permanent: true });
   const config = flow.action_config;
   if (flow.action_type === 'task') {
-    app.db.run("INSERT OR IGNORE INTO tasks (id, workspace_id, source_run_id, title, details, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)",
-      randomUUID(), run.workspace_id, run.id, render(config.title, context.values).slice(0, 300), render(config.details, context.values).slice(0, 4000), app.now());
+    // An assignee who has since left the workspace is not used; the task is created unassigned.
+    const wanted = config.assign_to === 'host' ? context.hostId : config.assign_to?.startsWith('member:') ? config.assign_to.slice(7) : null;
+    const assignee = wanted && isMember(app, run.workspace_id, wanted) ? wanted : null;
+    const now = app.now();
+    app.db.run("INSERT OR IGNORE INTO tasks (id, workspace_id, source_run_id, title, details, status, created_at, due_at, assignee_id) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+      randomUUID(), run.workspace_id, run.id, render(config.title, context.values).slice(0, 300), render(config.details, context.values).slice(0, 4000), now,
+      config.due_in_hours ? now + config.due_in_hours * 3600000 : null, assignee);
     return { task: app.db.get('SELECT id FROM tasks WHERE source_run_id = ?', run.id).id };
   }
   const to = recipient(config, context);
@@ -259,13 +273,31 @@ export function retryRun(app, workspaceId, runId) {
   app.nudge?.();
 }
 
-export function listTasks(app, workspaceId, status) {
-  return app.db.all('SELECT id, title, details, status, source_run_id, created_at, completed_at FROM tasks WHERE workspace_id = ? AND (? IS NULL OR status = ?) ORDER BY created_at DESC LIMIT 200',
-    workspaceId, status ?? null, status ?? null);
+export const TASK_SELECT = `SELECT t.id, t.title, t.details, t.status, t.source_run_id, t.created_at, t.completed_at, t.due_at, t.assignee_id, u.name AS assignee_name
+  FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id`;
+
+// assignee: a user id, or null for everyone's tasks. Open tasks are ordered by deadline (none last).
+export function listTasks(app, workspaceId, status, assignee = null) {
+  return app.db.all(`${TASK_SELECT} WHERE t.workspace_id = ? AND (? IS NULL OR t.status = ?) AND (? IS NULL OR t.assignee_id = ?)
+    ORDER BY CASE WHEN t.status = 'open' THEN 0 ELSE 1 END, CASE WHEN t.status = 'open' AND t.due_at IS NULL THEN 1 ELSE 0 END,
+      CASE WHEN t.status = 'open' THEN t.due_at END, t.created_at DESC LIMIT 200`,
+  workspaceId, status ?? null, status ?? null, assignee, assignee);
 }
 
+// Partial update: status, due_at (epoch ms or null) and assignee_id (a current member or null).
 export function updateTask(app, workspaceId, id, body) {
-  const status = oneOf(body.status, 'status', ['open', 'done']);
-  const result = app.db.run('UPDATE tasks SET status = ?, completed_at = ? WHERE id = ? AND workspace_id = ?', status, status === 'done' ? app.now() : null, id, workspaceId);
-  if (!result.changes) fail(404, 'not_found', 'Task not found.');
+  const task = app.db.get('SELECT * FROM tasks WHERE id = ? AND workspace_id = ?', id, workspaceId);
+  if (!task) fail(404, 'not_found', 'Task not found.');
+  const next = { status: task.status, completed_at: task.completed_at, due_at: task.due_at, assignee_id: task.assignee_id };
+  if (body.status !== undefined) {
+    next.status = oneOf(body.status, 'status', ['open', 'done']);
+    next.completed_at = next.status === 'done' ? (task.status === 'done' ? task.completed_at : app.now()) : null;
+  }
+  if (body.due_at !== undefined) next.due_at = body.due_at === null ? null : integer(body.due_at, 'due_at', 0, 8640000000000000);
+  if (body.assignee_id !== undefined) {
+    if (body.assignee_id !== null && (typeof body.assignee_id !== 'string' || !isMember(app, workspaceId, body.assignee_id))) invalid('assignee_id', 'Choose a current member of this workspace.');
+    next.assignee_id = body.assignee_id;
+  }
+  if (body.status === undefined && body.due_at === undefined && body.assignee_id === undefined) invalid('status', 'Nothing to change.');
+  app.db.run('UPDATE tasks SET status = ?, completed_at = ?, due_at = ?, assignee_id = ? WHERE id = ? AND workspace_id = ?', next.status, next.completed_at, next.due_at, next.assignee_id, id, workspaceId);
 }

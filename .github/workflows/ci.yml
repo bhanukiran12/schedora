@@ -65,7 +65,7 @@ jobs:
           DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
         run: |
           export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
-          npm run test:postgres -- test/flow.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/postgres.test.mjs
+          npm run test:postgres -- test/flow.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
       - name: Remove disposable database
         if: always()
         run: docker rm --force schedora-test-pg || true

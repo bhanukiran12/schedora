@@ -5,6 +5,11 @@ import { emailEvidence } from './email-evidence.mjs';
 
 const TRIGGERS = { 'meet.booking.created': 'A Meet appointment is booked', 'forms.response.created': 'A Forms response is submitted' };
 const ACTIONS = { email: 'Send an email', task: 'Create a follow-up task' };
+const DUE_CHOICES = [[4, '4 hours'], [24, '1 day'], [48, '2 days'], [72, '3 days'], [168, '1 week']];
+const dueLabel = hours => DUE_CHOICES.find(([value]) => value === hours)?.[1] || `${hours} hours`;
+// Preset deadlines, plus a saved custom value so editing never silently changes it.
+const dueOptions = current => [['', 'No deadline'], ...DUE_CHOICES.map(([value, label]) => [String(value), `${label} after it is created`]),
+  ...(current && !DUE_CHOICES.some(([value]) => value === current) ? [[String(current), `${current} hours after it is created`]] : [])];
 const configuredEmailHint = () => boot.providers.email === 'outbox'
   ? 'This server currently records email in its local outbox. It is not delivered to an inbox.'
   : 'This server currently uses an email provider. Acceptance does not prove inbox delivery.';
@@ -71,16 +76,41 @@ async function runsTab(ctx, panel) {
 }
 
 async function tasksTab(ctx, panel) {
-  const tasks = await api('GET', wsPath('/tasks'));
+  const mine = ctx.query.get('assignee') === 'me';
+  const [tasks, members] = await Promise.all([api('GET', wsPath('/tasks' + (mine ? '?assignee=me' : ''))), api('GET', wsPath('/members'))]);
   if (!ctx.alive()) return;
-  mount(panel, tasks.length ? html`<ul class="list">${tasks.map(task => html`<li><label class="check"><input type="checkbox" data-task="${task.id}" ${task.status === 'done' ? raw('checked') : ''}>
-      <span><span class="list-title">${task.title}</span><span class="meta"><span>${fmtDateTime(task.created_at)}</span>${task.status === 'done' ? html`<span>Done</span>` : ''}</span></span></label>
-      ${task.details ? html`<p class="muted">${task.details}</p>` : ''}</li>`)}</ul>`
-    : html`<div class="empty">No tasks yet. A flow with the “Create a follow-up task” action adds them here.</div>`);
-  $$('[data-task]', panel).forEach(input => input.onchange = async () => {
-    try { await api('PATCH', wsPath('/tasks/' + input.dataset.task), { status: input.checked ? 'done' : 'open' }); }
-    catch (error) { input.checked = !input.checked; toast(error.message); }
+  const now = Date.now();
+  const due = task => task.due_at ? html`<span class="${task.status === 'open' && task.due_at <= now ? 'attention-note' : ''}">${task.status === 'open' && task.due_at <= now ? 'Overdue' : 'Due'} ${fmtDateTime(task.due_at)}</span>` : html`<span>No deadline</span>`;
+  // datetime-local works in local time without a zone suffix.
+  const localValue = at => { const date = new Date(at - new Date(at).getTimezoneOffset() * 60000); return date.toISOString().slice(0, 16); };
+  mount(panel, html`<nav class="row trail-filter" aria-label="Show tasks">${[['all', 'All tasks', '/flow/tasks'], ['me', 'Assigned to me', '/flow/tasks?assignee=me']].map(([key, label, href]) => html`<a class="btn btn-small ${(key === 'me') === mine ? 'btn-primary' : ''}" href="${href}" ${(key === 'me') === mine ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
+    ${tasks.length ? html`<ul class="list task-list">${tasks.map(task => html`<li><label class="check"><input type="checkbox" id="task-${task.id}" data-task="${task.id}" ${task.status === 'done' ? raw('checked') : ''}>
+      <span><span class="list-title">${task.title}</span><span class="meta"><span>Created ${fmtDateTime(task.created_at)}</span>${due(task)}<span>${task.assignee_name ? `Assigned to ${task.assignee_name}` : 'Unassigned'}</span>${task.status === 'done' ? html`<span>Done</span>` : ''}</span></span></label>
+      ${task.details ? html`<p class="muted">${task.details}</p>` : ''}
+      ${task.status === 'open' ? html`<div class="row task-controls">
+        <label for="assignee-${task.id}">Assignee<span class="visually-hidden"> for ${task.title}</span></label><select id="assignee-${task.id}" data-assignee="${task.id}"><option value="">Unassigned</option>${members.map(item => html`<option value="${item.id}" ${item.id === task.assignee_id ? raw('selected') : ''}>${item.name}</option>`)}</select>
+        <label for="due-${task.id}">Deadline<span class="visually-hidden"> for ${task.title}</span></label><input id="due-${task.id}" type="datetime-local" data-due="${task.id}" value="${task.due_at ? localValue(task.due_at) : ''}">
+        ${task.due_at ? html`<button class="btn btn-small" type="button" data-clear-due="${task.id}">Clear deadline<span class="visually-hidden"> for ${task.title}</span></button>` : ''}</div>` : ''}</li>`)}</ul>`
+    : html`<div class="empty">${mine ? 'No tasks are assigned to you.' : 'No tasks yet. A flow with the “Create a follow-up task” action adds them here.'}</div>`}`);
+  // The list is redrawn after each change; keep keyboard focus on the same control (or the deadline
+  // field when "Clear deadline" disappears).
+  const save = async (id, body, undo) => {
+    const focused = document.activeElement?.id;
+    try {
+      await api('PATCH', wsPath('/tasks/' + id), body);
+      await tasksTab(ctx, panel);
+      (document.getElementById(focused) || document.getElementById('due-' + id))?.focus();
+      toast('Task updated.');
+    } catch (error) { undo?.(); toast(error.message); }
+  };
+  $$('[data-task]', panel).forEach(input => input.onchange = () => save(input.dataset.task, { status: input.checked ? 'done' : 'open' }, () => { input.checked = !input.checked; }));
+  $$('[data-assignee]', panel).forEach(select => select.onchange = () => save(select.dataset.assignee, { assignee_id: select.value || null }));
+  $$('[data-due]', panel).forEach(input => input.onchange = () => {
+    const at = input.value ? new Date(input.value).getTime() : null;
+    if (input.value && !Number.isFinite(at)) return toast('Choose a valid date and time.');
+    save(input.dataset.due, { due_at: at });
   });
+  $$('[data-clear-due]', panel).forEach(button => button.onclick = () => save(button.dataset.clearDue, { due_at: null }));
 }
 
 export async function editor(ctx) {
@@ -89,11 +119,11 @@ export async function editor(ctx) {
   const isNew = ctx.params[0] === 'new';
   setTitle((isNew ? 'New flow' : 'Edit flow') + ' · Flow by Schedora');
   mount(ctx.main, html`<div class="container page">${loading()}</div>`);
-  let flow, eventTypes, forms;
+  let flow, eventTypes, forms, members;
   try {
-    [flow, eventTypes, forms] = await Promise.all([
+    [flow, eventTypes, forms, members] = await Promise.all([
       isNew ? { name: '', trigger_type: 'meet.booking.created', trigger_source: null, action_type: 'task', action_config: { title: 'Prepare for {{invitee.name}} ({{booking.start_host}})', details: 'Reference {{booking.reference}}' }, status: 'draft' } : api('GET', wsPath('/flows/' + ctx.params[0])),
-      api('GET', wsPath('/event-types')), api('GET', wsPath('/forms'))
+      api('GET', wsPath('/event-types')), api('GET', wsPath('/forms')), api('GET', wsPath('/members'))
     ]);
   } catch (error) { return mount(ctx.main, html`<div class="container page">${errorBlock(error)}<a href="/flow">Back to Flow</a></div>`); }
   if (!ctx.alive()) return;
@@ -122,7 +152,10 @@ export async function editor(ctx) {
       : `When a response is submitted${source ? ` to “${source}”` : ' to any form'}`;
     const config = state.action_config || {};
     const who = to.startsWith('address:') ? (to.slice(8) || 'an address you have not entered yet') : { invitee: 'the invitee', host: 'the host' }[to] || (recipients.find(([value]) => value === to)?.[1].toLowerCase() ?? 'a recipient you have not chosen yet');
-    const what = state.action_type === 'task' ? `create a task titled “${config.title || 'Untitled task'}” in Flow › Tasks` : `email ${who}`;
+    const assignee = config.assign_to === 'host' ? 'the booking\'s host' : members.find(item => 'member:' + item.id === config.assign_to)?.name;
+    const what = state.action_type === 'task'
+      ? `create a task titled “${config.title || 'Untitled task'}” in Flow › Tasks${config.due_in_hours ? `, due ${dueLabel(config.due_in_hours)} after it is created` : ', with no deadline'}${assignee ? `, assigned to ${assignee}` : ', unassigned'}`
+      : `email ${who}`;
     const status = { draft: 'It is a draft: nothing runs until you enable it.', paused: 'It is paused: new events are held and run when you resume it.', enabled: 'Once saved as enabled, new matching events run it. Earlier events are not replayed.' }[state.status];
     return html`<p class="flow-summary-sentence">${when}, ${what}.</p><p>${status}${state.action_type === 'email' ? ' ' + configuredEmailHint() : ''}</p>`;
   };
@@ -155,7 +188,10 @@ export async function editor(ctx) {
               <label for="subject">Subject</label><input id="subject" name="subject" maxlength="200" value="${config.subject || ''}">
               <label for="body">Message</label><textarea id="body" name="body" maxlength="5000">${config.body || ''}</textarea>`
             : html`<label for="task-title">Task title</label><input id="task-title" name="title" maxlength="200" value="${config.title || ''}">
-              <label for="details">Details</label><textarea id="details" name="details" maxlength="2000">${config.details || ''}</textarea>`}
+              <label for="details">Details</label><textarea id="details" name="details" maxlength="2000">${config.details || ''}</textarea>
+              <label for="due_in_hours">Deadline</label><select id="due_in_hours" name="due_in_hours">${dueOptions(config.due_in_hours).map(([value, label]) => html`<option value="${value}" ${String(config.due_in_hours ?? '') === value ? raw('selected') : ''}>${label}</option>`)}</select>
+              <label for="assign_to">Assign to</label><select id="assign_to" name="assign_to"><option value="none">Nobody: any member can pick it up</option>${state.trigger_type === 'meet.booking.created' ? html`<option value="host" ${config.assign_to === 'host' ? raw('selected') : ''}>The booking's host</option>` : ''}${members.map(item => html`<option value="member:${item.id}" ${config.assign_to === 'member:' + item.id ? raw('selected') : ''}>${item.name}</option>`)}</select>
+              <p class="hint">Enquiries show an open task as waiting until its deadline, then as overdue. A task without a deadline always needs attention.</p>`}
             <p class="hint">Insert details with placeholders: ${placeholders().map(item => html`<code>{{${item}}}</code> `)}</p></div>
           <div class="flow-connector" aria-hidden="true"></div>
           <div class="flow-step"><h3><span class="step-number">3</span> Status</h3>
@@ -188,13 +224,17 @@ export async function editor(ctx) {
       state.name = data.name ?? state.name;
       state.status = data.status ?? state.status;
       if (state.action_type === 'email') state.action_config = { to: data.to === 'address:' ? 'address:' + (data.address || '') : data.to, subject: data.subject ?? '', body: data.body ?? '' };
-      else state.action_config = { title: data.title ?? '', details: data.details ?? '' };
+      else state.action_config = { title: data.title ?? '', details: data.details ?? '', due_in_hours: data.due_in_hours ? Number(data.due_in_hours) : null, assign_to: data.assign_to || 'none' };
     };
     form.addEventListener('change', event => {
       const name = event.target.name;
-      if (!['trigger_type', 'trigger_source', 'action_type', 'to', 'status'].includes(name)) return;
+      if (!['trigger_type', 'trigger_source', 'action_type', 'to', 'status', 'due_in_hours', 'assign_to'].includes(name)) return;
       capture();
-      if (name === 'trigger_type') { state.trigger_type = event.target.value; state.trigger_source = null; if (state.action_type === 'email') state.action_config.to = ''; }
+      if (name === 'trigger_type') {
+        state.trigger_type = event.target.value; state.trigger_source = null;
+        if (state.action_type === 'email') state.action_config.to = '';
+        else if (state.action_config.assign_to === 'host' && !state.trigger_type.startsWith('meet.booking.')) state.action_config.assign_to = 'none';
+      }
       if (name === 'trigger_source') state.trigger_source = event.target.value || null;
       if (name === 'action_type') { state.action_type = event.target.value; state.action_config = state.action_type === 'email' ? { to: '', subject: 'Thanks', body: '' } : { title: '', details: '' }; }
       document.body.dataset.dirty = '1';

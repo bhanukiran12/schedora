@@ -315,7 +315,7 @@ export function createApi(app) {
   get('/api/workspaces/:ws/enquiries', ctx => listEnquiries(app, member(ctx, 'responses.read'), { before: ctx.query.get('before'), limit: ctx.query.get('limit') }));
   get('/api/workspaces/:ws/runs', ctx => listRuns(app, member(ctx, 'flows.read').workspace.id, { flowId: ctx.query.get('flow') || null, status: ctx.query.get('status') || null }));
   post('/api/workspaces/:ws/runs/:id/retry', ctx => { retryRun(app, member(ctx, 'flows.manage').workspace.id, ctx.params.id); return { status: 204 }; });
-  get('/api/workspaces/:ws/tasks', ctx => listTasks(app, member(ctx, 'tasks.manage').workspace.id, ctx.query.get('status') || null));
+  get('/api/workspaces/:ws/tasks', ctx => { const actor = member(ctx, 'tasks.manage'); return listTasks(app, actor.workspace.id, ctx.query.get('status') || null, ctx.query.get('assignee') === 'me' ? actor.userId : null); });
   patch('/api/workspaces/:ws/tasks/:id', async ctx => { updateTask(app, member(ctx, 'tasks.manage').workspace.id, ctx.params.id, await ctx.json()); return { status: 204 }; });
 
   // ---- Billing ----

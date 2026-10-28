@@ -31,7 +31,7 @@ function bookingStep(next, receivedAt, now) {
   }
 }
 
-function runStep(run, tasks) {
+function runStep(run, tasks, now) {
   const base = { key: 'run', runId: run.id, title: run.flow_name, source: run.event_type === 'meet.booking.created' ? 'booking' : 'response', at: run.created_at };
   if (run.status === 'failed') return { ...base, state: 'attention', reason: 'followup_failed', attention: `Follow-up failed (${run.flow_name})`, text: `Failed after ${run.attempts} ${run.attempts === 1 ? 'attempt' : 'attempts'}: ${run.last_error || 'no error recorded'}.` };
   if (run.status === 'retrying') return { ...base, state: 'attention', reason: 'followup_retrying', attention: `Follow-up retrying (${run.flow_name})`, text: `Retrying: ${run.last_error || 'previous attempt did not finish'}.`, nextAttempt: run.next_attempt_at };
@@ -40,7 +40,12 @@ function runStep(run, tasks) {
   if (run.result?.task) {
     const task = tasks?.find(item => item.id === run.result.task);
     if (!task) return { ...base, state: 'unknown', text: 'Task created; its current status is not available.', taskId: run.result.task };
-    return { ...base, state: task.status === 'done' ? 'done' : 'attention', reason: task.status === 'done' ? undefined : 'task_open', attention: task.status === 'done' ? undefined : `Open task (${run.flow_name})`, text: task.status === 'done' ? `Task done: ${task.title}` : `Task open: ${task.title}`, taskId: task.id };
+    const owner = task.assignee_name ? ` Assigned to ${task.assignee_name}.` : ' Not assigned.';
+    if (task.status === 'done') return { ...base, state: 'done', text: `Task done: ${task.title}`, taskId: task.id };
+    // A future deadline means the task is on track; past it (or with no deadline) someone should act.
+    if (task.due_at && now && now < task.due_at) return { ...base, state: 'waiting', text: `Task open: ${task.title}.${owner}`, due: task.due_at, taskId: task.id };
+    if (task.due_at && now) return { ...base, state: 'attention', reason: 'task_overdue', attention: `Overdue task (${run.flow_name})`, text: `Task overdue: ${task.title}.${owner}`, due: task.due_at, taskId: task.id };
+    return { ...base, state: 'attention', reason: 'task_open', attention: `Open task (${run.flow_name})`, text: `Task open: ${task.title}.${owner}`, due: task.due_at || undefined, taskId: task.id };
   }
   if (run.result?.email) {
     const evidence = emailEvidence(run);
@@ -79,7 +84,7 @@ function followUps(context, matches, subject) {
   if (!context.runsAvailable) return [{ key: 'followup', state: 'unknown', title: 'Follow-up status unavailable', text: 'Flow run history could not be loaded.' }];
   const runs = context.runs.filter(matches);
   if (!runs.length) return [{ key: 'followup', state: 'none', title: 'No follow-up recorded', text: `No enabled flow ran for ${subject}. Flows run only for events after they are enabled.` }];
-  return runs.sort((a, b) => a.created_at - b.created_at).map(run => runStep(run, context.tasksAvailable ? context.tasks : null));
+  return runs.sort((a, b) => a.created_at - b.created_at).map(run => runStep(run, context.tasksAvailable ? context.tasks : null, context.now));
 }
 
 function finish(steps, notes) {
@@ -91,7 +96,7 @@ const overall = trail => trail.attention.length ? 'attention' : trail.steps.some
   : trail.steps.some(step => step.state === 'unknown') ? 'unknown' : 'done';
 
 export const REASON_LABELS = {
-  followup_failed: ['follow-up failed', 'follow-ups failed'], followup_retrying: ['follow-up retrying', 'follow-ups retrying'], email_undelivered: ['undelivered email', 'undelivered emails'], task_open: ['open task', 'open tasks'],
+  followup_failed: ['follow-up failed', 'follow-ups failed'], followup_retrying: ['follow-up retrying', 'follow-ups retrying'], email_undelivered: ['undelivered email', 'undelivered emails'], task_overdue: ['overdue task', 'overdue tasks'], task_open: ['open task without a deadline', 'open tasks without a deadline'],
   booking_canceled: ['booking canceled', 'bookings canceled'], booking_unavailable: ['booking could not be offered', 'bookings could not be offered'],
   offer_expired: ['booking offer expired unused', 'booking offers expired unused']
 };

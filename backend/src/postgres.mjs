@@ -1,5 +1,5 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
-import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, VIDEO_TABLES } from './postgres-sql.mjs';
+import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, TASK_ASSIGNEE_INDEXES, VIDEO_TABLES } from './postgres-sql.mjs';
 import { openDatabase } from './db.mjs';
 
 export function openPostgres(connectionString, { ca, schemaName = 'schedora' } = {}) {
@@ -23,7 +23,8 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
       { name: 'postgres_v7_monitoring', statements: postgresUpgrade(tables.filter(table => MONITORING_TABLES.includes(table.name)), indexes.filter(index => MONITORING_TABLES.includes(index.tbl_name))) },
       { name: 'postgres_v8_email_delivery_reports', statements: [...EMAIL_REPORT_COLUMNS,
         ...postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)))] },
-      { name: 'postgres_v9_enquiry_feed', statements: ENQUIRY_FEED_INDEXES }];
+      { name: 'postgres_v9_enquiry_feed', statements: ENQUIRY_FEED_INDEXES },
+      { name: 'postgres_v10_task_deadlines', statements: TASK_ASSIGNEE_INDEXES }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

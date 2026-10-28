@@ -22,7 +22,7 @@ export async function loadTrailContext() {
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
     <strong>${step.title}</strong>${step.reference ? html` <span class="muted">· ${step.key === 'received' ? 'Receipt' : 'Ref'} ${step.reference}</span>` : ''}${step.at ? html` <span class="muted">· ${fmtDateTime(step.at)}</span>` : ''}
-    ${step.key === 'run' ? html`<span class="muted"> · from the ${step.source}</span>` : ''}
+    ${step.key === 'run' ? html`<span class="muted"> · from the ${step.source}</span>` : ''}${step.due ? html` <span class="muted">· due ${fmtDateTime(step.due)}</span>` : ''}
     ${step.text ? html`<p>${step.text}</p>` : ''}
     ${step.key === 'run' ? html`<p class="trail-links"><a href="/flow/runs">Run history</a>${step.taskId ? html` · <a href="/flow/tasks">Tasks</a>` : ''}</p>`
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
@@ -828,7 +828,7 @@ export async function responses(ctx) {
     mount($('#responses'), rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
         <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
-        <span class="muted" role="status">${context ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, or an open follow-up task.${context.capped ? ' Based on the latest 200 runs and tasks.' : ''}` : 'Checking follow-ups…'}</span></div>
+        <span class="muted" role="status">${context ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline.${context.capped ? ' Based on the latest 200 runs and tasks.' : ''}` : 'Checking follow-ups…'}</span></div>
       ${shown.length ? html`<div class="table-wrap"><table><caption class="visually-hidden">Responses to ${form.draft.title}</caption>
       <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}</tr></thead>
       <tbody>${shown.map(row => html`<tr><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
