@@ -138,6 +138,19 @@ test('PostgreSQL upgrade for email delivery reports adds columns and index idemp
   assert.deepEqual(statements.filter(sql => /^CREATE TABLE/.test(sql)).map(sql => sql.match(/^CREATE TABLE (\w+)/)[1]), ['email_provider_events']);
 });
 
+test('PostgreSQL upgrade for the enquiry feed adds exactly the base-schema indexes, idempotently', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { ENQUIRY_FEED_INDEXES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const names = new Set(template.all("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL").map(row => row.name));
+  template.close();
+  for (const sql of ENQUIRY_FEED_INDEXES) {
+    const [, name] = sql.match(/^CREATE INDEX IF NOT EXISTS (\w+) ON /);
+    assert.ok(names.has(name), name + ' exists for new databases too');
+  }
+  assert.equal(ENQUIRY_FEED_INDEXES.length, 4);
+});
+
 test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const { reconcileWallet } = await import('../src/video/credits.mjs');
   const config = loadConfig();

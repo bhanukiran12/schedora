@@ -223,20 +223,30 @@ export async function processDueRuns(app, limit = 25) {
   return due.length;
 }
 
-export function listRuns(app, workspaceId, { flowId, status } = {}) {
-  return app.db.all(`SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at,
+const RUN_SELECT = `SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at,
       e.id AS email_id, e.status AS email_status, e.accepted_transport AS email_transport, e.sent_at AS email_accepted_at, e.delivery_status AS email_report
     FROM flow_runs r JOIN flows f ON f.id = r.flow_id
-    LEFT JOIN emails e ON e.idempotency_key = 'flow-run:' || r.id AND e.workspace_id = r.workspace_id AND e.channel = 'email'
+    LEFT JOIN emails e ON e.idempotency_key = 'flow-run:' || r.id AND e.workspace_id = r.workspace_id AND e.channel = 'email'`;
+
+function presentRun({ email_id, email_status, email_transport, email_accepted_at, email_report, ...row }) {
+  const result = row.result ? JSON.parse(row.result) : null;
+  // Only expose coarse evidence for this run's actual result, never addresses, bodies or
+  // provider message IDs. Missing/legacy transport evidence stays unknown after reconfiguration.
+  return { ...row, result, email_delivery: result?.email === email_id
+    ? { status: email_status, transport: email_transport, accepted_at: email_accepted_at, report: email_report } : null };
+}
+
+export function listRuns(app, workspaceId, { flowId, status } = {}) {
+  return app.db.all(`${RUN_SELECT}
     WHERE r.workspace_id = ? AND (? IS NULL OR r.flow_id = ?) AND (? IS NULL OR r.status = ?)
-    ORDER BY r.created_at DESC LIMIT 200`, workspaceId, flowId ?? null, flowId ?? null, status ?? null, status ?? null)
-    .map(({ email_id, email_status, email_transport, email_accepted_at, email_report, ...row }) => {
-      const result = row.result ? JSON.parse(row.result) : null;
-      // Only expose coarse evidence for this run's actual result, never addresses, bodies or
-      // provider message IDs. Missing/legacy transport evidence stays unknown after reconfiguration.
-      return { ...row, result, email_delivery: result?.email === email_id
-        ? { status: email_status, transport: email_transport, accepted_at: email_accepted_at, report: email_report } : null };
-    });
+    ORDER BY r.created_at DESC LIMIT 200`, workspaceId, flowId ?? null, flowId ?? null, status ?? null, status ?? null).map(presentRun);
+}
+
+// Every run for the given response or booking ids (no recency cap), oldest first.
+export function runsForSubjects(app, workspaceId, subjectIds) {
+  if (!subjectIds.length) return [];
+  return app.db.all(`${RUN_SELECT} WHERE r.workspace_id = ? AND r.subject_id IN (${subjectIds.map(() => '?').join(', ')}) ORDER BY r.created_at, r.id`,
+    workspaceId, ...subjectIds).map(presentRun);
 }
 
 // Manual retry of a failed run. Side effects stay idempotent because the run id is reused.

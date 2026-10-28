@@ -24,6 +24,13 @@ export const MONITORING_TABLES = ['monitor_alerts'];
 // Migration 009 (email delivery reports): the event table is created by the postgres_v8 upgrade;
 // the columns and index are in the base schema for new databases and added here for existing ones.
 export const EMAIL_REPORT_TABLES = ['email_provider_events'];
+// Indexes of migration 010 (enquiry feed); new databases get them from the base schema.
+export const ENQUIRY_FEED_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS responses_workspace_arrival ON responses(workspace_id, created_at, id)',
+  'CREATE INDEX IF NOT EXISTS bookings_workspace_arrival ON bookings(workspace_id, created_at, id)',
+  'CREATE INDEX IF NOT EXISTS flow_runs_subject ON flow_runs(workspace_id, subject_id)',
+  'CREATE INDEX IF NOT EXISTS tasks_source_run ON tasks(source_run_id)'
+];
 export const EMAIL_REPORT_COLUMNS = [
   "ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_status TEXT CHECK (delivery_status IN ('delayed', 'delivered', 'complained', 'bounced', 'provider_failed', 'suppressed'))",
   'ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_event_at BIGINT',

@@ -4,8 +4,11 @@
 import { emailEvidence } from './email-evidence.mjs';
 
 // A Forms booking link lasts this long (HANDOFF_TTL_MS in backend/src/forms/service.mjs). The
-// handoff keeps the status "offered" afterwards, so an older offer was never used.
+// handoff keeps the status "offered" afterwards, so an older offer was never used. The server's
+// stored expires_at is authoritative; the age rule only covers records without one.
 export const OFFER_TTL_MS = 2 * 3600000;
+
+const offerExpired = (next, receivedAt, now) => Boolean(now) && (next.expires_at ? now >= next.expires_at : now - receivedAt > OFFER_TTL_MS);
 
 const UNAVAILABLE = {
   destination_unavailable: 'The booking page was not available when the response arrived.',
@@ -16,7 +19,7 @@ const UNAVAILABLE = {
 function bookingStep(next, receivedAt, now) {
   if (!next) return { key: 'booking', state: 'none', title: 'No booking step', text: 'This response was not offered a booking.' };
   switch (next.status) {
-    case 'offered': return now && now - receivedAt > OFFER_TTL_MS
+    case 'offered': return offerExpired(next, receivedAt, now)
       ? { key: 'booking', state: 'attention', reason: 'offer_expired', attention: 'Booking offer expired, not booked', title: 'Booking offer expired, not booked', text: 'The booking link lasted 2 hours and was not used. The response is kept; contact the respondent if you still want to meet.' }
       : { key: 'booking', state: 'waiting', title: 'Booking offered, not booked yet', text: 'The respondent was given a booking link. Nothing is booked until they choose a time.' };
     case 'booked': return { key: 'booking', state: 'done', title: 'Booking confirmed', reference: next.reference, at: next.starts_at };
@@ -93,47 +96,37 @@ export const REASON_LABELS = {
   offer_expired: ['booking offer expired unused', 'booking offers expired unused']
 };
 
-// Who the enquiry is from: a name or email answer when the form asks for one, otherwise the receipt.
-function respondentLabel(response, definition) {
-  const fields = definition?.fields || [];
-  const name = fields.find(field => field.type === 'short_text' && (field.id === 'name' || /\bname\b/i.test(field.label)));
-  const email = fields.find(field => field.type === 'email');
-  const value = (name && response.answers?.[name.id]) || (email && response.answers?.[email.id]);
-  return typeof value === 'string' && value.trim() ? value.trim() : `Response ${response.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
-}
-
-/**
- * One list across products: every loaded form response, plus bookings made directly (not from a
- * response and not superseded by a reschedule), each with its trail and overall state.
- * @param forms [{ form: { id, draft }, versions: { [version]: definition }, responses }]
- * @param bookings bookings from GET /bookings (any scopes; duplicates are ignored)
- * @param context as for buildTrail, plus now
- */
-export function buildEnquiries({ forms, bookings, context }) {
-  const enquiries = [];
-  const linked = new Set();
-  for (const { form, versions, responses } of forms) {
-    for (const response of responses) {
-      const trail = buildTrail(response, context);
-      if (response.next_step?.reference) linked.add(response.next_step.reference);
-      const booking = response.next_step?.reference ? context.bookingsByReference?.get(response.next_step.reference) : null;
-      enquiries.push({ id: response.id, origin: 'response', at: response.created_at, title: respondentLabel(response, versions?.[response.form_version] || form.draft),
-        source: form.draft.title, formId: form.id, booking: booking ? { reference: booking.reference, event: booking.event_title } : null, trail, state: overall(trail) });
-    }
-  }
-  const seen = new Set();
-  for (const booking of bookings) {
-    if (seen.has(booking.id) || linked.has(booking.reference) || booking.rescheduled_to) continue;
-    seen.add(booking.id);
-    const trail = buildBookingTrail(booking, context);
-    enquiries.push({ id: booking.id, origin: 'booking', at: booking.starts_at, title: booking.invitee_name || `Booking ${booking.reference}`, source: booking.event_title, booking: { reference: booking.reference, event: booking.event_title }, trail, state: overall(trail) });
-  }
+// Needs attention first, then newest; counts and reasons cover exactly the enquiries given.
+function summarize(enquiries) {
   const rank = { attention: 0, waiting: 1, unknown: 2, done: 3 };
   enquiries.sort((a, b) => rank[a.state] - rank[b.state] || b.at - a.at);
   const reasons = {};
   for (const enquiry of enquiries) for (const reason of enquiry.trail.reasons) reasons[reason] = (reasons[reason] || 0) + 1;
   const count = state => enquiries.filter(enquiry => enquiry.state === state).length;
   return { enquiries, counts: { all: enquiries.length, attention: count('attention'), waiting: count('waiting'), unknown: count('unknown') }, reasons };
+}
+
+/**
+ * Enquiries from pages of GET /enquiries: items arrive newest first with every run and task for
+ * them, and the server's clock for offer expiry. Linked bookings the member cannot see stay hidden.
+ * @param pages [{ items, runs, tasks, now }]
+ */
+export function buildFeedEnquiries(pages) {
+  const items = pages.flatMap(page => page.items);
+  const bookingsByReference = new Map(items.filter(item => item.next_step?.booking_visible).map(item => [item.next_step.reference, { id: item.next_step.booking_id }]));
+  const context = { runs: pages.flatMap(page => page.runs), tasks: pages.flatMap(page => page.tasks), bookingsByReference,
+    runsAvailable: true, tasksAvailable: true, bookingsAvailable: true, now: pages.at(-1)?.now };
+  const enquiries = items.map(item => {
+    if (item.kind === 'booking') {
+      const trail = buildBookingTrail(item.booking, context);
+      return { id: item.id, origin: 'booking', at: item.at, startsAt: item.booking.starts_at, title: item.booking.invitee_name || `Booking ${item.booking.reference}`, source: item.booking.event_title,
+        booking: { reference: item.booking.reference, event: item.booking.event_title }, trail, state: overall(trail) };
+    }
+    const trail = buildTrail({ id: item.id, created_at: item.at, next_step: item.next_step }, context);
+    return { id: item.id, origin: 'response', at: item.at, title: item.title, source: item.form_title, formId: item.form_id,
+      booking: item.next_step?.reference ? { reference: item.next_step.reference } : null, trail, state: overall(trail) };
+  });
+  return summarize(enquiries);
 }
 
 export const STATE_LABELS = { done: 'Done', waiting: 'Waiting', attention: 'Needs attention', none: 'Not applicable', unknown: 'Unknown' };

@@ -583,7 +583,7 @@ try {
     await waitFor("location.pathname === '/enquiries' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'enquiries list');
     const summary = await evaluate("({ origins: [...document.querySelectorAll('.enquiry .meta span:first-child')].map(s => s.textContent.split(':')[0]), states: [...document.querySelectorAll('.enquiry')].map(e => e.dataset.state), hint: document.querySelector('#enquiries-body .hint').textContent })");
     if (!summary.origins.includes('Form') || !summary.origins.includes('Booked directly')) throw new Error('responses and direct bookings are not both listed: ' + summary.origins.join(','));
-    if (!summary.hint.startsWith('Built from responses from')) throw new Error('coverage note missing: ' + summary.hint);
+    if (!/^All \d+ enquir(y is|ies are) loaded\./.test(summary.hint)) throw new Error('coverage note missing: ' + summary.hint);
     const firstCalm = summary.states.findIndex(state => state !== 'attention');
     if (firstCalm >= 0 && summary.states.slice(firstCalm).includes('attention')) throw new Error('needs attention is not listed first: ' + summary.states.join(','));
     if (summary.states.includes('attention') && !(await evaluate("document.querySelector('#enquiries-body .notice-warn')?.textContent.includes('need')"))) throw new Error('attention summary missing');
@@ -622,6 +622,37 @@ try {
     if (!emailCard?.includes('sending method is not verified')) throw new Error('trail lost legacy email uncertainty');
     await evaluate("[...document.querySelectorAll('.enquiry')].find(item => item.querySelector('.list-title').textContent === 'Email evidence')?.scrollIntoView({ block: 'start' })");
     await layoutCheck('enquiry historic email');
+  });
+  await step('enquiries: older pages load by keyboard, once each, with focus kept and coverage stated', async () => {
+    // 60 stored responses push the feed past one 50-item page. Written directly: this checks paging, not submission.
+    const formRow = app.db.get('SELECT id, workspace_id FROM forms WHERE id = ?', formId);
+    const base = app.now() - 86400000;
+    for (let i = 0; i < 60; i++) {
+      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)',
+        `00000000-0000-4000-9000-${String(i).padStart(12, '0')}`, formRow.workspace_id, formRow.id, JSON.stringify({ name: `Paged ${i}` }), `paged-${i}`, base + i * 1000);
+    }
+    const total = app.db.get('SELECT COUNT(*) AS count FROM responses WHERE workspace_id = ?', formRow.workspace_id).count;
+    await open('/enquiries', "document.querySelector('#load-older')");
+    const firstCount = await evaluate("document.querySelectorAll('.enquiry').length");
+    if (firstCount !== 50) throw new Error('first page should hold 50 enquiries, got ' + firstCount);
+    if (!(await evaluate("document.querySelector('#enquiries-body .hint').textContent.startsWith('Showing the newest 50 enquiries.')"))) throw new Error('partial coverage not stated');
+    await evaluate("document.querySelector('#load-older').focus()");
+    for (let page = 0; page < 5 && (await evaluate("Boolean(document.querySelector('#load-older'))")); page++) {
+      const before = await evaluate("document.querySelectorAll('.enquiry').length");
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+      await waitFor(`document.querySelectorAll('.enquiry').length > ${before}`, 'older enquiries');
+      if (!(await evaluate("['load-older', 'enquiries-status'].includes(document.activeElement.id)"))) throw new Error('focus lost after loading older enquiries');
+      if (!(await evaluate("/^Loaded \\d+ older enquir/.test(document.querySelector('#enquiries-status').textContent)"))) throw new Error('load result not announced');
+    }
+    const titles = await evaluate("[...document.querySelectorAll('.enquiry .list-title')].map(el => el.textContent)");
+    const pagedTitles = titles.filter(title => title.startsWith('Paged '));
+    if (pagedTitles.length !== 60 || new Set(pagedTitles).size !== 60) throw new Error('paged enquiries missing or duplicated: ' + pagedTitles.length);
+    if (await evaluate("Boolean(document.querySelector('#load-older'))")) throw new Error('load button remains after the last page');
+    const directBookings = await evaluate("[...document.querySelectorAll('.enquiry .meta span:first-child')].filter(s => s.textContent.startsWith('Booked directly')).length");
+    if (titles.length !== total + directBookings) throw new Error(`expected every response and direct booking once: ${titles.length} vs ${total} + ${directBookings}`);
+    if (!(await evaluate("/^All \\d+ enquiries are loaded\\./.test(document.querySelector('#enquiries-body .hint').textContent)"))) throw new Error('complete coverage not stated');
+    await layoutCheck('enquiries all pages');
   });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");

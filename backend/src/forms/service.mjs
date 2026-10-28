@@ -250,21 +250,23 @@ const receipt = (row, version) => ({ id: row.id, reference: row.id.replace(/-/g,
 
 export function listResponses(app, workspaceId, formId, { before, limit = 50 } = {}) {
   getForm(app, workspaceId, formId);
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id
+  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
     FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ? AND r.created_at < ?
     ORDER BY r.created_at DESC LIMIT ?`, formId, workspaceId, Number(before) || Number.MAX_SAFE_INTEGER, Math.min(200, Number(limit) || 50));
   return rows.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row) }));
 }
 
 // Booking state is read from Meet, following reschedules, so the inbox never claims more than Meet records.
-function nextStepSummary(app, workspaceId, row) {
+// An offer carries the server's stored expiry, so clients never infer it from the response's age.
+export function nextStepSummary(app, workspaceId, row) {
   if (!row.handoff_status) return null;
+  if (row.handoff_status === 'offered') return { status: 'offered', reason: row.handoff_reason || null, expires_at: row.handoff_expires_at ?? null };
   if (row.handoff_status !== 'booked') return { status: row.handoff_status, reason: row.handoff_reason || null };
-  const load = id => app.db.get('SELECT reference, status, starts_at, rescheduled_to FROM bookings WHERE id = ? AND workspace_id = ?', id, workspaceId);
+  const load = id => app.db.get('SELECT id, reference, status, starts_at, rescheduled_to FROM bookings WHERE id = ? AND workspace_id = ?', id, workspaceId);
   let booking = load(row.booking_id);
   for (let hops = 0; booking?.rescheduled_to && hops < 10; hops++) booking = load(booking.rescheduled_to) || { ...booking, rescheduled_to: null };
   if (!booking) return { status: 'booking_removed' };
-  return { status: booking.status === 'canceled' ? 'booking_canceled' : booking.status === 'confirmed' ? 'booked' : 'booking_pending', reference: booking.reference, starts_at: booking.starts_at };
+  return { status: booking.status === 'canceled' ? 'booking_canceled' : booking.status === 'confirmed' ? 'booked' : 'booking_pending', reference: booking.reference, starts_at: booking.starts_at, booking_id: booking.id };
 }
 
 // Deleting a response does not return its unit to the monthly allowance and does not cancel a
@@ -302,7 +304,7 @@ export function exportCsv(app, workspaceId, formId) {
   const form = getForm(app, workspaceId, formId);
   const versions = formVersions(app, formId);
   const columns = exportColumns(versions, form.draft);
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id
+  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
     FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ? ORDER BY r.created_at`, formId, workspaceId);
   const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(field => field.label || field.id)].map(csvCell).join(',')];
   for (const row of rows) {

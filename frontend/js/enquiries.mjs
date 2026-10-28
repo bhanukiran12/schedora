@@ -1,14 +1,13 @@
 // Enquiries: one list across Forms, Meet and Flow. Each form response or direct booking with what
-// happened next (booking, follow-up runs, tasks) and whether it needs attention. Built in the
-// browser from existing APIs (enquiry-trail.mjs); the coverage note says exactly what was loaded.
-import { $, api, fmtDateTime, html, loading, mount, notice, raw, session, wsPath } from './core.mjs';
+// happened next (booking, follow-up runs, tasks) and whether it needs attention. Pages come from
+// GET /enquiries, newest arrival first, so every record is reachable with "Load older"; states are
+// derived from those records by enquiry-trail.mjs and the coverage note says what is loaded.
+import { $, api, errorBlock, fmtDateTime, html, loading, mount, notice, raw, session, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
-import { buildEnquiries, REASON_LABELS } from './enquiry-trail.mjs';
-import { loadTrailContext, trailList } from './forms.mjs';
+import { buildFeedEnquiries, REASON_LABELS } from './enquiry-trail.mjs';
+import { trailList } from './forms.mjs';
 
-// Most recently updated forms, and latest responses per form, loaded for this view.
-export const FORM_LIMIT = 20;
-export const RESPONSES_PER_FORM = 50;
+export const PAGE_SIZE = 50;
 const STATE_TEXT = { attention: ['Needs attention', '!'], waiting: ['Waiting', '…'], unknown: ['Not verified', '?'], done: ['Done', '✓'] };
 const FILTERS = [['all', 'All'], ['attention', 'Needs attention'], ['waiting', 'Waiting']];
 const plural = (n, [one, many]) => `${n} ${n === 1 ? one : many}`;
@@ -24,40 +23,55 @@ export async function enquiries(ctx) {
     <p class="lead">Each form response and booking, with what happened next: the booking, any follow-up, and anything that needs attention.</p>
     <div id="enquiries-body">${loading('Loading responses, bookings and follow-ups…')}</div></div>`);
 
-  const [formsResult, context] = await Promise.all([api('GET', wsPath('/forms')).then(value => ({ ok: true, value }), error => ({ ok: false, error })), loadTrailContext()]);
-  const forms = formsResult.ok ? [...formsResult.value].sort((a, b) => b.updated_at - a.updated_at).slice(0, FORM_LIMIT) : [];
-  const loaded = await Promise.allSettled(forms.map(form => api('GET', wsPath(`/forms/${form.id}/responses?limit=${RESPONSES_PER_FORM}`))));
+  const pages = [];
+  const loadPage = async () => {
+    const before = pages.at(-1)?.next;
+    pages.push(await api('GET', wsPath(`/enquiries?limit=${PAGE_SIZE}${before ? '&before=' + encodeURIComponent(before) : ''}`)));
+  };
+  try { await loadPage(); } catch (error) { if (ctx.alive()) mount($('#enquiries-body'), errorBlock(error)); return; }
   if (!ctx.alive()) return;
-  const responses = loaded.filter(result => result.status === 'fulfilled').map(result => result.value);
-  const failedForms = loaded.filter(result => result.status === 'rejected').length;
-  const bookings = [...context.bookingsByReference.values()];
-  const result = buildEnquiries({ forms: responses, bookings, context });
 
-  const shown = result.enquiries.filter(enquiry => (filter === 'all' || enquiry.state === filter) && (origin === 'any' || enquiry.origin === origin));
-  const link = (show, from) => `/enquiries${[show !== 'all' && `show=${show}`, from !== 'any' && `from=${from}`].filter(Boolean).join('&').replace(/^(?=.)/, '?')}`;
-  const counts = { all: result.counts.all, attention: result.counts.attention, waiting: result.counts.waiting };
-  const reasons = Object.entries(result.reasons).map(([key, n]) => plural(n, REASON_LABELS[key]));
-  const coverage = [
-    formsResult.ok ? `responses from ${forms.length === FORM_LIMIT ? `the ${FORM_LIMIT} most recently updated forms` : `${forms.length} ${forms.length === 1 ? 'form' : 'forms'}`} (latest ${RESPONSES_PER_FORM} each)` : null,
-    context.bookingsAvailable ? 'bookings you can see (up to 300 per list)' : null,
-    context.runsAvailable ? (context.runs.length >= 200 ? 'the latest 200 Flow runs' : `${context.runs.length} Flow ${context.runs.length === 1 ? 'run' : 'runs'}`) : null,
-    context.tasksAvailable ? (context.tasks.length >= 200 ? 'the latest 200 tasks' : `${context.tasks.length} ${context.tasks.length === 1 ? 'task' : 'tasks'}`) : null
-  ].filter(Boolean);
-  const missing = [!formsResult.ok && 'form responses', !context.bookingsAvailable && 'bookings', !context.runsAvailable && 'Flow runs', !context.tasksAvailable && 'tasks', failedForms && `${failedForms} ${failedForms === 1 ? 'form' : 'forms'}`].filter(Boolean);
-
-  mount($('#enquiries-body'), html`
-    ${result.counts.attention ? notice('warn', html`<p><strong>${plural(result.counts.attention, ['enquiry needs', 'enquiries need'])} attention:</strong> ${reasons.join(', ')}.</p>`) : ''}
-    ${missing.length ? notice('bad', html`<p>Could not load ${missing.join(', ')}. Those parts show as not verified; nothing is assumed to be done.</p>`) : ''}
-    <div class="row-between enquiry-controls"><nav class="row trail-filter" aria-label="Show enquiries">${FILTERS.map(([key, label]) => html`<a class="btn btn-small ${key === filter ? 'btn-primary' : ''}" href="${link(key, origin)}" ${key === filter ? raw('aria-current="page"') : ''}>${label} (${counts[key]})</a>`)}</nav>
-      <nav class="row trail-filter" aria-label="Started from"><span class="muted">Started from</span>${[['any', 'Anywhere'], ['response', 'A form'], ['booking', 'A direct booking']].map(([key, label]) => html`<a class="btn btn-small ${key === origin ? 'btn-primary' : ''}" href="${link(filter, key)}" ${key === origin ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav></div>
-    <p class="hint">Built from ${coverage.join(', ')}. Older records may not appear. Needs attention comes first, then the most recent: responses by when they arrived, direct bookings by their appointment time.</p>
-    ${shown.length ? html`<ul class="list enquiry-list">${shown.map(enquiry => html`<li class="enquiry" data-state="${enquiry.state}">
-      <div class="enquiry-head"><span class="readiness-icon" aria-hidden="true">${STATE_TEXT[enquiry.state][1]}</span>
-        <div class="enquiry-main"><div class="list-title">${enquiry.title}</div>
-          <div class="meta"><span>${enquiry.origin === 'response' ? `Form: ${enquiry.source}` : `Booked directly: ${enquiry.source}`}</span><span>${enquiry.origin === 'response' ? `Received ${fmtDateTime(enquiry.at)}` : `Appointment ${fmtDateTime(enquiry.at)}`}</span>${enquiry.booking && enquiry.origin === 'response' ? html`<span>Booking ${enquiry.booking.reference}</span>` : ''}</div>
-          ${enquiry.trail.attention.length ? html`<p class="attention-note">${enquiry.trail.attention.join(' · ')}</p>` : ''}</div>
-        <span class="enquiry-state">${STATE_TEXT[enquiry.state][0]}</span></div>
-      <details class="enquiry-detail"><summary>What happened<span class="visually-hidden"> for ${enquiry.title}</span></summary>${trailList(enquiry.trail, `trail-${enquiry.id}`)}
-        ${enquiry.origin === 'response' ? html`<p class="trail-links"><a href="/forms/${enquiry.formId}/responses">Open the form's responses</a></p>` : html`<p class="trail-links"><a href="/meet?tab=meetings">Open Meetings</a></p>`}</details></li>`)}</ul>`
-      : html`<div class="empty section-gap">${result.counts.all ? 'Nothing matches this filter.' : html`No enquiries yet. They appear when someone responds to a published form or books a time. <a href="/forms">Forms</a> · <a href="/meet">Meet</a>`}</div>`}`);
+  const draw = (status = '') => {
+    const result = buildFeedEnquiries(pages);
+    const complete = !pages.at(-1).next;
+    const shown = result.enquiries.filter(enquiry => (filter === 'all' || enquiry.state === filter) && (origin === 'any' || enquiry.origin === origin));
+    const link = (show, from) => `/enquiries${[show !== 'all' && `show=${show}`, from !== 'any' && `from=${from}`].filter(Boolean).join('&').replace(/^(?=.)/, '?')}`;
+    const counts = { all: result.counts.all, attention: result.counts.attention, waiting: result.counts.waiting };
+    const reasons = Object.entries(result.reasons).map(([key, n]) => plural(n, REASON_LABELS[key]));
+    const scope = complete ? (result.counts.all ? `All ${plural(result.counts.all, ['enquiry is', 'enquiries are'])} loaded.` : '')
+      : `Showing the newest ${result.counts.all} enquiries. Counts and filters cover what is loaded; load older enquiries to include more.`;
+    mount($('#enquiries-body'), html`
+      ${result.counts.attention ? notice('warn', html`<p><strong>${plural(result.counts.attention, ['enquiry needs', 'enquiries need'])} attention${complete ? '' : ' among those loaded'}:</strong> ${reasons.join(', ')}.</p>`) : ''}
+      <div class="row-between enquiry-controls"><nav class="row trail-filter" aria-label="Show enquiries">${FILTERS.map(([key, label]) => html`<a class="btn btn-small ${key === filter ? 'btn-primary' : ''}" href="${link(key, origin)}" ${key === filter ? raw('aria-current="page"') : ''}>${label} (${counts[key]})</a>`)}</nav>
+        <nav class="row trail-filter" aria-label="Started from"><span class="muted">Started from</span>${[['any', 'Anywhere'], ['response', 'A form'], ['booking', 'A direct booking']].map(([key, label]) => html`<a class="btn btn-small ${key === origin ? 'btn-primary' : ''}" href="${link(filter, key)}" ${key === origin ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav></div>
+      <p class="hint">${scope} Needs attention comes first, then the newest: responses by when they arrived, direct bookings by when they were booked. Each enquiry includes all of its follow-ups.</p>
+      ${shown.length ? html`<ul class="list enquiry-list">${shown.map(enquiry => html`<li class="enquiry" data-state="${enquiry.state}">
+        <div class="enquiry-head"><span class="readiness-icon" aria-hidden="true">${STATE_TEXT[enquiry.state][1]}</span>
+          <div class="enquiry-main"><div class="list-title">${enquiry.title}</div>
+            <div class="meta"><span>${enquiry.origin === 'response' ? `Form: ${enquiry.source}` : `Booked directly: ${enquiry.source}`}</span><span>${enquiry.origin === 'response' ? `Received ${fmtDateTime(enquiry.at)}` : `Booked ${fmtDateTime(enquiry.at)}`}</span>${enquiry.origin === 'booking' ? html`<span>Appointment ${fmtDateTime(enquiry.startsAt)}</span>` : enquiry.booking ? html`<span>Booking ${enquiry.booking.reference}</span>` : ''}</div>
+            ${enquiry.trail.attention.length ? html`<p class="attention-note">${enquiry.trail.attention.join(' · ')}</p>` : ''}</div>
+          <span class="enquiry-state">${STATE_TEXT[enquiry.state][0]}</span></div>
+        <details class="enquiry-detail"><summary>What happened<span class="visually-hidden"> for ${enquiry.title}</span></summary>${trailList(enquiry.trail, `trail-${enquiry.id}`)}
+          ${enquiry.origin === 'response' ? html`<p class="trail-links"><a href="/forms/${enquiry.formId}/responses">Open the form's responses</a></p>` : html`<p class="trail-links"><a href="/meet?tab=meetings">Open Meetings</a></p>`}</details></li>`)}</ul>`
+        : html`<div class="empty section-gap">${result.counts.all ? 'Nothing matches this filter among the loaded enquiries.' : html`No enquiries yet. They appear when someone responds to a published form or books a time. <a href="/forms">Forms</a> · <a href="/meet">Meet</a>`}</div>`}
+      <div class="section-gap">${complete ? '' : html`<button class="btn" type="button" id="load-older">Load older enquiries</button>`}<p class="muted" role="status" id="enquiries-status" tabindex="-1">${status}</p></div>`);
+    $('#load-older')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.textContent = 'Loading…';
+      const before = buildFeedEnquiries(pages).counts.all;
+      try { await loadPage(); } catch (error) {
+        if (!ctx.alive()) return;
+        button.disabled = false;
+        button.textContent = 'Load older enquiries';
+        $('#enquiries-status').textContent = `Could not load older enquiries: ${error.message}`;
+        return;
+      }
+      if (!ctx.alive()) return;
+      const added = buildFeedEnquiries(pages).counts.all - before;
+      draw(`Loaded ${plural(added, ['older enquiry', 'older enquiries'])}.`);
+      ($('#load-older') || $('#enquiries-status')).focus();
+    });
+  };
+  draw();
 }

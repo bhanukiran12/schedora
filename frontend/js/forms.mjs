@@ -828,7 +828,7 @@ export async function responses(ctx) {
     mount($('#responses'), rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
         <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
-        <span class="muted" role="status">${context ? html`Needs attention means a booking problem, a failed or retrying follow-up, or an open follow-up task.${context.capped ? ' Based on the latest 200 runs and tasks.' : ''}` : 'Checking follow-ups…'}</span></div>
+        <span class="muted" role="status">${context ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, or an open follow-up task.${context.capped ? ' Based on the latest 200 runs and tasks.' : ''}` : 'Checking follow-ups…'}</span></div>
       ${shown.length ? html`<div class="table-wrap"><table><caption class="visually-hidden">Responses to ${form.draft.title}</caption>
       <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}</tr></thead>
       <tbody>${shown.map(row => html`<tr><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>

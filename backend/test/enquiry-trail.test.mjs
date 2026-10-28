@@ -2,7 +2,7 @@
 // missing sources are reported as unknown rather than as "nothing happened".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBookingTrail, buildEnquiries, buildTrail, OFFER_TTL_MS } from '../../frontend/js/enquiry-trail.mjs';
+import { buildBookingTrail, buildFeedEnquiries, buildTrail, OFFER_TTL_MS } from '../../frontend/js/enquiry-trail.mjs';
 import { setup, signUp, publishedEventType, idem } from './helpers.mjs';
 
 const row = (next_step = null) => ({ id: 'aaaaaaaa-1111-2222-3333-444444444444', created_at: 1000, form_version: 1, next_step });
@@ -104,28 +104,35 @@ test('direct bookings: canceled and open-task follow-ups need attention; unreada
   assert.equal(blind.steps.at(-1).state, 'unknown');
 });
 
-test('buildEnquiries joins products without duplicates, names people from their answers and puts attention first', () => {
-  const definition = { fields: [{ id: 'full_name', type: 'short_text', label: 'Your name' }, { id: 'mail', type: 'email', label: 'Email' }] };
-  const responses = [
-    { id: 'r1aaaaaa-0000-0000-0000-000000000000', created_at: 100, form_version: 1, answers: { full_name: 'Meera' }, next_step: { status: 'booked', reference: 'SCH-A', starts_at: 900 } },
-    { id: 'r2bbbbbb-0000-0000-0000-000000000000', created_at: 200, form_version: 1, answers: { mail: 'ravi@example.com' }, next_step: null },
-    { id: 'r3cccccc-0000-0000-0000-000000000000', created_at: 300, form_version: 1, answers: {}, next_step: { status: 'offered' } }
-  ];
-  const bookings = [
-    { id: 'bA', reference: 'SCH-A', status: 'confirmed', starts_at: 900, invitee_name: 'Meera', event_title: 'Consult' },
-    { id: 'bOld', reference: 'SCH-OLD', status: 'canceled', rescheduled_to: 'bA', starts_at: 800, invitee_name: 'Meera', event_title: 'Consult' },
-    { id: 'bD', reference: 'SCH-D', status: 'confirmed', starts_at: 950, invitee_name: 'Divya', event_title: 'Intro call' }
-  ];
-  const result = buildEnquiries({ forms: [{ form: { id: 'f1', draft: { title: 'Intake', fields: [] } }, versions: { 1: definition }, responses }], bookings: [...bookings, bookings[2]],
-    context: context({ bookingsByReference: new Map(bookings.map(item => [item.reference, item])), now: 300 + OFFER_TTL_MS + 1 }) });
+test('feed enquiries keep server order data, hide follow-ups of unseen bookings and put attention first', () => {
+  const page = {
+    now: 10_000,
+    items: [
+      { kind: 'response', id: 'r3', at: 300, form_id: 'f1', form_title: 'Intake', title: 'Response R3', next_step: { status: 'offered', expires_at: 9_000 } },
+      { kind: 'booking', id: 'bD', at: 250, booking: { id: 'bD', reference: 'SCH-D', status: 'confirmed', starts_at: 50_000, invitee_name: 'Divya', event_title: 'Intro call' } },
+      { kind: 'response', id: 'r2', at: 200, form_id: 'f1', form_title: 'Intake', title: 'ravi@example.com', next_step: { status: 'offered', expires_at: 20_000 } },
+      { kind: 'response', id: 'r1', at: 100, form_id: 'f1', form_title: 'Intake', title: 'Meera', next_step: { status: 'booked', reference: 'SCH-A', starts_at: 900, booking_id: 'bA', booking_visible: false } }
+    ],
+    runs: [run({ event_type: 'meet.booking.created', subject_id: 'bD', result: { task: 't1' } })],
+    tasks: [{ id: 't1', title: 'Prepare', status: 'done' }]
+  };
+  const result = buildFeedEnquiries([page]);
   assert.deepEqual(result.enquiries.map(item => [item.origin, item.title, item.state]), [
-    ['response', 'Response R3CCCCCC', 'attention'], ['booking', 'Divya', 'done'], ['response', 'ravi@example.com', 'done'], ['response', 'Meera', 'done']]);
-  assert.deepEqual(result.reasons, { offer_expired: 1 });
-  assert.deepEqual(result.counts, { all: 4, attention: 1, waiting: 0, unknown: 0 });
-  assert.deepEqual(result.enquiries.find(item => item.title === 'Meera').booking, { reference: 'SCH-A', event: 'Consult' }, 'the form booking is not listed again as a direct booking');
+    ['response', 'Response R3', 'attention'], ['response', 'ravi@example.com', 'waiting'], ['booking', 'Divya', 'done'], ['response', 'Meera', 'done']]);
+  assert.deepEqual(result.reasons, { offer_expired: 1 }, 'expiry comes from the stored expires_at and the server clock, not the response age');
+  assert.equal(result.enquiries.find(item => item.title === 'Divya').at, 250, 'direct bookings are ordered by when they were booked');
+  assert.ok(result.enquiries.find(item => item.title === 'Meera').trail.notes.includes('Follow-ups for this booking are not visible to your role.'));
 });
 
-test('real local API: response → booking → follow-up task, an expired offer and a direct booking, from the endpoints the page uses', async () => {
+test('stored offer expiry wins over the response age in both directions', () => {
+  const offered = expires_at => row({ status: 'offered', expires_at });
+  assert.equal(buildTrail(offered(5000), context({ now: 4999 })).steps[1].state, 'waiting');
+  assert.equal(buildTrail(offered(5000), context({ now: 5000 })).steps[1].reason, 'offer_expired');
+  assert.equal(buildTrail(offered(1000 + 10 * OFFER_TTL_MS), context({ now: 1000 + OFFER_TTL_MS + 1 })).steps[1].state, 'waiting', 'a longer stored expiry is respected');
+  assert.equal(buildTrail(row({ status: 'offered' }), context({ now: 1000 + OFFER_TTL_MS + 1 })).steps[1].reason, 'offer_expired', 'records without expires_at keep the age rule');
+});
+
+test('real local API: the enquiry feed links response → booking → task, expires offers on the server clock and scopes members', async () => {
   const env = await setup();
   try {
     const owner = env.client();
@@ -143,25 +150,28 @@ test('real local API: response → booking → follow-up task, an expired offer 
 
     const meera = await submit('Meera', 'enquiry-trail-meera-0001');
     const handoff = new URL(meera.body.next.url, 'https://x').searchParams.get('handoff');
+    env.clock.now += 1000;
     assert.equal((await env.client().post(`/api/public/meet/${ws.slug}/${consult.slug}/bookings`, { name: 'Meera', email: 'meera@example.com', timezone: 'UTC', start: slots[0], handoff }, idem())).status, 201);
+    env.clock.now += 1000;
     await submit('Ravi', 'enquiry-trail-ravi-00001');
+    env.clock.now += 1000;
     assert.equal((await env.client().post(`/api/public/meet/${ws.slug}/${consult.slug}/bookings`, { name: 'Divya', email: 'divya@example.com', timezone: 'UTC', start: slots[1] }, idem())).status, 201);
     for (let pass = 0; pass < 3; pass++) await env.app.worker.tick();
-    env.clock.now += OFFER_TTL_MS + 60000;
 
-    const load = async http => {
-      const [forms, runs, tasks, ...scopes] = await Promise.all([`${base}/forms`, `${base}/runs`, `${base}/tasks`, ...['upcoming', 'past', 'canceled'].map(scope => `${base}/bookings?scope=${scope}`)].map(path => http.get(path)));
-      const bookingsByReference = new Map(scopes.filter(scope => scope.status === 200).flatMap(scope => scope.body).map(booking => [booking.reference, booking]));
-      const responses = await Promise.all(forms.body.map(item => http.get(`${base}/forms/${item.id}/responses?limit=50`)));
-      return buildEnquiries({ forms: responses.map(response => response.body), bookings: [...bookingsByReference.values()],
-        context: { runs: runs.status === 200 ? runs.body : [], runsAvailable: runs.status === 200, tasks: tasks.status === 200 ? tasks.body : [], tasksAvailable: tasks.status === 200,
-          bookingsByReference, bookingsAvailable: scopes.every(scope => scope.status === 200), provider: 'outbox', now: env.clock.now } });
-    };
-    const result = await load(owner);
+    const first = (await owner.get(`${base}/enquiries`)).body;
+    const ravi = first.items.find(item => item.title === 'Ravi');
+    assert.equal(ravi.next_step.status, 'offered');
+    assert.equal(typeof ravi.next_step.expires_at, 'number', 'the stored expiry is returned');
+    assert.equal(buildFeedEnquiries([first]).enquiries.find(item => item.title === 'Ravi').state, 'waiting');
+    env.clock.now = ravi.next_step.expires_at;
+
+    const page = (await owner.get(`${base}/enquiries`)).body;
+    assert.equal(page.now, env.clock.now, 'the page carries the server clock');
+    assert.deepEqual(page.items.map(item => [item.kind, item.title || item.booking.invitee_name]), [['booking', 'Divya'], ['response', 'Ravi'], ['response', 'Meera']], 'newest arrival first; the form booking is not listed again');
+    assert.equal(page.next, null);
+    for (const item of page.items) assert.ok(!('answers' in item), 'answers are not sent; only the respondent label');
+    const result = buildFeedEnquiries([page]);
     const by = title => result.enquiries.find(item => item.title === title);
-    assert.deepEqual(result.enquiries.map(item => item.title).sort(), ['Divya', 'Meera', 'Ravi']);
-    assert.equal(by('Meera').origin, 'response');
-    assert.ok(by('Meera').booking?.reference, 'linked to its booking');
     assert.deepEqual(by('Meera').trail.reasons, ['task_open'], 'booking confirmed, preparation task still open');
     assert.deepEqual(by('Ravi').trail.reasons, ['offer_expired']);
     assert.deepEqual([by('Divya').origin, by('Divya').trail.reasons], ['booking', ['task_open']]);
@@ -170,8 +180,48 @@ test('real local API: response → booking → follow-up task, an expired offer 
     const memberHttp = env.client();
     const member = await signUp(memberHttp, 'Member');
     await owner.post(`${base}/members`, { email: member.email, role: 'member' });
-    const seen = await load(memberHttp);
-    assert.ok(!seen.enquiries.some(item => item.origin === 'booking'), 'a member does not see bookings they do not host');
-    assert.ok(seen.enquiries.find(item => item.title === 'Meera').trail.notes.includes('Follow-ups for this booking are not visible to your role.'));
+    const seen = (await memberHttp.get(`${base}/enquiries`)).body;
+    assert.ok(!seen.items.some(item => item.kind === 'booking'), 'a member does not see bookings they do not host');
+    assert.ok(!seen.runs.some(item => item.event_type === 'meet.booking.created'), 'nor their follow-up runs');
+    assert.ok(buildFeedEnquiries([seen]).enquiries.find(item => item.title === 'Meera').trail.notes.includes('Follow-ups for this booking are not visible to your role.'));
+    assert.equal((await env.client().get(`${base}/enquiries`)).status, 401);
+    const outsider = env.client();
+    await signUp(outsider, 'Outsider');
+    assert.equal((await outsider.get(`${base}/enquiries`)).status, 404);
+  } finally { await env.close(); }
+});
+
+test('the feed pages through every enquiry exactly once, including arrival-time ties, without per-form caps', async () => {
+  const env = await setup();
+  try {
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'Owner');
+    const base = `/api/workspaces/${ws.id}`;
+    const intake = { title: 'Intake', description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'name', type: 'short_text', label: 'Your name', required: true }] };
+    // 25 forms × 3 stored responses: more forms than the old 20-form window, and two responses per
+    // instant. Rows are written directly (public submission is rate-limited per client).
+    for (let f = 0; f < 25; f++) {
+      const form = (await owner.post(`${base}/forms`, { definition: { ...intake, title: `Form ${f}` } })).body;
+      assert.equal((await owner.post(`${base}/forms/${form.id}/publish`, { base_revision: form.revision })).status, 200);
+      for (let r = 0; r < 3; r++) {
+        if (r !== 1) env.clock.now += 1000;
+        env.app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)',
+          `00000000-0000-4000-8000-${String(f * 3 + r).padStart(12, '0')}`, ws.id, form.id, JSON.stringify({ name: `P${f}-${r}` }), `feed-${f}-${r}`, env.clock.now);
+      }
+    }
+    const seen = [];
+    let cursor = null;
+    let pages = 0;
+    do {
+      const page = (await owner.get(`${base}/enquiries?limit=7${cursor ? `&before=${encodeURIComponent(cursor)}` : ''}`)).body;
+      assert.ok(page.items.length <= 7);
+      for (let i = 1; i < page.items.length; i++) assert.ok(page.items[i - 1].at >= page.items[i].at, 'newest first');
+      seen.push(...page.items.map(item => item.title));
+      cursor = page.next;
+      pages++;
+    } while (cursor && pages < 50);
+    assert.equal(seen.length, 75);
+    assert.equal(new Set(seen).size, 75, 'no duplicates or gaps across pages');
+    assert.equal((await owner.get(`${base}/enquiries?before=not-a-cursor`)).status, 400);
   } finally { await env.close(); }
 });

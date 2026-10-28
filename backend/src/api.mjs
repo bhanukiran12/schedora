@@ -13,6 +13,7 @@ import { registerVideoRoutes } from './api-video.mjs';
 import { videoHealth } from './video/rooms.mjs';
 import { alertChannels, firingAlerts } from './platform/monitoring.mjs';
 import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
+import { listEnquiries } from './enquiries.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
 import { handleMcp } from './platform/mcp.mjs';
@@ -310,6 +311,8 @@ export function createApi(app) {
   patch('/api/workspaces/:ws/flows/:id', async ctx => updateFlow(app, member(ctx, 'flows.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/flows/:id', ctx => { deleteFlow(app, member(ctx, 'flows.manage').workspace.id, ctx.params.id); return { status: 204 }; });
   post('/api/workspaces/:ws/flows/:id/simulate', ctx => simulateFlow(app, member(ctx, 'flows.read').workspace.id, ctx.params.id));
+  // Workspace-wide enquiries (responses and direct bookings), newest arrival first, cursor-paginated.
+  get('/api/workspaces/:ws/enquiries', ctx => listEnquiries(app, member(ctx, 'responses.read'), { before: ctx.query.get('before'), limit: ctx.query.get('limit') }));
   get('/api/workspaces/:ws/runs', ctx => listRuns(app, member(ctx, 'flows.read').workspace.id, { flowId: ctx.query.get('flow') || null, status: ctx.query.get('status') || null }));
   post('/api/workspaces/:ws/runs/:id/retry', ctx => { retryRun(app, member(ctx, 'flows.manage').workspace.id, ctx.params.id); return { status: 204 }; });
   get('/api/workspaces/:ws/tasks', ctx => listTasks(app, member(ctx, 'tasks.manage').workspace.id, ctx.query.get('status') || null));

@@ -1,5 +1,5 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
-import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, VIDEO_TABLES } from './postgres-sql.mjs';
+import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, VIDEO_TABLES } from './postgres-sql.mjs';
 import { openDatabase } from './db.mjs';
 
 export function openPostgres(connectionString, { ca, schemaName = 'schedora' } = {}) {
@@ -22,7 +22,8 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
       { name: 'postgres_v6_email_transport', statements: ['ALTER TABLE emails ADD COLUMN IF NOT EXISTS accepted_transport TEXT'] },
       { name: 'postgres_v7_monitoring', statements: postgresUpgrade(tables.filter(table => MONITORING_TABLES.includes(table.name)), indexes.filter(index => MONITORING_TABLES.includes(index.tbl_name))) },
       { name: 'postgres_v8_email_delivery_reports', statements: [...EMAIL_REPORT_COLUMNS,
-        ...postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)))] }];
+        ...postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)))] },
+      { name: 'postgres_v9_enquiry_feed', statements: ENQUIRY_FEED_INDEXES }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);
