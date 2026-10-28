@@ -1,6 +1,6 @@
 # Schedora first-release acceptance
 
-Evidence checkpoint: 28 October 2026. Released main: `328ed25bf1795d477026b946af83b55401aa7632`. This is a requirement-by-requirement tracker, not a production-ready badge. The full researched, differentiated and validated product objective remains incomplete.
+Evidence checkpoint: 28 October 2026. Latest verified application release: `ec3ccdc01f9f2d093f0ddeab810620720ee6402d`; earlier evidence below retains its recorded scope. This is a requirement-by-requirement tracker, not a production-ready badge. The full researched, differentiated and validated product objective remains incomplete.
 
 ## Evidence rules
 
@@ -17,7 +17,7 @@ Implemented code, automated tests, deployment health, real-provider results and 
 | Flow task deadlines/assignees and email transport evidence are truthful | flow/service.mjs; flow.test.mjs; task/email browser journeys | Automated and deployed | Actual provider-accepted/delivered/bounced message to own test addresses; production remains outbox |
 | Accessible navigation, control labels, errors and responsive layouts | Browser keyboard/drawer/focus, contrast and zoom/reflow checks; reviewed screenshots | Automated/visual evidence | Real screen-reader check and consenting human task study; do not claim a complete WCAG audit |
 | Real email operations | Production config previously read as outbox; code separates outbox/acceptance/delivery | Open operational gate | Configure selected real provider privately, signed delivery webhook, own-inbox receipt and controlled failure evidence |
-| Monitoring reaches the operator | monitoring.mjs and controlled test coverage; live health alert channels empty | Open operational gate | Configured channel, actual test receipt, external uptime alert receipt; then confirm monitoring flag |
+| Monitoring reaches the operator | Isolated production operator email configured; real alert-test accepted and owner confirmed Inbox receipt on 28 October; live health channel email | Operator test receipt verified; external gate open | Independent uptime/database and worker checks plus actual failure/recovery alert receipts; see EXTERNAL_MONITORING.md before confirming monitoring flag |
 | Built-in video production acceptance | LiveKit credentials/permanent signed callback configured; staging evidence and user audio retest | Open; video/recharge disabled | Production smoke, measured two-way media, physical-device/recovery/accessibility checks, verified monitoring and zero-spend guardrails |
 | Pricing/allowances/tax/positioning match actual offer | PRICING_PROPOSAL.md labelled interview material; live purchase paths unchanged | Proposal only | Measured costs, owner commercial/tax approval, enforced budgets and comprehension research |
 | Differentiation and customer value validated | Dated official competitor research and UX_RESEARCH_PLAN.md hypotheses | Hypothesis only | Consenting operator interviews/tasks using last real enquiry; compare current workflow, record failures and willingness-to-pay evidence |
@@ -39,7 +39,7 @@ Implemented code, automated tests, deployment health, real-provider results and 
 - Operations: EMAIL.md, product/video runbooks and backend/scripts/production-check.mjs.
 - External evidence log: C:/Users/Nxtwave/Documents/ChatGPT/schedora/reports/Schedora-recurring-progress.md.
 
-No new feature, provider test, customer finding or production configuration is asserted by this documentation reconciliation.
+The original reconciliation added no feature or provider evidence; subsequent dated increments and the current monitoring row record later verified work. They do not establish customer validation or complete production readiness.
 
 
 ## Forms history increment — 28 October 2026
