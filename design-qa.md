@@ -1,3 +1,35 @@
+# Authentication design QA — 2026-10-28
+
+final result: passed
+
+## Source and scope
+User-selected screenshot and https://schedora.in/start. Reused the actual existing `/start` layout, Inter font, dark panel colour (#172c22), logos and product marks. The production reference was inspected; an unchanged local `/start` capture was used for stable desktop comparison. The selected page is a demo; the implementation is real auth, so copy, password, Google controls and legal notices intentionally differ.
+
+## Comparison evidence
+C:/Users/Nxtwave/Documents/ChatGPT/schedora/outputs/auth-redesign-2026-10-28/
+- reference-start-desktop.png (1876 x 884)
+- suite-signup-desktop.png (1861 x 877 captured content; nominal 1876 x 884 viewport, browser scrollbar/capture rounding)
+- comparison-aligned.png (combined source and implementation at native scale, no stretching)
+- forms-login-desktop.png
+- forms-login-phone.png
+
+## Required fidelity surfaces
+- Typography: bundled Inter; original brand lockup, 48px desktop left headline and 34px auth heading. Smaller readable mobile headings.
+- Spacing/layout: original .8fr/1.35fr columns and 432px form column; full-height left panel. Signup includes required real-auth controls and scrolls vertically when needed. Mobile compacts the brand panel and keeps controls in one column.
+- Colours/tokens: selected dark green and white composition retained. Product primary controls retain their existing green/purple/orange identity.
+- Image quality: original supplied source logos/marks and official Google icon; no substitute generated artwork.
+- Copy/content: only the selected product appears for individual entry; Suite shows all three. No demo/sample-account language in real auth. Existing backend authentication remains connected.
+
+## Functional and accessibility review
+Responsive browser tests check login errors, signup, product context, return paths, sign-in/out, existing account and persisted setup journeys. Fields keep labels/autocomplete; errors use existing announced status handling. Manual keyboard-control check confirmed consent settings returns focus to the visible auth control. Responsive screenshots and automated overflow checks cover phone/tablet/desktop; no real screen-reader or human conversion study was performed. Google visual/URL checks use dummy local configuration only.
+
+No unresolved P0/P1/P2 visual issues. Intentional difference: real signup has more controls than the demo and therefore requires vertical scrolling on smaller displays. Existing small dark-green Meet mark on the dark panel matches the source asset; optional future brand contrast polish is P3.
+
+
+---
+
+## Previous release QA (historical)
+
 # Design QA — 24 October 2026
 
 **Final result: passed** for the implemented Figma-inspired frontend scope at the observed browser viewport. Mobile device and 1440px viewport captures remain verification gaps, not claimed test results.

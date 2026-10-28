@@ -663,3 +663,8 @@ See [product shell contract and evidence](PRODUCT_SHELL.md). Local evidence: 207
   - Real screen-reader testing (NVDA, VoiceOver, TalkBack) and human usability testing remain open and are not claimed as completed.
 - **Email and video operational verification:**
   - Verified monitoring (`backend/src/platform/monitoring.mjs`, `backend/scripts/alert-test.mjs`), signed email delivery webhook handling (`backend/src/platform/email-events.mjs`), and production readiness gates (`backend/src/production.mjs`, `backend/src/video/config.mjs`). Production video (`MEET_VIDEO_ENABLED=false`) and recharge remain disabled until provider credentials, webhooks, monitoring channels and live smoke evidence are approved. Wording everywhere separates local outbox, provider acceptance and mail-server delivery without claiming inbox delivery.
+
+
+### 2026-10-28 — Real authentication matches the selected welcome design
+
+Pain: the real account page looked unrelated to the polished demo, and users faced multiple account forms. Implemented the user's chosen `/start` split-screen design for real login/signup, with only one primary form per route and product-scoped benefits. Suite retains all three. New signup defaults to the appropriate persisted setup; old `/account` links still work. This is a user-selected design change, not a validated conversion improvement. Existing auth, access rules and commercial plans remain unchanged. Product shell documentation and design QA contain the verification scope.

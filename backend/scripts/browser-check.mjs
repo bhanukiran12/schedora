@@ -130,8 +130,17 @@ async function step(name, fn) {
 }
 
 try {
+  await step('Suite split-screen authentication and safe switching', async () => {
+    await open('/signup', "document.querySelector('#signup')");
+    if ((await evaluate("document.querySelectorAll('.auth-layout .ds-signup-benefit').length")) !== 3) throw new Error('Suite auth must show three products');
+    if (await evaluate("document.querySelector('.auth-layout').innerText.includes('DEMO SETUP')")) throw new Error('real auth uses demo copy');
+    await layoutCheck('Suite signup');
+    await open('/login?next=%2F%2Fevil.example', "document.querySelector('#signin')");
+    if (await evaluate("Boolean(document.querySelector('#signup'))")) throw new Error('login shows competing signup form');
+    await layoutCheck('Suite login');
+  });
   for (const path of ['/', '/meet', '/forms', '/flow', '/billing', '/account', '/privacy', '/terms', '/missing-page']) {
-    await step(`render ${path}`, async () => { await open(path); await layoutCheck(path); });
+  await step(`render ${path}`, async () => { await open(path); await layoutCheck(path); });
   }
   await step('dismiss consent', async () => { await click('.cookie-banner [data-choice="rejected"]'); });
   let workspaceSlug;
@@ -1077,9 +1086,17 @@ try {
       if (await evaluate("Boolean(document.querySelector('.cookie-banner'))")) await click('.cookie-banner [data-choice=rejected]');
       if (!(await evaluate(`document.body.dataset.product === '${product}' && !document.querySelector('.ecosystem-switcher')`))) throw new Error('wrong product landing: ' + product);
       await layoutCheck(product + ' product landing');
-      await open(origin + `/account?mode=signup&next=/${product}`, "document.querySelector('#signup')");
-      if (!(await evaluate(`document.querySelector('h1').innerText.includes('${product === 'meet' ? 'Meet' : product === 'forms' ? 'Forms' : 'Flow'}')`))) throw new Error('auth context lost');
+      await open(origin + `/signup?next=/${product}`, "document.querySelector('#signup')");
+      if (!(await evaluate(`document.querySelector('.auth-layout .ds-brand').innerText.includes('${product === 'meet' ? 'Meet' : product === 'forms' ? 'Forms' : 'Flow'}')`))) throw new Error('auth context lost');
       await layoutCheck(product + ' product signup');
+      if ((await evaluate("document.querySelectorAll('.auth-layout .ds-signup-benefit').length")) !== 1) throw new Error('auth promotes another product');
+      if (await evaluate("Boolean(document.querySelector('#signin'))")) throw new Error('sign-up shows competing sign-in form');
+      await open(origin + '/login', "document.querySelector('#signin')");
+      await fill('#si-email', 'nobody@example.com'); await fill('#si-password', 'wrong password');
+      await click('#signin [type=submit]');
+      await waitFor("document.querySelector('#signin [data-form-status]').textContent.trim().length > 0", 'visible login failure');
+      await layoutCheck(product + ' product login error');
+      await open(origin + `/signup?next=/${product}`, "document.querySelector('#signup')");
       await fill('#su-name', 'Product Host'); await fill('#su-email', product + '-host@example.com'); await fill('#su-password', 'a long test password'); await fill('#su-workspace', product + ' Workspace');
       await click('#signup [type=submit]');
       await waitFor(`location.pathname === '/${product}' && document.body.classList.contains('app-shell')`, 'product dashboard');
@@ -1088,6 +1105,14 @@ try {
       await open(origin + '/account', "document.querySelector('#sign-out')");
       if (!(await evaluate(`document.body.dataset.product === '${product}' && !document.querySelector('nav[aria-label="Your Schedora apps"]')`))) throw new Error('account context lost');
       await layoutCheck(product + ' product account');
+      await click('#sign-out');
+      await waitFor("!document.body.classList.contains('app-shell')", 'signed out product');
+      await open(origin + '/login', "document.querySelector('#signin')");
+      await fill('#si-email', product + '-host@example.com'); await fill('#si-password', 'a long test password');
+      await click('#signin [type=submit]');
+      await waitFor(`location.pathname === '/${product}' && document.body.classList.contains('app-shell')`, 'password login returns to product');
+      await open(origin + '/signup?next=/login', "document.querySelector('.side-nav')");
+      await waitFor(`location.pathname === '/${product}'`, 'signed-in auth route does not loop');
       await open(origin + '/start', "document.querySelector('#demo-welcome')");
       if ((await evaluate("document.querySelectorAll('.ds-signup-benefit').length")) !== 1) throw new Error('onboarding promotes other products');
       await click('#demo-welcome button[type=submit], #demo-welcome button.btn-primary');

@@ -43,7 +43,7 @@ const routes = [
   [/^\/flow$/, flow.dashboard],
   [/^\/flow\/(runs|tasks)$/, flow.dashboard],
   [new RegExp(`^/flow/(new|${UUID.slice(1, -1)})$`), flow.editor],
-  [/^\/account$/, account.account],
+  [/^\/(account|login|signup)$/, account.account],
   [/^\/billing$/, account.billing],
   [/^\/pricing\/proposal$/, pricingProposal],
   [/^\/enquiries$/, enquiries],
@@ -69,10 +69,10 @@ let currentPath = location.pathname;
 
 function renderHeader(product) {
   const individual = product !== 'suite';
-  const authPage = currentPath === '/account';
+  const authPage = /^\/(account|login|signup)$/.test(currentPath);
   const home = individual ? boot.landings[product] : boot.links.suite;
   const next = PRODUCT_INFO[product].dashboard;
-  const auth = mode => `/account?${mode ? 'mode=signup&' : ''}product=${product}&next=${encodeURIComponent(next)}`;
+  const auth = mode => `${mode ? '/signup' : '/login'}?product=${product}${mode ? '' : '&next=' + encodeURIComponent(next)}`;
   mount($('#site-header'), html`<div class="container header-inner"><a class="lockup" href="${home}">${lockup(product)}</a>
     ${authPage ? '' : html`<nav class="site-nav" aria-label="${individual ? PRODUCT_INFO[product].name : 'Suite'} information">${individual ? html`<a href="${home}#features">Features</a><a href="${home}#how-it-works">How it works</a><a href="/demo/${product}">Try the demo</a>` : html`<a href="/#ecosystem">Products</a><a href="/#why-schedora">Why Schedora</a>`}<a href="/billing${individual ? '?product=' + product : ''}">Plans</a></nav>`}
     <div class="header-tools">${authPage ? html`<a href="${home}">Back to ${PRODUCT_INFO[product].name}</a>` : session.user ? html`<a class="btn btn-small" href="${individual ? boot.links[product] : '/enquiries'}">Go to workspace</a>` : html`<a class="btn btn-small" href="${auth(false)}">Sign in</a><a class="btn btn-small btn-primary" href="${auth(true)}">Get started</a>`}</div></div>`);
@@ -105,7 +105,7 @@ function consentBanner(focus) {
   panel.querySelectorAll('[data-choice]').forEach(button => button.onclick = () => {
     storage.set(CONSENT_KEY, JSON.stringify({ choice: button.dataset.choice, time: Date.now() }));
     panel.remove();
-    if (focus) $('#cookie-settings')?.focus(); else $('#main')?.focus({ preventScroll: true });
+    if (focus) ($('#auth-cookie-settings') || $('#cookie-settings'))?.focus(); else $('#main')?.focus({ preventScroll: true });
     countPage();
   });
   document.body.append(panel);
@@ -119,7 +119,7 @@ function countPage() {
 // ---- Router ----
 let renderToken = 0;
 export function navigate(path, { replace = false } = {}) {
-  if (!hostInfo(location.hostname, boot.productDomain).product && boot.context && boot.context !== 'suite' && /^\/(account|start|setup|demo)(?:[/?#]|$)/.test(path) && !/^\/(?:demo|setup)\/(meet|forms|flow)/.test(path)) {
+  if (!hostInfo(location.hostname, boot.productDomain).product && boot.context && boot.context !== 'suite' && /^\/(account|login|signup|start|setup|demo)(?:[/?#]|$)/.test(path) && !/^\/(?:demo|setup)\/(meet|forms|flow)/.test(path)) {
     const target = new URL(path, location.origin); if (!target.searchParams.has('product')) target.searchParams.set('product', boot.context); path = target.pathname + target.search + target.hash;
   }
   if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path);
@@ -138,9 +138,10 @@ export async function render() {
   let product = contextFor(location.hostname, currentPath, boot.productDomain);
   const entry = query.get('product');
   if (product === 'suite' && ['meet', 'forms', 'flow'].includes(entry)) product = entry;
-  if (product === 'suite' && currentPath === '/account') product = productFor(safeReturnPath(query.get('next'), '/'));
+  if (product === 'suite' && /^\/(account|login|signup)$/.test(currentPath)) product = productFor(safeReturnPath(query.get('next'), '/'));
   boot.context = product;
   if (currentPath === '/' && product !== 'suite' && session.user) return navigate(PRODUCT_INFO[product].dashboard, { replace: true });
+  document.body.classList.toggle('auth-page', !session.user && /^\/(account|login|signup)$/.test(currentPath));
   clearShell();
   const shell = Boolean(session.user && isAppRoute(currentPath));
   document.body.classList.toggle('app-shell', shell);

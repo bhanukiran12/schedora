@@ -126,7 +126,7 @@
       ]
     },
     {
-      "source": "/(account|billing|demo|start)",
+      "source": "/(account|login|signup|billing|demo|start)",
       "headers": [
         {
           "key": "X-Robots-Tag",

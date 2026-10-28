@@ -100,3 +100,14 @@ Main was b46e943 at fetch. This branch also contains Claude's previously committ
 3. **Independent accessibility checks:**
    - Verified automatically in `backend/scripts/browser-check.mjs`: mobile drawer focus trap (`Tab` and `Shift+Tab` wrap inside `#app-sidebar`, background is `inert`, `Escape` closes and restores focus to `#side-open`), explicit form control labels, `role="alert"` error announcements on invalid submit, WCAG AA contrast ratios (>= 4.5:1), and 200% zoom / text-spacing reflow at `640px` and `320px` with zero horizontal overflow across 696 layout checks (`320/375/768/1280` px).
    - **Still requires human / assistive-technology testing:** real screen-reader traversal and live-region announcement timing with NVDA (Windows), VoiceOver (macOS/iOS) and TalkBack (Android), hardware switch/voice control, and moderated human usability sessions.
+
+
+## Real authentication design — 2026-10-28
+
+Real `/login` and `/signup` pages now reuse the selected `/start` split-screen composition: dark green brand/benefits panel, white authentication panel, existing Inter font and source brand assets. Meet, Forms and Flow each show only their own identity and benefit; Suite shows all three. Mobile uses a compact brand introduction above the form. Real auth never uses demo sample fields or the demo storage handler.
+
+Each product subdomain supports `/login` and `/signup`; the apex hosts the Suite versions. `/account` and its existing query links remain compatible, and signed-in account settings are unchanged. New account entry defaults to `/setup/<product>` or Suite `/setup`; explicit safe next paths are preserved. Password sign-in defaults to the current product dashboard or Suite Enquiries. Already-signed-in visitors to auth routes return to work, with self-referencing auth destinations rejected to prevent navigation loops. Context changes presentation, not entitlements.
+
+Google and password authentication keep their existing backend contracts; Google signup points to setup. The Google button only appears when configured. SSO remains a disclosure, with real work-email lookup. The consent dialog restores focus to the visible auth settings control. Direct local server routes and Vercel noindex rules cover the new URLs; live setup routes also return HTTP 200 locally.
+
+Evidence: 209 unit tests (205 pass; 4 opt-in PostgreSQL tests skipped), syntax check across 144 files, responsive browser journeys and screenshot review. Google layout/return links checked using dummy configuration on a disposable in-memory local server; no real Google login or production account was created during verification. See root design-qa.md for visual comparison and the final handoff for final browser/CI results.

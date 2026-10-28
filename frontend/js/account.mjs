@@ -3,6 +3,7 @@ import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
 import { PRODUCT_INFO } from './products.mjs';
 import { safeReturnPath, hostInfo } from './context.mjs';
+import { brand, mark, productNames } from './design-system.mjs';
 import { creditsSection } from './meet-video.mjs';
 
 const safeNext = value => typeof value === 'string' && /^\/(?!\/)[^\s]*$/.test(value) ? value : '/meet';
@@ -11,6 +12,11 @@ const PRODUCT_NAMES = { meet: 'Meet', forms: 'Forms', flow: 'Flow' };
 export async function account(ctx) {
   setTitle('Account · Schedora');
   if (!session.user) return signedOut(ctx);
+  if (ctx.path === '/login' || ctx.path === '/signup') {
+    const fallback = ctx.product === 'suite' ? '/enquiries' : PRODUCT_INFO[ctx.product].dashboard;
+    const target = safeReturnPath(ctx.query.get('next'), fallback);
+    return ctx.navigate(/^\/(login|signup)(?:[?#]|$)/.test(target) ? fallback : target, { replace: true });
+  }
   const ws = workspace();
   const owner = ws?.role === 'owner';
   const admin = ['owner', 'admin'].includes(ws?.role);
@@ -108,15 +114,15 @@ export async function account(ctx) {
 }
 
 function signedOut(ctx) {
-  const signup = ctx.query.get('mode') === 'signup';
+  const signup = ctx.path === '/signup' || (ctx.path === '/account' && ctx.query.get('mode') === 'signup');
   const product = ctx.product || 'suite';
-  const next = safeReturnPath(ctx.query.get('next'), PRODUCT_INFO[product].dashboard === '/' ? '/enquiries' : PRODUCT_INFO[product].dashboard);
+  const next = safeReturnPath(ctx.query.get('next'), signup ? (product === 'suite' ? '/setup' : '/setup/' + product) : (PRODUCT_INFO[product].dashboard === '/' ? '/enquiries' : PRODUCT_INFO[product].dashboard));
   const googleNext = hostInfo(location.hostname, boot.productDomain).production ? new URL(next, location.origin).href : next;
-  const signInCard = html`<section class="card card-plain"><h2>Sign in</h2><form id="signin" novalidate>
+  const signInCard = html`<section class="auth-fields" aria-label="Sign in with email"><form id="signin" novalidate>
       <label for="si-email">Email</label><input id="si-email" name="email" type="email" required autocomplete="email">
       <label for="si-password">Password</label><input id="si-password" name="password" type="password" required autocomplete="current-password">
       <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Sign in</button></div></form></section>`;
-  const signUpCard = html`<section class="card card-plain"><h2>Create an account</h2><form id="signup" novalidate>
+  const signUpCard = html`<section class="auth-fields" aria-label="Create an account with email"><form id="signup" novalidate>
       <label for="su-name">Your name</label><input id="su-name" name="name" required maxlength="100" autocomplete="name">
       <label for="su-email">Email</label><input id="su-email" name="email" type="email" required autocomplete="email">
       <label for="su-password">Password</label><span class="hint" id="pw-hint">At least 10 characters.</span><input id="su-password" name="password" type="password" required minlength="10" autocomplete="new-password" aria-describedby="pw-hint">
@@ -124,12 +130,25 @@ function signedOut(ctx) {
       <p class="hint">By creating an account you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>
       <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Create account</button></div></form></section>`;
   const error = ctx.query.get('error');
-  mount(ctx.main, html`<div class="container page"><span class="tag">${PRODUCT_INFO[product].name}${product === 'suite' ? '' : ' by Schedora'}</span><h1>${signup ? 'Get started with' : 'Sign in to'} ${PRODUCT_INFO[product].name}</h1><p class="lead">${PRODUCT_INFO[product].job}</p>
-    ${error ? notice('bad', html`<p>${error}</p>`) : ''}
-    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(googleNext)}" data-external><img src="/assets/figma/GoogleSignIn.png" alt="" width="20" height="20">Continue with Google</a><p>Use Google to sign in. Calendar access is requested separately.</p><p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p></section>` : ''}
-    <div class="auth-cards">${signup ? signUpCard : signInCard}<details class="auth-alternative"><summary>${signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</summary>${signup ? signInCard : signUpCard}</details></div>
-    <details class="card card-plain section-gap"><summary>Organization single sign-on</summary><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
-      <p class="hint">For organizations that have set up single sign-on.</p></details></div>`);
+  setTitle(`${signup ? 'Create account' : 'Sign in'} · ${PRODUCT_INFO[product].name}`);
+  const switchQuery = new URLSearchParams();
+  if (product !== 'suite') switchQuery.set('product', product);
+  // Carry an explicit destination only. Otherwise sign-up starts setup, sign-in opens work.
+  if (ctx.query.has('next')) switchQuery.set('next', next);
+  const alternate = (signup ? '/login' : '/signup') + (switchQuery.size ? '?' + switchQuery : '');
+  const headlines = { suite: "Your workspace, ready for what's next.", meet: 'Make time for the right conversations.', forms: 'Collect the context that matters.', flow: 'Keep the next step moving.' };
+  const benefits = [['meet', 'Share your availability. Let people choose a time.'], ['forms', 'Collect enquiries and review responses in one place.'], ['flow', 'Track follow-up emails and tasks from start to finish.']];
+  mount(ctx.main, html`<div class="ds-signup auth-layout"><aside><a href="${product === 'suite' ? '/' : boot.landings[product]}">${brand(product)}</a><p class="ds-eyebrow">${product === 'suite' ? 'A LITTLE LESS BUSYWORK' : productNames[product].toUpperCase() + ' BY SCHEDORA'}</p><h1>${headlines[product]}</h1><p>${PRODUCT_INFO[product].job}</p><div>${benefits.filter(([key]) => product === 'suite' || key === product).map(([key, text]) => html`<div class="ds-signup-benefit">${mark(key)}<div><strong>${productNames[key]}</strong><small>${text}</small></div></div>`)}</div><small>${product === 'suite' ? 'MEET · FORMS · FLOW' : productNames[product].toUpperCase() + ' BY SCHEDORA'}</small></aside>
+    <section><p class="ds-signin-link">${signup ? 'Already have an account?' : 'New here?'} <a href="${alternate}">${signup ? 'Sign in' : 'Create an account'} →</a></p>
+      <div class="auth-content"><p class="ds-eyebrow">WELCOME ${signup ? 'TO' : 'BACK TO'} ${productNames[product].toUpperCase()}</p><h2>${signup ? 'Create your account.' : 'Welcome back.'}</h2><p>${signup ? (product === 'suite' ? 'Set up Meet, Forms and Flow in one workspace.' : 'Get started with ' + productNames[product] + '.') : 'Sign in to ' + productNames[product] + ' to continue.'}</p>
+      ${error ? notice('bad', html`<p>${error}</p>`) : ''}
+      ${boot.googleSignIn ? html`<div class="auth-google"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(googleNext)}" data-external><img src="/assets/figma/GoogleSignIn.png" alt="" width="20" height="20">Continue with Google</a><p class="hint">Calendar access is requested separately.</p></div><p class="auth-divider">or continue with email</p>` : ''}
+      ${signup ? signUpCard : signInCard}
+      ${!signup ? html`<p class="hint auth-terms">By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>` : ''}
+      <details class="auth-sso"><summary>Organization single sign-on</summary><form id="sso" novalidate><label for="sso-email">Work email</label><input id="sso-email" name="email" type="email" required autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form><p class="hint">For organizations that have set up single sign-on.</p></details>
+      <nav class="auth-legal" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><button class="btn-link" type="button" id="auth-cookie-settings">Cookie settings</button></nav>
+    </div></section></div>`);
+  $('#auth-cookie-settings').onclick = () => $('#cookie-settings')?.click();
   $('#sso').onsubmit = async event => {
     event.preventDefault();
     const email = $('#sso-email').value.trim();
@@ -138,14 +157,14 @@ function signedOut(ctx) {
     else toast('Single sign-on is not set up for that email domain. Sign in with your password.');
   };
   const done = data => { applyMe(data); ctx.navigate(next, { replace: true }); };
-  handleSubmit($('#signin'), async data => {
+  if ($('#signin')) handleSubmit($('#signin'), async data => {
     try { done(await api('POST', '/api/auth/login', data)); }
     catch (failure) {
       if (failure.code === 'sso_required') { location.href = '/api/auth/sso/start?email=' + encodeURIComponent(data.email); return; }
       throw failure;
     }
   });
-  handleSubmit($('#signup'), async data => done(await api('POST', '/api/auth/signup', data)));
+  if ($('#signup')) handleSubmit($('#signup'), async data => done(await api('POST', '/api/auth/signup', data)));
 }
 
 export async function billing(ctx) {

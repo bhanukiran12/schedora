@@ -17,7 +17,7 @@ import { restore } from '../scripts/restore.mjs';
 test('pages, assets, headers and legacy routes', async () => {
   const env = await setup();
   try {
-    for (const path of ['/', '/meet', '/forms', '/flow', '/account', '/billing', '/privacy', '/terms', '/robots.txt', '/sitemap.xml', '/app.js', '/app.css', '/product-shell.css', '/js/meet.mjs', '/shared/forms-logic.mjs', '/favicon.svg', '/logo-meet.png']) {
+    for (const path of ['/', '/meet', '/forms', '/flow', '/account', '/login', '/signup', '/setup', '/setup/meet', '/setup/forms', '/setup/flow', '/billing', '/privacy', '/terms', '/robots.txt', '/sitemap.xml', '/app.js', '/app.css', '/product-shell.css', '/js/meet.mjs', '/shared/forms-logic.mjs', '/favicon.svg', '/logo-meet.png']) {
       assert.equal((await fetch(env.base + path)).status, 200, path);
     }
     for (const [path, type] of [['/assets/figma/BookMark.png', 'image/png'], ['/assets/figma/Check.svg', 'image/svg+xml'], ['/assets/figma/InterVariable.woff2', 'font/woff2'], ['/images/forms-workspace.webp', 'image/webp']]) {

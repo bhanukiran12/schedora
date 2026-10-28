@@ -46,3 +46,38 @@ body:not(.app-shell) .header-tools { flex-wrap:wrap; }
  .header-inner .site-nav { order:3; width:100%; flex-wrap:wrap; }
 }
 @media(prefers-reduced-motion:reduce) { #app-sidebar { transition:none; } }
+/* Real authentication uses the selected /start composition with actual account controls. */
+body.auth-page { font-family: 'Inter', system-ui, sans-serif; background:#fff; --ink:#202d27; --muted:#627168; --line:#e2e8e3; --line-strong:#7c8e81; --surface:#fff; }
+body.auth-page > #site-header, body.auth-page > #site-footer { display:none; }
+.auth-layout { font-size:14px; }
+.auth-layout h1 { margin:0; }
+.auth-layout .ds-brand { color:#fff; }
+.auth-layout .ds-signup-benefit small { line-height:1.6; }
+.auth-layout .auth-content { max-width:432px; margin:64px auto 0; }
+.auth-layout .auth-content > h2 { font-size:34px; line-height:1.2; margin:16px 0; font-weight:600; }
+.auth-layout .auth-content > p { margin-block:16px; }
+.auth-layout .auth-fields { border:0; padding:0; background:transparent; }
+.auth-layout form { max-width:none; margin:0; }
+.auth-layout .auth-fields label { display:block; margin-top:18px; }
+.auth-layout input { min-height:44px; width:100%; }
+.auth-layout .actions { margin-top:20px; }
+.auth-layout .actions .btn, .auth-layout .google-signin-button { width:100%; justify-content:center; }
+.auth-layout .auth-google { margin-top:24px; }
+.auth-layout .auth-google .hint { font-size:12px; margin:8px 0; }
+.auth-layout .auth-divider { text-align:center; font-size:12px; color:var(--muted); border-block-start:1px solid var(--line); padding-top:16px; }
+.auth-layout .hint { font-size:12px; line-height:1.6; }
+.auth-layout .auth-sso { border-top:1px solid var(--line); margin-top:24px; padding-top:16px; }
+.auth-layout summary { font-size:13px; cursor:pointer; }
+.auth-layout .auth-sso button { margin-top:12px; }
+.auth-layout .auth-legal { display:flex; flex-wrap:wrap; gap:16px; margin-top:28px; font-size:12px; }
+.auth-layout a:focus-visible, .auth-layout summary:focus-visible, .auth-layout button:focus-visible { outline:3px solid #538cbd; outline-offset:4px; }
+.auth-layout .ds-signin-link { font-size:12px; }
+@media(max-width:760px) {
+ .auth-layout > aside { padding:24px; gap:12px; }
+ .auth-layout > aside > .ds-eyebrow, .auth-layout > aside > p:not(.ds-eyebrow) { display:none; }
+ .auth-layout > aside > h1 { font-size:28px; line-height:1.2; }
+ .auth-layout > section { padding:24px; }
+ .auth-layout .auth-content { margin:28px auto 0; }
+ .auth-layout .auth-content > h2 { font-size:28px; }
+ .auth-layout .ds-signin-link { text-align:left; margin:0; }
+}

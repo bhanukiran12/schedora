@@ -9,7 +9,7 @@ const loc = (hostname, port = '') => ({ hostname, protocol: hostname.endsWith('l
 
 test('the host fixes the product for workspace, account and demo pages', () => {
   for (const [host, product] of [['meet.schedora.in', 'meet'], ['book.schedora.in', 'meet'], ['forms.schedora.in', 'forms'], ['flow.schedora.in', 'flow'], ['meet.localhost', 'meet']]) {
-    for (const path of ['/', '/account', '/billing', '/enquiries', '/start', '/start/products', '/demo', '/privacy']) assert.equal(contextFor(host, path, D), product, `${host}${path}`);
+    for (const path of ['/', '/account', '/login', '/signup', '/billing', '/enquiries', '/start', '/start/products', '/demo', '/privacy']) assert.equal(contextFor(host, path, D), product, `${host}${path}`);
   }
   assert.equal(contextFor('schedora.in', '/account', D), 'suite', 'the apex domain is Suite');
   assert.equal(contextFor('localhost', '/account', D), 'suite');
