@@ -13,7 +13,7 @@ Implemented code, automated tests, deployment health, real-provider results and 
 | Independent product identity, login/signup, appropriate setup; Suite retains all three | context.mjs, account.mjs, shell.mjs, onboarding.mjs; final browser host journeys, 736 layout checks; eight live auth URLs return 200/noindex | Automated and deployed | Real Google sign-in across subdomains, user task comprehension |
 | Saved/published Forms, conditional required fields, safe retry/quota enforcement | forms-reliability.test.mjs, forms-publish-check.test.mjs; real PostgreSQL CI; browser draft/publish/submit/conflict journeys | Automated and deployed | Own-workspace human end-to-end result; production data audit remains separate |
 | Meet event creation, booking, timezone, cancellation/reschedule and readiness | Meet tests and browser journeys; saved-state readiness uses server slot checks | Automated and deployed | Real provider link creation, other-host readiness, last-successful-calendar-sync evidence |
-| Response → booking offer → booking → follow-up is understandable and traceable | enquiries.mjs keyset feed; enquiry-trail/Flow tests and browser journeys | Automated and deployed within recorded scope | Human task success; per-form capped history, server state/counts, enquiry ownership/resolve and reconciliation |
+| Response → booking offer → booking → follow-up is understandable and traceable | enquiries.mjs keyset feed; enquiry-trail/Flow tests and browser journeys | Automated and deployed within recorded scope | Human task success; server state/counts, enquiry ownership/resolve and reconciliation |
 | Flow task deadlines/assignees and email transport evidence are truthful | flow/service.mjs; flow.test.mjs; task/email browser journeys | Automated and deployed | Actual provider-accepted/delivered/bounced message to own test addresses; production remains outbox |
 | Accessible navigation, control labels, errors and responsive layouts | Browser keyboard/drawer/focus, contrast and zoom/reflow checks; reviewed screenshots | Automated/visual evidence | Real screen-reader check and consenting human task study; do not claim a complete WCAG audit |
 | Real email operations | Production config previously read as outbox; code separates outbox/acceptance/delivery | Open operational gate | Configure selected real provider privately, signed delivery webhook, own-inbox receipt and controlled failure evidence |
@@ -26,7 +26,7 @@ Implemented code, automated tests, deployment health, real-provider results and 
 ## Next work, ordered by evidence need
 
 1. Close operator monitoring and real-email configuration gaps using the existing implementations, chosen provider and private configuration. Do not simulate delivery or flip confirmation flags. No paid plan or live-customer messages are authorized by this document.
-2. Independently improve backend evidence for Meet readiness (separate successful calendar-sync timestamp and team-host scope), and per-form history coverage. Agree API/data semantics before expanding UI claims.
+2. Independently improve backend evidence for Meet readiness (separate successful calendar-sync timestamp and team-host scope). Per-form complete history and tied-arrival paging now have passing local and PostgreSQL/Linux CI evidence in a6d0fc8; see the release checkpoint for deployment status. Agree API/data semantics before expanding UI claims.
 3. Run the owner's existing manual validation checklist against the released login/setup/Forms/Meet/Flow journeys. Record environment, dates and actual outcomes; unrun steps remain open.
 4. Conduct the scoped consenting-operator research in UX_RESEARCH_PLAN.md before prioritising major feature expansion or approving prices. Research scripts are ready; no interviews or conversions are fabricated.
 5. Enable production video only after its operational, smoke and budget gates are genuinely met. AWS migration remains separate and blocked by account readiness.
@@ -40,3 +40,8 @@ Implemented code, automated tests, deployment health, real-provider results and 
 - External evidence log: C:/Users/Nxtwave/Documents/ChatGPT/schedora/reports/Schedora-recurring-progress.md.
 
 No new feature, provider test, customer finding or production configuration is asserted by this documentation reconciliation.
+
+
+## Forms history increment — 28 October 2026
+
+Commit a6d0fc8 fixes per-form history coverage and tied-arrival paging. Branch CI 40683016103 succeeded for its exact SHA, including PostgreSQL and Linux browser. Local tests: 211 total, 207 pass, four PostgreSQL skips locally; browser: 744 layout checks. Follow-ups are selected by loaded response/authorized linked-booking ids, not the latest 200 workspace records. Paging stays usable under an empty attention filter and announces its result. No schema migration or provider change. This closes the per-form cap engineering gap; large-history latency and human validation remain open. The release checkpoint records whether this increment has reached production; the earlier 328ed25 matrix evidence remains historical.
