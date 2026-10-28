@@ -31,7 +31,7 @@ async function workspaceWithForm(env, definition = intake) {
 }
 
 const count = (env, sql, ...params) => env.app.db.get(sql, ...params).count;
-const usage = env => env.app.db.get("SELECT COALESCE(SUM(count), 0) AS count FROM usage_counters WHERE metric = 'responses'").count;
+const usage = env => env.app.db.get("SELECT CAST(COALESCE(SUM(count), 0) AS BIGINT) AS count FROM usage_counters WHERE metric = 'responses'").count;
 const eventType = async (http, ws, body = {}) => (await http.post(`/api/workspaces/${ws.id}/event-types`, { title: 'Consultation', timezone: 'UTC', published: true, min_notice_min: 0, duration_min: 60, ...body })).body;
 
 test('draft edits and conflicting saves never change the live form or overwrite silently', async () => {
