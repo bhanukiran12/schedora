@@ -20,8 +20,8 @@ async function fixture() {
     }
     throw new Error('Unexpected external request');
   };
-  async function start({ session = '', link = false, csrf = '' } = {}) {
-    const response = await fetch(env.base + (link ? '/api/auth/google/link' : '/api/auth/google/start?next=/forms'), { method: link ? 'POST' : 'GET', redirect: 'manual', headers: { ...(session ? { Cookie: session } : {}), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) } });
+  async function start({ session = '', link = false, csrf = '', next = '/forms' } = {}) {
+    const response = await fetch(env.base + (link ? '/api/auth/google/link' : '/api/auth/google/start?next=' + encodeURIComponent(next)), { method: link ? 'POST' : 'GET', redirect: 'manual', headers: { ...(session ? { Cookie: session } : {}), ...(csrf ? { 'X-CSRF-Token': csrf } : {}) } });
     const cookie = response.headers.getSetCookie().find(value => value.startsWith('schedora_google_login='))?.split(';')[0];
     assert.ok(cookie, await response.clone().text());
     flow = decryptJson(env.app.config, decodeURIComponent(cookie.split('=').slice(1).join('=')));
@@ -122,4 +122,24 @@ test('Google-only accounts can delete through fresh identity verification; other
     assert.equal(env.app.db.get('SELECT COUNT(*) AS n FROM users').n, 0);
     assert.equal(env.app.db.get('SELECT COUNT(*) AS n FROM auth_identities').n, 0);
   } finally { await env.close(); }
+});
+
+test('Google sign-in returns to the product host it started from, and only to product hosts', async () => {
+  const env = await fixture();
+  try {
+    const meet = 'https://meet.schedora.in/meet?tab=meetings';
+    const started = await env.start({ next: meet });
+    assert.equal(started.flow.next, meet);
+    assert.equal((await env.finish(started)).headers.get('location'), meet, 'a successful sign-in lands on the Meet host');
+    const denied = await env.start({ next: 'https://forms.schedora.in/forms' });
+    assert.match((await env.finish(denied, '&error=access_denied')).headers.get('location'), /^https:\/\/forms\.schedora\.in\/account\?error=/, 'errors stay on the Forms host');
+  } finally { await env.close(); }
+});
+
+test('safeGoogleNext allows only https product hosts with app paths', () => {
+  for (const value of ['https://meet.schedora.in/meet', 'https://schedora.in/account', 'https://flow.schedora.in/flow/runs?x=1#y', 'https://forms.schedora.in/enquiries']) assert.equal(safeGoogleNext(value), value);
+  for (const value of ['http://meet.schedora.in/meet', 'https://meet.schedora.in.evil.example/meet', 'https://evil.example/meet', 'https://user@meet.schedora.in/meet',
+    'https://meet.schedora.in:8443/meet', 'https://book.schedora.in/meet', 'https://meet.schedora.in/api/auth/google/start', 'https://meet.schedora.in//evil.example', 'javascript:alert(1)']) assert.equal(safeGoogleNext(value), '/meet', value);
+  assert.equal(safeGoogleNext('https://meet.example.test/meet', 'example.test'), 'https://meet.example.test/meet', 'the allowlist follows the configured product domain');
+  assert.equal(safeGoogleNext('https://meet.schedora.in/meet', 'example.test'), '/meet');
 });

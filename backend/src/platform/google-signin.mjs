@@ -14,11 +14,25 @@ export const googleLoginEnabled = app => Boolean(googleLoginSettings(app)?.clien
 export const googleLoginRedirect = app => `${app.config.baseUrl}/api/auth/google/callback`;
 const cookieScope = app => `${app.config.production ? '; Secure' : ''}${app.config.cookieDomain ? '; Domain=' + app.config.cookieDomain : ''}`;
 export const clearGoogleLoginCookie = app => `${FLOW_COOKIE}=; Path=/api/auth/google; HttpOnly; SameSite=Lax; Max-Age=0${cookieScope(app)}`;
-export const safeGoogleNext = next => typeof next === 'string' && next.length < 500 && !/[\\\s]/.test(next) && /^\/(meet|forms|flow|account|billing)(?:[/?#]|$)/.test(next) ? next : '/meet';
+const NEXT_PATH = /^\/(meet|forms|flow|account|billing|enquiries)(?:[/?#]|$)/;
+// Where to return after Google: a same-host app path, or an absolute https address on the product
+// domain or its meet./forms./flow. hosts (so sign-in keeps the product the person started from).
+export function safeGoogleNext(next, productDomain = 'schedora.in') {
+  if (typeof next !== 'string' || next.length >= 500 || /[\\\s]/.test(next)) return '/meet';
+  if (NEXT_PATH.test(next)) return next;
+  let url;
+  try { url = new URL(next); } catch { return '/meet'; }
+  const hosts = [productDomain, ...['meet', 'forms', 'flow'].map(key => `${key}.${productDomain}`)];
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || !hosts.includes(url.hostname)) return '/meet';
+  const path = url.pathname + url.search + url.hash;
+  return NEXT_PATH.test(path) ? url.origin + path : '/meet';
+}
+// The product host a validated next address belongs to ('' for a same-host path).
+export const nextOrigin = next => /^https:\/\//.test(next || '') ? new URL(next).origin : '';
 
 export function startGoogleLogin(app, { next, userId = null, action = 'login' } = {}) {
   if (!googleLoginEnabled(app)) fail(503, 'google_not_configured', 'Google sign-in is not configured on this server yet.');
-  const flow = { state: newToken(), nonce: newToken(), verifier: newToken(), next: safeGoogleNext(next), userId, action, exp: app.now() + 600000 };
+  const flow = { state: newToken(), nonce: newToken(), verifier: newToken(), next: safeGoogleNext(next, app.config.productDomain), userId, action, exp: app.now() + 600000 };
   app.db.run('DELETE FROM auth_login_flows WHERE expires_at < ?', app.now());
   app.db.run('INSERT INTO auth_login_flows (state_hash, expires_at) VALUES (?, ?)', sha256(flow.state), flow.exp);
   const cookie = `${FLOW_COOKIE}=${encodeURIComponent(encryptJson(app.config, flow))}; Path=/api/auth/google; HttpOnly; SameSite=Lax; Max-Age=600${cookieScope(app)}`;
@@ -53,6 +67,12 @@ export async function finishGoogleLogin(app, request, query, currentSession) {
   let flow;
   try { flow = decryptJson(app.config, parseCookies(request.headers.cookie)[FLOW_COOKIE]); }
   catch { fail(400, 'invalid_state', 'Google sign-in expired. Please start again.'); }
+  // Errors return to the product host the sign-in started from.
+  try { return await completeGoogleLogin(app, flow, query, currentSession); }
+  catch (error) { error.returnOrigin = nextOrigin(flow?.next); throw error; }
+}
+
+async function completeGoogleLogin(app, flow, query, currentSession) {
   if (!flow || flow.exp <= app.now() || flow.state !== query.get('state')) fail(400, 'invalid_state', 'Google sign-in expired. Please start again.');
   // Consuming the stored state makes even a copied cookie/callback one-time across restarts.
   if (!app.db.run('DELETE FROM auth_login_flows WHERE state_hash = ? AND expires_at >= ?', sha256(flow.state), app.now()).changes) fail(400, 'invalid_state', 'This Google sign-in has already been used. Start again.');
@@ -72,7 +92,7 @@ export async function finishGoogleLogin(app, request, query, currentSession) {
   if (flow.action === 'delete') {
     if (!flow.userId || !identity || identity.user_id !== flow.userId) fail(403, 'account_changed', 'Choose the Google account already linked to your Schedora account.');
     deleteAccountRecords(app, { id: flow.userId });
-    return { cookie: clearSessionCookie(app.config), next: '/account?deleted=1' };
+    return { cookie: clearSessionCookie(app.config), next: nextOrigin(flow.next) + '/account?deleted=1' };
   }
   let userId;
   if (flow.userId) {
@@ -99,5 +119,5 @@ export async function finishGoogleLogin(app, request, query, currentSession) {
   }
   if (currentSession) signOut(app, currentSession);
   const session = createSession(app, userId);
-  return { cookie: session.cookie, next: flow.userId ? '/account?google=connected' : flow.next };
+  return { cookie: session.cookie, next: flow.userId ? nextOrigin(flow.next) + '/account?google=connected' : flow.next };
 }

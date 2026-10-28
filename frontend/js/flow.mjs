@@ -26,7 +26,7 @@ export async function dashboard(ctx) {
   mount(ctx.main, html`<div class="container page">
     <div class="row-between"><div><span class="tag">Flow · ${workspace().name}</span><h1>Automations</h1></div><div class="row"><a class="btn" href="/enquiries?show=attention">Enquiries needing attention</a>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New flow</a>` : ''}</div></div>
     ${workspace().entitlements.flow.active ? '' : notice('warn', html`<p>This workspace has no active Flow or Suite plan, so flows cannot run. <a href="/billing">Review plans</a>.</p>`)}
-    <nav class="tabs" aria-label="Flow sections">${[['flows', 'Flows', '/flow'], ['runs', 'Run history', '/flow/runs'], ['tasks', 'Tasks', '/flow/tasks']].map(([key, label, href]) => html`<a href="${href}" ${key === tab ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
+
     <section id="panel">${loading()}</section></div>`);
   const panel = $('#panel');
   try {

@@ -19,7 +19,7 @@ import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } fro
 import { handleMcp } from './platform/mcp.mjs';
 import { chat, createRecap, createTranscript, deleteTranscript, getTranscript, handleInboundEmail, listTranscripts, meetingPrep, publicRecap, shareRecap, unshareRecap } from './ai/service.mjs';
 import { timingSafeEqual } from 'node:crypto';
-import { clearGoogleLoginCookie, finishGoogleLogin, googleLoginEnabled, googleLoginRedirect, startGoogleLogin } from './platform/google-signin.mjs';
+import { clearGoogleLoginCookie, finishGoogleLogin, googleLoginEnabled, googleLoginRedirect, safeGoogleNext, startGoogleLogin } from './platform/google-signin.mjs';
 import { audit, authenticateKey, createEndpoint, createKey, deleteEndpoint, listAudit, listEndpoints, listKeys, redeliver, revokeKey, updateEndpoint } from './platform/developer.mjs';
 
 export function createApi(app) {
@@ -52,14 +52,15 @@ export function createApi(app) {
   get('/api/auth/google/status', ctx => ({ enabled: googleLoginEnabled(app), connected: Boolean(ctx.user && app.db.get("SELECT 1 FROM auth_identities WHERE provider = 'google' AND user_id = ?", ctx.user.id)), redirect_uri: googleLoginRedirect(app) }), { public: true });
   get('/api/auth/google/start', ctx => {
     limit(ctx, 'google-login', 20);
-    if (ctx.user) return { redirect: '/account' };
+    if (ctx.user) return { redirect: safeGoogleNext(ctx.query.get('next'), app.config.productDomain) };
     const { url, cookie } = startGoogleLogin(app, { next: ctx.query.get('next') });
     ctx.setCookie(cookie);
     return { redirect: url };
   }, { public: true });
-  post('/api/auth/google/link', ctx => {
+  post('/api/auth/google/link', async ctx => {
     limit(ctx, 'google-login', 10);
-    const { url, cookie } = startGoogleLogin(app, { userId: ctx.user.id, next: '/account' });
+    const body = await ctx.json().catch(() => ({}));
+    const { url, cookie } = startGoogleLogin(app, { userId: ctx.user.id, next: typeof body?.next === 'string' ? body.next : '/account' });
     ctx.setCookie(cookie);
     return { url };
   });
@@ -81,7 +82,7 @@ export function createApi(app) {
       return { redirect: result.next };
     } catch (error) {
       const message = ['invalid_state', 'google_denied', 'google_failed', 'account_changed', 'email_mismatch', 'identity_taken', 'account_exists', 'sso_required'].includes(error.code) ? error.message : 'Google sign-in is temporarily unavailable. Please try again.';
-      return { redirect: '/account?error=' + encodeURIComponent(message) };
+      return { redirect: (error.returnOrigin || '') + '/account?error=' + encodeURIComponent(message) };
     }
   }, { public: true });
 

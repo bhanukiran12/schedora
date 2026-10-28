@@ -59,7 +59,7 @@ const sentence = text => text ? text[0].toUpperCase() + text.slice(1).replace(/_
 export async function dashboard(ctx) {
   setTitle('Meet by Schedora');
   if (!session.user) {
-    return mount(ctx.main, signInPrompt(ctx, { product: 'meet', title: 'A little less back-and-forth.', lead: 'Publish your availability once. Invitees choose a time in their own time zone, receive a confirmation, and can reschedule or cancel without emailing you. Team scheduling, polls, reminders, payments and AI recaps included.' }));
+    return mount(ctx.main, signInPrompt(ctx, { product: 'meet', title: 'A little less back-and-forth.', lead: 'Publish your availability once. Invitees choose a time in their own time zone, receive a confirmation, and can reschedule or cancel without emailing you. Calendar, payment and AI features depend on your workspace setup.' }));
   }
   if (!needsSession(ctx)) return;
   const tab = TABS.some(([key]) => key === ctx.query.get('tab')) ? ctx.query.get('tab') : ctx.query.get('tab') === 'calendar' ? 'integrations' : 'types';
@@ -75,14 +75,7 @@ export async function dashboard(ctx) {
     <header class="meet-head"><div><span class="tag">Meet · ${ws.name}</span><h1>${label}</h1><p class="meet-lead">${TAB_LEADS[tab]}</p></div>
       <div class="row meet-head-actions"><a class="btn" href="/meet/${ws.slug}" target="_blank" rel="noopener">Your booking page<span class="visually-hidden"> (opens in a new tab)</span></a><a class="btn ${primaryHere ? 'btn-primary' : ''}" href="/meet/event-types/new">New event type</a></div></header>
     ${ws.entitlements.meet.active ? '' : notice('warn', html`<p>This workspace has no active Meet or Suite plan, so booking pages are not accepting appointments. <a href="/billing">Review plans</a>.</p>`)}
-    <nav class="tabs meet-tabs" aria-label="Meet sections">${TABS.filter(([key]) => PRIMARY_TABS.includes(key)).map(item => link(item))}${secondary.map(item => link(item, 'tab-secondary'))}
-      <details class="tab-more"><summary ${inMore ? raw('aria-current="page"') : ''}>${inMore ? html`More: ${label}` : 'More'}<span class="visually-hidden"> sections</span></summary>
-        <ul>${secondary.map(item => html`<li>${link(item)}</li>`)}</ul></details></nav>
     <section id="tab-panel" aria-live="polite" aria-label="${label}">${loading()}</section></div>`);
-  const more = $('.tab-more');
-  // Close the menu on Escape (returning focus to its toggle) or on a click elsewhere.
-  more.addEventListener('keydown', event => { if (event.key === 'Escape' && more.open) { more.open = false; more.querySelector('summary').focus(); } });
-  document.addEventListener('click', function close(event) { if (!more.isConnected) return document.removeEventListener('click', close); if (!more.contains(event.target)) more.open = false; });
   const panel = $('#tab-panel');
   const views = { types: eventTypesTab, meetings: meetingsTab, video: videoTab, polls: team.pollsTab, contacts: team.contactsTab, workflows: team.workflowsTab, analytics: team.analyticsTab, integrations: team.integrationsTab, insights: team.insightsTab, emails: emailsTab };
   try { await views[tab](ctx, panel); }

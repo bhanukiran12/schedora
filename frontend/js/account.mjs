@@ -1,6 +1,8 @@
 import { $, $$, api, applyMe, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
+import { PRODUCT_INFO } from './products.mjs';
+import { safeReturnPath, hostInfo } from './context.mjs';
 import { creditsSection } from './meet-video.mjs';
 
 const safeNext = value => typeof value === 'string' && /^\/(?!\/)[^\s]*$/.test(value) ? value : '/meet';
@@ -14,9 +16,9 @@ export async function account(ctx) {
   const admin = ['owner', 'admin'].includes(ws?.role);
   const google = await api('GET', '/api/auth/google/status').catch(() => ({ enabled: false }));
   if (!ctx.alive()) return;
-  mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>Account</h1>
+  mount(ctx.main, html`<div class="container page"><span class="tag">${PRODUCT_INFO[ctx.product || 'suite'].name}</span><h1>Account & settings</h1>
     <p>You're signed in across Schedora apps. Signing out ends this session in every app.</p>
-    <nav class="actions" aria-label="Your Schedora apps"><a class="btn" href="${boot.links.meet}">Open Meet</a><a class="btn" href="${boot.links.forms}">Open Forms</a><a class="btn" href="${boot.links.flow}">Open Flow</a></nav>
+
     <div class="grid-2">
       <section class="card card-plain"><h2>Profile</h2><p><strong>${session.user.name}</strong><br>${session.user.email}</p><button class="btn" id="sign-out">Sign out</button>${google.enabled ? html`<hr><h3>Google sign-in</h3>${google.connected ? html`<p>Google is connected. You can use it to sign in.</p>` : html`<p>Connect Google with the same email to sign in next time. Calendar access is separate.</p><button class="btn" id="link-google">Connect Google sign-in</button>`}` : ''}${ctx.query.get('error') ? notice('bad', html`<p>${ctx.query.get('error')}</p>`) : ''}</section>
       <section class="card card-plain"><h2>Workspace</h2>
@@ -107,7 +109,9 @@ export async function account(ctx) {
 
 function signedOut(ctx) {
   const signup = ctx.query.get('mode') === 'signup';
-  const next = safeNext(ctx.query.get('next'));
+  const product = ctx.product || 'suite';
+  const next = safeReturnPath(ctx.query.get('next'), PRODUCT_INFO[product].dashboard === '/' ? '/enquiries' : PRODUCT_INFO[product].dashboard);
+  const googleNext = hostInfo(location.hostname, boot.productDomain).production ? new URL(next, location.origin).href : next;
   const signInCard = html`<section class="card card-plain"><h2>Sign in</h2><form id="signin" novalidate>
       <label for="si-email">Email</label><input id="si-email" name="email" type="email" required autocomplete="email">
       <label for="si-password">Password</label><input id="si-password" name="password" type="password" required autocomplete="current-password">
@@ -120,12 +124,12 @@ function signedOut(ctx) {
       <p class="hint">By creating an account you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p>
       <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Create account</button></div></form></section>`;
   const error = ctx.query.get('error');
-  mount(ctx.main, html`<div class="container page"><span class="tag">One account for Meet, Forms and Flow</span><h1>${signup ? 'Create your Schedora account' : 'Sign in to Schedora'}</h1>
+  mount(ctx.main, html`<div class="container page"><span class="tag">${PRODUCT_INFO[product].name}${product === 'suite' ? '' : ' by Schedora'}</span><h1>${signup ? 'Get started with' : 'Sign in to'} ${PRODUCT_INFO[product].name}</h1><p class="lead">${PRODUCT_INFO[product].job}</p>
     ${error ? notice('bad', html`<p>${error}</p>`) : ''}
-    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(next)}" data-external>Continue with Google</a><p>One Google account for Meet, Forms and Flow. Calendar access is requested separately.</p><p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p></section>` : ''}
-    <div class="grid-2">${signup ? html`${signUpCard}${signInCard}` : html`${signInCard}${signUpCard}`}</div>
-    <section class="card card-plain section-gap"><h2>Single sign-on</h2><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
-      <p class="hint">For organizations that have set up single sign-on.</p></section></div>`);
+    ${boot.googleSignIn ? html`<section class="google-signin-panel"><a class="btn google-signin-button" href="/api/auth/google/start?next=${encodeURIComponent(googleNext)}" data-external><img src="/assets/figma/GoogleSignIn.png" alt="" width="20" height="20">Continue with Google</a><p>Use Google to sign in. Calendar access is requested separately.</p><p>By continuing, you agree to the <a href="/terms">terms</a> and acknowledge the <a href="/privacy">privacy policy</a>.</p></section>` : ''}
+    <div class="auth-cards">${signup ? signUpCard : signInCard}<details class="auth-alternative"><summary>${signup ? 'Already have an account? Sign in' : 'New here? Create an account'}</summary>${signup ? signInCard : signUpCard}</details></div>
+    <details class="card card-plain section-gap"><summary>Organization single sign-on</summary><form id="sso" class="row" novalidate><label for="sso-email" class="visually-hidden">Work email</label><input id="sso-email" name="email" type="email" required placeholder="Work email" autocomplete="email"><button class="btn" type="submit">Continue with SSO</button></form>
+      <p class="hint">For organizations that have set up single sign-on.</p></details></div>`);
   $('#sso').onsubmit = async event => {
     event.preventDefault();
     const email = $('#sso-email').value.trim();

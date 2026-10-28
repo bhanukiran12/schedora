@@ -13,6 +13,10 @@ import { enquiries } from './js/enquiries.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
 const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
 
+import { canonicalRedirect, contextFor, hostInfo, isAppRoute, productUrl, landingUrl, safeReturnPath } from './js/context.mjs';
+import { PRODUCT_INFO, currentSection } from './js/products.mjs';
+import { renderShell, clearShell } from './js/shell.mjs';
+
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = [
   [/^\/$/, ecosystemHome],
@@ -62,31 +66,14 @@ let firstRender = true;
 let currentPath = location.pathname;
 
 function renderHeader(product) {
-  const links = boot.links;
   const individual = product !== 'suite';
-  $('#site-header').classList.toggle('product-header', individual);
-  const nav = [['suite', 'Suite', links.suite], ['meet', 'Meet', boot.landings.meet], ['forms', 'Forms', boot.landings.forms], ['flow', 'Flow', boot.landings.flow], ['billing', 'Plans', '/billing']];
-  const productNavigation = {
-    meet: [['availability', 'Availability', '#features'], ['booking', 'Booking pages', '#how-it-works'], ['demo', 'Explore Meet', '/demo/meet']],
-    forms: [['builder', 'Form builder', '#features'], ['responses', 'Collect responses', '#how-it-works'], ['demo', 'Explore Forms', '/demo/forms']],
-    flow: [['automation', 'Automations', '#features'], ['connections', 'Connected workflows', '#how-it-works'], ['demo', 'Explore Flow', '/demo/flow']]
-  };
-  if (individual) nav.splice(0, nav.length, ...productNavigation[product].map(([key, label, href]) => [key, label, href.startsWith('#') ? boot.landings[product] + href : href]));
-  if (currentPath === '/') nav.splice(0, nav.length, ['suite', 'Products', '#ecosystem'], ['why', 'Why Schedora', '#why-schedora'], ['pricing', 'Pricing', '#pricing'], ['roadmap', 'Our roadmap', '#roadmap']);
-  const current = currentPath === '/billing' ? 'billing' : product;
-  const home = product === 'suite' ? links.suite : boot.landings[product];
-  mount($('#site-header'), html`<div class="container header-inner">
-    <a class="lockup" href="${home}" aria-label="${PRODUCTS[product].name}${product === 'suite' ? '' : ' by Schedora'}, home">${lockup(product)}</a>
-    ${individual ? '' : html`<nav class="site-nav" aria-label="Products">${nav.map(([key, label, href]) => html`<a href="${href}" ${key === current ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>`}
-    <div class="header-tools">
-      ${individual ? html`<details class="ecosystem-switcher minimal-apps"><summary class="ecosystem-connection"><img src="/logo-schedora.png" width="22" height="22" alt=""><span>Schedora apps<span class="ecosystem-colors" aria-hidden="true"><i></i><i></i><i></i></span></span><span aria-hidden="true">⌄</span></summary><nav aria-label="Schedora apps"><a href="${links.suite}">${lockup('suite')}<small>The connected ecosystem</small></a>${['meet', 'forms', 'flow'].map(key => html`<a href="${boot.landings[key]}" ${key === product ? raw('aria-current="page"') : ''}>${lockup(key)}<small>${key === 'meet' ? 'Appointments & scheduling' : key === 'forms' ? 'Questions & responses' : 'Automation & follow-up'}</small></a>`)}</nav></details>` : ''}
-      ${session.user && session.workspaces.length > 1 ? html`<label class="visually-hidden" for="workspace-switch">Workspace</label>
-        <select id="workspace-switch">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name}</option>`)}</select>` : ''}
-      ${session.user && !currentPath.startsWith('/products/') ? html`<a class="btn btn-small" href="/account">Account</a>` : ''}
-      ${individual ? html`<a class="btn btn-small btn-primary product-open" href="${links[product]}">Open ${PRODUCTS[product].name} →</a>` : ''}
-    </div></div>`);
-  const switcher = $('#workspace-switch');
-  if (switcher) switcher.onchange = () => { selectWorkspace(switcher.value); render(); };
+  const authPage = currentPath === '/account';
+  const home = individual ? boot.landings[product] : boot.links.suite;
+  const next = PRODUCT_INFO[product].dashboard;
+  const auth = mode => `/account?${mode ? 'mode=signup&' : ''}product=${product}&next=${encodeURIComponent(next)}`;
+  mount($('#site-header'), html`<div class="container header-inner"><a class="lockup" href="${home}">${lockup(product)}</a>
+    ${authPage ? '' : html`<nav class="site-nav" aria-label="${individual ? PRODUCT_INFO[product].name : 'Suite'} information">${individual ? html`<a href="${home}#features">Features</a><a href="${home}#how-it-works">How it works</a><a href="/demo/${product}">Try the demo</a>` : html`<a href="/#ecosystem">Products</a><a href="/#why-schedora">Why Schedora</a>`}<a href="/billing${individual ? '?product=' + product : ''}">Plans</a></nav>`}
+    <div class="header-tools">${authPage ? html`<a href="${home}">Back to ${PRODUCT_INFO[product].name}</a>` : session.user ? html`<a class="btn btn-small" href="${individual ? boot.links[product] : '/enquiries'}">Go to workspace</a>` : html`<a class="btn btn-small" href="${auth(false)}">Sign in</a><a class="btn btn-small btn-primary" href="${auth(true)}">Get started</a>`}</div></div>`);
 }
 
 function renderFooter() {
@@ -130,6 +117,9 @@ function countPage() {
 // ---- Router ----
 let renderToken = 0;
 export function navigate(path, { replace = false } = {}) {
+  if (!hostInfo(location.hostname, boot.productDomain).product && boot.context && boot.context !== 'suite' && /^\/(account|start|demo)(?:[/?#]|$)/.test(path) && !/^\/demo\/(meet|forms|flow)/.test(path)) {
+    const target = new URL(path, location.origin); if (!target.searchParams.has('product')) target.searchParams.set('product', boot.context); path = target.pathname + target.search + target.hash;
+  }
   if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path);
   currentPath = location.pathname;
   render();
@@ -141,18 +131,31 @@ export async function render() {
   video.leaveMeeting(); // releases camera, microphone and the connection before any other view renders
   const main = $('#main');
   const query = new URLSearchParams(location.search);
-  const product = productFor(currentPath);
-  document.body.dataset.design = currentPath.startsWith('/demo') ? 'workspace' : currentPath.startsWith('/start') ? 'onboarding' : currentPath === '/' ? 'marketing' : '';
+  const redirect = canonicalRedirect(location, boot.productDomain);
+  if (redirect) { location.replace(redirect); return; }
+  let product = contextFor(location.hostname, currentPath, boot.productDomain);
+  const entry = query.get('product');
+  if (product === 'suite' && ['meet', 'forms', 'flow'].includes(entry)) product = entry;
+  if (product === 'suite' && currentPath === '/account') product = productFor(safeReturnPath(query.get('next'), '/'));
+  boot.context = product;
+  if (currentPath === '/' && product !== 'suite' && session.user) return navigate(PRODUCT_INFO[product].dashboard, { replace: true });
+  clearShell();
+  const shell = Boolean(session.user && isAppRoute(currentPath));
+  document.body.classList.toggle('app-shell', shell);
+  if (shell) renderShell({ product, current: currentSection(product, currentPath, query), links: { dashboard: boot.links, home: { suite: boot.links.suite, ...boot.landings } }, onWorkspaceChange: render });
+  document.body.dataset.design = currentPath.startsWith('/demo') ? 'workspace' : currentPath.startsWith('/start') ? 'onboarding' : currentPath === '/' && product === 'suite' ? 'marketing' : '';
   document.body.dataset.product = product === 'suite' ? 'meet' : product;
+  delete document.body.dataset.embed;
   if (query.get('embed') === '1' && currentPath.startsWith('/f/')) document.body.dataset.embed = '1';
-  renderHeader(product);
+  if (!shell) renderHeader(product);
   let view = pages.notFound;
   let params = [];
   for (const [pattern, handler] of routes) {
     const match = pattern.exec(currentPath);
     if (match) { view = handler; params = match.slice(1); break; }
   }
-  const ctx = { main, params, query, path: currentPath, alive: () => token === renderToken, navigate, render, lockup };
+  if (currentPath === '/' && product !== 'suite') { view = productLanding; params = [product]; }
+  const ctx = { main, params, query, product, entryProduct: hostInfo(location.hostname, boot.productDomain).product || (['meet', 'forms', 'flow'].includes(entry) ? entry : 'suite'), path: currentPath, alive: () => token === renderToken, navigate, render, lockup };
   if (boot.offline && !['workspace', 'onboarding', 'marketing'].includes(document.body.dataset.design) && !currentPath.startsWith('/products/')) mount(main, html`<div class="container page"><h1>We can't reach ${product === 'suite' ? 'Schedora' : PRODUCTS[product].name} right now</h1><div class="notice notice-bad" role="alert"><p>The service did not respond. It may be starting up, or there may be a connection problem. Nothing has been submitted from this page. Please try again in a moment.</p></div><a class="btn" data-external href="${location.pathname + location.search}">Try again</a></div>`);
   else try {
     await view(ctx);
@@ -194,15 +197,8 @@ async function start() {
   mount($('#main'), html`<div class="container page" role="status"><h1>Connecting to Schedora…</h1><p>The service may take a moment to start.</p></div>`);
   if (/^\/(demo|start)(\/|$)/.test(location.pathname)) Object.assign(boot, fallback, { offline: false });
   else try { Object.assign(boot, fallback, await loadStartupConfig(() => api('GET', '/api/config')), { offline: false }); } catch { Object.assign(boot, fallback, { offline: true }); }
-  const host = location.hostname;
-  const subdomain = host.endsWith('.' + boot.productDomain) ? host.slice(0, -(boot.productDomain.length + 1)) : '';
-  const productRoot = { meet: '/meet', book: '/meet', forms: '/forms', flow: '/flow' }[subdomain];
-  if (location.pathname === '/' && productRoot) currentPath = productRoot;
-  const onProductDomain = host === boot.productDomain || Boolean(subdomain);
-  boot.links = onProductDomain
-    ? { suite: `https://${boot.productDomain}/`, meet: `https://meet.${boot.productDomain}/`, forms: `https://forms.${boot.productDomain}/`, flow: `https://flow.${boot.productDomain}/` }
-    : { suite: '/', meet: '/meet', forms: '/forms', flow: '/flow' };
-  boot.landings = Object.fromEntries(['meet', 'forms', 'flow'].map(key => [key, `${onProductDomain ? `https://${boot.productDomain}` : ''}/products/${key}`]));
+  boot.links = Object.fromEntries(Object.keys(PRODUCT_INFO).map(key => [key, productUrl(key, PRODUCT_INFO[key].dashboard, location, boot.productDomain)]));
+  boot.landings = Object.fromEntries(['meet', 'forms', 'flow'].map(key => [key, landingUrl(key, location, boot.productDomain)]));
   if (location.pathname === '/book' || location.pathname === '/form') { history.replaceState(null, '', location.pathname === '/book' ? '/meet' : '/forms'); currentPath = location.pathname; }
 }
 await start();

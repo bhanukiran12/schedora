@@ -86,7 +86,7 @@ if (process.env.BROWSER_LOCALE) await send('Emulation.setLocaleOverride', { loca
 
 async function open(path, ready = "document.querySelector('#main h1')") {
   currentLabel = path;
-  await send('Page.navigate', { url: base + path });
+  await send('Page.navigate', { url: /^https?:/.test(path) ? path : base + path });
   await waitFor(`document.readyState === 'complete' && ${ready}`, `${path} to render`);
 }
 const fill = (selector, value) => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error('missing ${selector}'); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
@@ -139,7 +139,7 @@ try {
     await open('/account?mode=signup&next=/meet');
     await fill('#su-name', 'Asha Host'); await fill('#su-email', 'asha@example.com'); await fill('#su-password', 'a long test password'); await fill('#su-workspace', 'Asha Studio');
     await click('#signup [type="submit"]');
-    await waitFor("location.pathname === '/meet' && document.querySelector('.tabs')", 'Meet dashboard');
+    await waitFor("location.pathname === '/meet' && document.querySelector('.side-nav')", 'Meet dashboard');
     workspaceSlug = await evaluate("fetch('/api/me').then(r => r.json()).then(d => d.workspaces[0].slug)");
   });
   let eventSlug;
@@ -719,20 +719,20 @@ try {
   }
   await step('Meet navigation: every section reachable on mobile, keyboard menu, quiet cancel still confirms', async () => {
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
-    await open('/meet?tab=meetings', "document.querySelector('.tab-more summary') && !document.querySelector('#tab-panel > .loading')");
-    const shown = await evaluate("[...document.querySelectorAll('.meet-tabs > a')].filter(a => a.getClientRects().length).map(a => a.textContent).join()");
-    if (shown !== 'Event types,Meetings,Video') throw new Error('unexpected visible tabs: ' + shown);
+    await open('/meet?tab=meetings', "document.querySelector('#side-open') && !document.querySelector('#tab-panel > .loading')");
     if ((await evaluate('document.documentElement.scrollWidth - innerWidth')) > 0) throw new Error('mobile navigation overflows');
-    await click('.tab-more summary');
-    const menu = await evaluate("[...document.querySelectorAll('.tab-more li a')].filter(a => a.getClientRects().length).map(a => a.getAttribute('href').split('tab=')[1]).join()");
-    if (menu !== 'polls,contacts,workflows,analytics,integrations,insights,emails') throw new Error('menu is missing sections: ' + menu);
-    await evaluate("document.querySelector('.tab-more li a').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
-    if (await evaluate("document.querySelector('.tab-more').open || !document.activeElement.matches('.tab-more summary')")) throw new Error('Escape did not close the menu and return focus');
+    await click('#side-open');
+    const menu = await evaluate("[...document.querySelectorAll('.side-nav a')].map(a => new URL(a.href).searchParams.get('tab')).join()");
+    if (menu !== 'types,meetings,video,polls,contacts,workflows,analytics,insights,integrations,emails') throw new Error('drawer sections missing: ' + menu);
+    if (!(await evaluate("document.querySelector('#main').inert && document.activeElement.id === 'side-close'"))) throw new Error('drawer focus/inert missing');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    if (!(await evaluate("!document.body.classList.contains('drawer-open') && !document.querySelector('#main').inert && document.activeElement.id === 'side-open'"))) throw new Error('Escape did not restore focus');
     await click('[data-cancel]');
     await waitFor("document.querySelector('dialog[open]')?.innerText.includes('Cancel this meeting?')", 'cancel confirmation');
     await click('dialog[open] button[value=cancel]');
-    await open('/meet?tab=analytics', "document.querySelector('.tab-more summary[aria-current=page]')");
-    if (!(await evaluate("document.querySelector('.tab-more summary').innerText.includes('More: Analytics') && document.querySelector('h1').innerText === 'Analytics'"))) throw new Error('active section not shown in the menu or heading');
+    await open('/meet?tab=analytics', "document.querySelector('.side-nav a[aria-current=page][href*=analytics]')");
+    if (!(await evaluate("document.querySelector('h1').innerText === 'Analytics'"))) throw new Error('active section heading missing');
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   });
   await step('poll: create, vote, view results', async () => {
@@ -869,7 +869,7 @@ try {
     await fill('#display-name', 'Guest');
     await click('#join-form [type="submit"]');
     await waitFor("document.body.innerText.includes('Waiting for the host')", 'waiting for host');
-    await open('/meet', "document.querySelector('.tabs')");
+    await open('/meet', "document.querySelector('.side-nav')");
   });
   // Meeting room UI with a fake-connected Room (fixture above): layout, controls, devices, recovery.
   // Synthetic camera/microphone and no media server: this checks the interface, not real media.
@@ -1068,6 +1068,49 @@ try {
     await waitFor("document.querySelector('#ledger tr')", 'ledger rows');
     await layoutCheck('billing credits');
   });
+  await step('product hosts: landing, auth, account, onboarding and demo retain one product', async () => {
+    const port = app.server.address().port;
+    for (const product of ['meet', 'forms', 'flow']) {
+      const origin = `http://${product}.localhost:${port}`;
+      app.config.allowedOrigins.add(origin);
+      await open(origin + '/', "document.querySelector('.product-landing')");
+      if (await evaluate("Boolean(document.querySelector('.cookie-banner'))")) await click('.cookie-banner [data-choice=rejected]');
+      if (!(await evaluate(`document.body.dataset.product === '${product}' && !document.querySelector('.ecosystem-switcher')`))) throw new Error('wrong product landing: ' + product);
+      await layoutCheck(product + ' product landing');
+      await open(origin + `/account?mode=signup&next=/${product}`, "document.querySelector('#signup')");
+      if (!(await evaluate(`document.querySelector('h1').innerText.includes('${product === 'meet' ? 'Meet' : product === 'forms' ? 'Forms' : 'Flow'}')`))) throw new Error('auth context lost');
+      await layoutCheck(product + ' product signup');
+      await fill('#su-name', 'Product Host'); await fill('#su-email', product + '-host@example.com'); await fill('#su-password', 'a long test password'); await fill('#su-workspace', product + ' Workspace');
+      await click('#signup [type=submit]');
+      await waitFor(`location.pathname === '/${product}' && document.body.classList.contains('app-shell')`, 'product dashboard');
+      if (await evaluate("Boolean(document.querySelector('#app-sidebar a.product-open'))")) throw new Error('duplicate open control');
+      await layoutCheck(product + ' product dashboard');
+      await open(origin + '/account', "document.querySelector('#sign-out')");
+      if (!(await evaluate(`document.body.dataset.product === '${product}' && !document.querySelector('nav[aria-label="Your Schedora apps"]')`))) throw new Error('account context lost');
+      await layoutCheck(product + ' product account');
+      await open(origin + '/start', "document.querySelector('#demo-welcome')");
+      if ((await evaluate("document.querySelectorAll('.ds-signup-benefit').length")) !== 1) throw new Error('onboarding promotes other products');
+      await click('#demo-welcome button[type=submit], #demo-welcome button.btn-primary');
+      if (product === 'meet') {
+        await waitFor("location.pathname === '/start/calendar'", 'Meet-only calendar setup');
+        await click('a[href="/start/availability"]');
+        await waitFor("document.querySelector('#setup-availability')", 'availability setup');
+        await click('#setup-availability button[type=submit], #setup-availability button.btn-primary');
+      } else {
+        await waitFor("document.querySelector('#focused-setup')", 'focused product setup');
+        await click('#focused-setup button');
+      }
+      await waitFor("location.pathname === '/start/share'", 'setup outcome');
+      if ((await text()).includes('Everything is in place')) throw new Error('setup overclaims verification');
+      await layoutCheck(product + ' setup outcome');
+      await open(origin + '/demo', "document.querySelector('.ds-workspace')");
+      if ((await evaluate(`document.querySelectorAll('nav[aria-label="Workspace products"] a').length`)) !== 1) throw new Error('demo shows other product navigation');
+      await layoutCheck(product + ' scoped demo');
+    }
+    await open('/start/products', "document.querySelector('#product-selection')");
+    if ((await evaluate("document.querySelectorAll('#product-selection input[type=checkbox]').length")) !== 3) throw new Error('Suite must retain all product choices');
+  });
+
 } finally {
   socket.close();
   browser.kill();

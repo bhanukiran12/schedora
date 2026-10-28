@@ -1,4 +1,4 @@
-import { boot, html, mount } from './core.mjs';
+import { boot, html, mount, session } from './core.mjs';
 import { setTitle } from './pages.mjs';
 
 const products = {
@@ -58,8 +58,8 @@ export function productLanding(ctx) {
     <section class="landing-hero">
       <div><p class="landing-eyebrow">${product.eyebrow}</p>
         <h1>${headline}</h1><p class="lead">${key === 'meet' ? 'For discovery calls, consultations and sessions: share availability, confirm the time and give clients a clear way to change it.' : key === 'forms' ? 'Collect the context for a useful next step. Choose a classic form or one question at a time to suit the task.' : 'Start with a booking or response. Create a task or queue an email, then check what actually happened.'}</p>
-        <div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="landing-text-link" href="#product-demo">See it in action →</a></div>
-        <p class="muted landing-note">One Schedora account. Your own ${product.name} workspace.</p>
+        <div class="actions"><a class="btn btn-primary" href="${session.user ? boot.links[key] : `/account?mode=signup&product=${key}&next=${encodeURIComponent('/' + key)}`}">${session.user ? 'Go to workspace' : 'Get started with ' + product.name} →</a><a class="landing-text-link" href="#product-demo">See it in action →</a></div>
+        <p class="muted landing-note">${key === 'meet' ? 'Create a booking page and preview it before sharing.' : key === 'forms' ? 'Preview your questions before publishing.' : 'Simulate your saved flow before enabling it.'}</p>
       </div>
       <figure class="product-image"><a href="/demo/${key}" aria-label="Explore the ${product.name} demo"><img src="/images/${key}-workspace.webp" width="926" height="1400" alt="${product.name} workspace preview showing ${key === 'meet' ? 'appointments, booking links and availability' : key === 'forms' ? 'forms and collected responses' : 'workflows and sample run history'}" fetchpriority="high"></a><figcaption>${product.name} workspace · Sample data <a href="/demo/${key}">Explore demo →</a></figcaption></figure>
     </section>
@@ -70,11 +70,8 @@ export function productLanding(ctx) {
     <section class="landing-section" id="how-it-works"><p class="landing-eyebrow">Simple from the start</p><h2>Make your first ${key === 'meet' ? 'appointment' : key === 'forms' ? 'form' : 'flow'} happen.</h2>
       <ol class="landing-steps">${product.steps.map(text => html`<li>${text}</li>`)}</ol>
     </section>
-    <section class="landing-section landing-connected"><div><p class="landing-eyebrow">Part of Schedora</p><h2>Better together, whenever you’re ready.</h2><p>Meet handles appointments. Forms collects answers. Flow takes care of the follow-up. Connect them under one account.</p></div>
-      <div class="landing-related">${Object.entries(products).filter(([id]) => id !== key).map(([id, item]) => html`<a href="${boot.landings[id]}">${ctx.lockup(id)}<span>Explore ${item.name} →</span></a>`)}</div>
-    </section>
     <section class="landing-section landing-faq"><h2>A few things to know</h2><details><summary>${product.question}</summary><p>${product.answer}</p></details><details><summary>Do I need a separate Schedora account?</summary><p>No. Your Schedora account works across Meet, Forms and Flow. <a href="/billing">See plans and availability</a>.</p></details></section>
-    <section class="landing-final"><h2>Make space for what comes next.</h2><p>Start with ${product.name}. Connect the rest when you need them.</p><div class="actions"><a class="btn btn-primary" href="${boot.links[key]}">Open ${product.name} →</a><a class="btn" href="${boot.links.suite}">Explore the suite</a></div></section>
+    <section class="landing-final"><h2>Make space for what comes next.</h2><p>Start with ${product.name}. Connect the rest when you need them.</p><div class="actions"><a class="btn btn-primary" href="${session.user ? boot.links[key] : `/account?mode=signup&product=${key}&next=${encodeURIComponent('/' + key)}`}">${session.user ? 'Go to workspace' : 'Get started with ' + product.name} →</a><a class="btn" href="${boot.links.suite}">Explore the suite</a></div></section>
   </div>`);
   const stage = ctx.main.querySelector('#product-showcase');
   let chosenDay = 'Monday';
