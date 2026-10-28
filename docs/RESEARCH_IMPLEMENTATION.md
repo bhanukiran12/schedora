@@ -673,3 +673,10 @@ Pain: the real account page looked unrelated to the polished demo, and users fac
 ### 2026-10-28 — Reconcile current release evidence and remaining acceptance gates
 
 Inspected main 328ed25, enquiries.mjs, Flow task service, monitoring implementation, tests and final main CI (40681407234: success). Corrected historical local/uncommitted labels and superseded Enquiries coverage limits in current scope documents; preserved historical release notes. Added RELEASE_ACCEPTANCE.md separating implementation/CI/deployment, real-provider outcomes, accessibility checks, commercial approval and human validation. Corrected the owner's manual auth URL from unsupported /signin to /login. No new customer research, provider activation, pricing decision or application behaviour was introduced. Monitoring and real email remain first operational gates; readiness backend evidence and per-form history remain independent engineering opportunities.
+
+
+### 2026-10-28 — Preserve older per-form follow-ups and tied response arrivals
+
+Pain confirmed in source: the response inbox used only the latest 200 workspace runs/tasks and three capped booking lists, so an older response could say no follow-up was recorded despite existing history. Timestamp-only paging could also omit responses with the same arrival time. Success criterion: every loaded response gets its own authorized full follow-up history, and stable paging reaches tied arrivals once each; attention filtering must not hide the load action.
+
+Reused Enquiries subject-scoped authorization/hydration in the response API, added stable timestamp/id next cursors with legacy timestamp compatibility, and accumulated per-page context in Forms. Failed/missing evidence stays unknown. Paging now announces its result and preserves focus; repeated clicks are guarded. Tests include 61 tied arrivals, an old task behind 210 unrelated runs/tasks, member-hidden booking follow-ups, unauthenticated/other-workspace denial and context deduplication. No migration or live provider change. Final browser/CI/release evidence is recorded in the external progress checkpoint.

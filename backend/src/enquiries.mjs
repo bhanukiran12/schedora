@@ -94,6 +94,15 @@ export function listEnquiries(app, actor, { before, limit } = {}) {
   const merged = [...responsesPage(app, workspaceId, cursor, size), ...directBookingsPage(app, workspaceId, actor, cursor, size)]
     .sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   const items = merged.slice(0, size);
+  const followups = followupsForItems(app, actor, items);
+  const last = items[items.length - 1];
+  return { items, next: merged.length > size ? `${last.at}.${last.id}` : null, ...followups };
+}
+
+// Fetch by the page's actual subjects, never by workspace-wide recency. Reused by the
+// per-form inbox so an old response cannot silently lose its runs or linked tasks.
+export function followupsForItems(app, actor, items) {
+  const workspaceId = actor.workspace.id;
   const linked = items.map(item => item.next_step?.booking_id).filter(Boolean);
   const visible = visibleBookings(app, workspaceId, actor, linked);
   for (const item of items) if (item.next_step?.booking_id) item.next_step.booking_visible = visible.has(item.next_step.booking_id);
@@ -102,6 +111,6 @@ export function listEnquiries(app, actor, { before, limit } = {}) {
   const runs = runsForSubjects(app, workspaceId, subjects);
   const taskIds = runs.map(run => run.result?.task).filter(Boolean);
   const tasks = taskIds.length ? app.db.all(`${TASK_SELECT} WHERE t.workspace_id = ? AND t.id IN (${taskIds.map(() => '?').join(', ')})`, workspaceId, ...taskIds) : [];
-  const last = items[items.length - 1];
-  return { items, next: merged.length > size ? `${last.at}.${last.id}` : null, runs, tasks, now: app.now() };
+  const bookings = items.filter(item => item.next_step?.booking_visible).map(item => ({ id: item.next_step.booking_id, reference: item.next_step.reference }));
+  return { runs, tasks, bookings, now: app.now() };
 }

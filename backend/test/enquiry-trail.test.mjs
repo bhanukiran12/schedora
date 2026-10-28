@@ -2,7 +2,7 @@
 // missing sources are reported as unknown rather than as "nothing happened".
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBookingTrail, buildFeedEnquiries, buildTrail, OFFER_TTL_MS } from '../../frontend/js/enquiry-trail.mjs';
+import { buildBookingTrail, buildFeedEnquiries, buildTrail, responseTrailContext, OFFER_TTL_MS } from '../../frontend/js/enquiry-trail.mjs';
 import { setup, signUp, publishedEventType, idem } from './helpers.mjs';
 
 const row = (next_step = null) => ({ id: 'aaaaaaaa-1111-2222-3333-444444444444', created_at: 1000, form_version: 1, next_step });
@@ -184,6 +184,13 @@ test('real local API: the enquiry feed links response → booking → task, expi
     assert.ok(!seen.items.some(item => item.kind === 'booking'), 'a member does not see bookings they do not host');
     assert.ok(!seen.runs.some(item => item.event_type === 'meet.booking.created'), 'nor their follow-up runs');
     assert.ok(buildFeedEnquiries([seen]).enquiries.find(item => item.title === 'Meera').trail.notes.includes('Follow-ups for this booking are not visible to your role.'));
+    const ownerInbox = (await owner.get(`${base}/forms/${form.id}/responses`)).body;
+    assert.ok(ownerInbox.followups.runs.some(item => item.event_type === 'meet.booking.created'));
+    const memberInbox = (await memberHttp.get(`${base}/forms/${form.id}/responses`)).body;
+    assert.ok(!memberInbox.followups.runs.some(item => item.event_type === 'meet.booking.created'));
+    const hiddenBooking = memberInbox.responses.find(item => item.next_step?.reference);
+    assert.ok(buildTrail(hiddenBooking, responseTrailContext([memberInbox])).notes.includes('Follow-ups for this booking are not visible to your role.'));
+    assert.equal((await env.client().get(`${base}/forms/${form.id}/responses`)).status, 401);
     assert.equal((await env.client().get(`${base}/enquiries`)).status, 401);
     const outsider = env.client();
     await signUp(outsider, 'Outsider');
@@ -224,4 +231,48 @@ test('the feed pages through every enquiry exactly once, including arrival-time 
     assert.equal(new Set(seen).size, 75, 'no duplicates or gaps across pages');
     assert.equal((await owner.get(`${base}/enquiries?before=not-a-cursor`)).status, 400);
   } finally { await env.close(); }
+});
+
+
+test('per-form paging keeps tied arrivals and old follow-ups beyond the workspace run/task cap', async () => {
+  const env = await setup();
+  try {
+    const owner = env.client(); const { ws } = await signUp(owner, 'History');
+    const base = `/api/workspaces/${ws.id}`;
+    const form = (await owner.post(`${base}/forms`, { definition: { title: 'History', fields: [{ id: 'name', type: 'short_text', label: 'Name', required: true }] } })).body;
+    await owner.post(`${base}/forms/${form.id}/publish`, { base_revision: form.revision });
+    const flow = (await owner.post(`${base}/flows`, { name: 'Review', trigger_type: 'forms.response.created', trigger_source: form.id, action_type: 'task', action_config: { title: 'Review', details: '' }, status: 'enabled' })).body;
+    const ids = [];
+    for (let i = 0; i < 61; i++) {
+      const id = `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`; ids.push(id);
+      env.app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, created_at) VALUES (?, ?, ?, 1, ?, ?, ?)', id, ws.id, form.id, JSON.stringify({ name: `Person ${i}` }), `history-${i}`, env.clock.now);
+    }
+    // The oldest response's failed run/task predates 210 unrelated workspace runs/tasks.
+    for (let i = 0; i < 211; i++) {
+      env.app.db.run("INSERT INTO flow_runs (id, workspace_id, flow_id, event_id, event_type, subject_id, status, attempts, next_attempt_at, result, created_at, updated_at) VALUES (?, ?, ?, ?, 'forms.response.created', ?, 'succeeded', 1, ?, ?, ?, ?)",
+        `history-run-${i}`, ws.id, flow.id, `history-event-${i}`, i ? `unrelated-${i}` : ids[0], env.clock.now + i, JSON.stringify({ task: `history-task-${i}` }), env.clock.now + i, env.clock.now + i);
+      env.app.db.run("INSERT INTO tasks (id, workspace_id, source_run_id, title, details, status, created_at) VALUES (?, ?, ?, 'Review history', '', 'open', ?)", `history-task-${i}`, ws.id, `history-run-${i}`, env.clock.now + i);
+    }
+    const pages = []; let cursor; const seen = [];
+    do {
+      const result = await owner.get(`${base}/forms/${form.id}/responses?limit=7${cursor ? '&before=' + encodeURIComponent(cursor) : ''}`);
+      assert.equal(result.status, 200); pages.push(result.body); seen.push(...result.body.responses.map(row => row.id)); cursor = result.body.next;
+    } while (cursor && pages.length < 20);
+    assert.equal(seen.length, 61); assert.equal(new Set(seen).size, 61);
+    const ctx = responseTrailContext(pages);
+    assert.equal(ctx.runs.length, 1, 'unrelated workspace subjects are excluded');
+    assert.equal(ctx.tasks.length, 1);
+    assert.deepEqual(buildTrail(pages.at(-1).responses.at(-1), ctx).reasons, ['task_open']);
+    assert.equal((await owner.get(`${base}/forms/${form.id}/responses?before=bad`)).status, 400);
+    const outsider = env.client(); await signUp(outsider, 'Other');
+    assert.equal((await outsider.get(`${base}/forms/${form.id}/responses`)).status, 404);
+    assert.equal((await owner.get(`${base}/forms/${form.id}/responses?before=${env.clock.now}`)).body.responses.length, 0, 'legacy timestamp remains exclusive');
+  } finally { await env.close(); }
+});
+
+test('per-form context deduplicates repeated booking follow-ups and treats missing API evidence as unavailable', () => {
+  const page = { followups: { runs: [run({ id: 'same-run' })], tasks: [{ id: 'same-task' }], bookings: [{ id: 'same-booking', reference: 'SCH-1' }], now: 100 } };
+  const ctx = responseTrailContext([page, page]);
+  assert.equal(ctx.runs.length, 1); assert.equal(ctx.tasks.length, 1); assert.equal(ctx.bookingsByReference.size, 1);
+  assert.equal(responseTrailContext([{}]).runsAvailable, false);
 });

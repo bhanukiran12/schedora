@@ -13,7 +13,7 @@ import { registerVideoRoutes } from './api-video.mjs';
 import { videoHealth } from './video/rooms.mjs';
 import { alertChannels, firingAlerts } from './platform/monitoring.mjs';
 import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
-import { listEnquiries } from './enquiries.mjs';
+import { listEnquiries, followupsForItems } from './enquiries.mjs';
 import { getOnboarding, updateOnboarding } from './onboarding.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
@@ -284,9 +284,11 @@ export function createApi(app) {
   post('/api/workspaces/:ws/forms/:id/publish-check', async ctx => checkFormPublish(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   post('/api/workspaces/:ws/forms/:id/unpublish', ctx => unpublishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/workspaces/:ws/forms/:id/responses', ctx => {
-    const { workspace } = member(ctx, 'responses.read');
+    const actor = member(ctx, 'responses.read');
+    const { workspace } = actor;
     const form = getForm(app, workspace.id, ctx.params.id);
-    return { form, versions: formVersions(app, form.id), responses: listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit') }) };
+    const page = listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit') });
+    return { form, versions: formVersions(app, form.id), ...page, followups: followupsForItems(app, actor, page.responses) };
   });
   get('/api/workspaces/:ws/forms/:id/responses.csv', ctx => {
     const { workspace } = member(ctx, 'responses.read');

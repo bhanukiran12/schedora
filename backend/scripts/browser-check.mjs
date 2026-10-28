@@ -686,6 +686,31 @@ try {
     if (!(await evaluate("/^All \\d+ enquiries are loaded\\./.test(document.querySelector('#enquiries-body .hint').textContent)"))) throw new Error('complete coverage not stated');
     await layoutCheck('enquiries all pages');
   });
+  await step('per-form history: tied arrivals, complete follow-ups and keyboard paging under the attention filter', async () => {
+    const formRow = app.db.get('SELECT workspace_id FROM forms WHERE id = ?', formId);
+    const oldId = '00000000-0000-4000-9000-000000000000';
+    const at = app.now() - 86400000;
+    app.db.run("UPDATE responses SET created_at = ? WHERE form_id = ? AND idempotency_key LIKE 'paged-%'", at, formId);
+    const flow = app.db.get("SELECT id FROM flows WHERE workspace_id = ? AND action_type = 'task' LIMIT 1", formRow.workspace_id);
+    app.db.run("INSERT INTO flow_runs (id, workspace_id, flow_id, event_id, event_type, subject_id, status, attempts, next_attempt_at, result, created_at, updated_at) VALUES ('old-form-run', ?, ?, 'old-form-event', 'forms.response.created', ?, 'succeeded', 1, ?, ?, ?, ?)", formRow.workspace_id, flow.id, oldId, at, JSON.stringify({ task: 'old-form-task' }), at, at);
+    app.db.run("INSERT INTO tasks (id, workspace_id, source_run_id, title, details, status, created_at) VALUES ('old-form-task', ?, 'old-form-run', 'Review the older enquiry', '', 'open', ?)", formRow.workspace_id, at);
+    await open(`/forms/${formId}/responses`, "document.querySelector('#more')");
+    await click('[data-filter=attention]');
+    if (!(await evaluate("Boolean(document.querySelector('#more'))"))) throw new Error('filter hides access to older responses');
+    await evaluate("document.querySelector('#more').focus()");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await waitFor("document.querySelector('#responses-status').textContent.includes('all responses are loaded')", 'older response announcement');
+    if (!(await focused('[data-filter=all]'))) throw new Error('paging focus lost');
+    await click(`[data-view-response="${oldId}"]`);
+    await waitFor("document.querySelector('#response-detail').textContent.includes('Review the older enquiry')", 'old follow-up task');
+    await layoutCheck('older response follow-up');
+    await click('[data-filter=all]');
+    const total = app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', formId).count;
+    const seen = await evaluate("[...document.querySelectorAll('[data-view-response]')].map(el => el.dataset.viewResponse)");
+    if (seen.length !== total || new Set(seen).size !== total) throw new Error('tied response history missing or duplicated');
+    if (await evaluate("Boolean(document.querySelector('#more'))")) throw new Error('extra history page incorrectly offered');
+  });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");
     await layoutCheck('billing');

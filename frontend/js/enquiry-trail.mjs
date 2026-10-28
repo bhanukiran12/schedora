@@ -71,6 +71,17 @@ export function buildTrail(row, context) {
   return finish(steps, notes);
 }
 
+// The inbox API returns every follow-up for each response page, scoped on the server.
+// Deduplicate shared booking runs when multiple loaded pages mention the same booking.
+export function responseTrailContext(pages) {
+  const complete = pages.every(page => page.followups);
+  const unique = key => [...new Map(pages.flatMap(page => page.followups?.[key] || []).map(item => [item.id, item])).values()];
+  return { runs: unique('runs'), tasks: unique('tasks'),
+    bookingsByReference: new Map(unique('bookings').map(item => [item.reference, item])),
+    runsAvailable: complete, tasksAvailable: complete, bookingsAvailable: complete,
+    now: pages.at(-1)?.followups?.now };
+}
+
 // A booking made directly on a booking page (not from a form response).
 export function buildBookingTrail(booking, context) {
   const [state, title, reason] = { confirmed: ['done', 'Booking confirmed'], pending: ['waiting', 'Booking held, payment pending'], canceled: ['attention', 'Booking canceled', 'booking_canceled'] }[booking.status] || ['unknown', 'Booking status unknown'];

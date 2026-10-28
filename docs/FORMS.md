@@ -171,3 +171,12 @@ The table below records the earlier implementation author's checks before this f
 - Expired, invalid, unavailable and used handoffs no longer silently fall back to ordinary booking. Direct public booking without a handoff remains possible; this is not a universal person/email duplicate-booking restriction. A lost or rotated token requires returning to the response receipt or contacting the team.
 - Role granularity is unchanged: members can read and export every form's responses, as before. Response-reviewer and editor roles from the strategy need an authorization decision first.
 - Not built in this milestone: templates, the shared status queue, email receipts, branch tester, uploads, payments and AI.
+
+
+## Per-form follow-up history and response paging (28 October 2026 increment)
+
+`GET /api/workspaces/:ws/forms/:id/responses` preserves `form`, `versions` and `responses`, and adds `next` plus `followups: { runs, tasks, bookings, now }`. Follow-ups are selected from the returned response ids and only linked bookings visible to the actor, using the same authorization rules as workspace Enquiries. They are not limited to the newest 200 workspace runs/tasks. The `bookings` array contains only visible id/reference pairs needed to join that history. A missing evidence payload is shown as unavailable, never as proof that no flow ran.
+
+`next` is a timestamp/id cursor, ordered by `created_at DESC, id DESC`, so tied arrival times cannot skip responses. Pass it unchanged as `before`; an old numeric timestamp remains an exclusive timestamp cursor for compatibility. Default page size is 50, maximum 200. A null `next` means the current traversal is complete; this is not a live-update subscription or a snapshot against concurrent edits/deletions.
+
+The inbox accumulates page-scoped history without duplicating shared booking runs, retains Load older responses under an empty attention filter, prevents simultaneous loads, announces results and preserves keyboard focus. No schema, response quota, retention, publication, delivery or entitlement change is introduced. Large-history latency and human task completion remain unmeasured.

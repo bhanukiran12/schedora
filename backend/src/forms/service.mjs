@@ -250,10 +250,20 @@ const receipt = (row, version) => ({ id: row.id, reference: row.id.replace(/-/g,
 
 export function listResponses(app, workspaceId, formId, { before, limit = 50 } = {}) {
   getForm(app, workspaceId, formId);
+  // Accept legacy timestamp cursors, but emit timestamp + id for stable paging through ties.
+  const cursor = before ? /^(\d{1,16})(?:\.([A-Za-z0-9-]{1,64}))?$/.exec(before) : null;
+  if (before && !cursor) fail(400, 'validation_failed', 'Invalid response cursor.', { field: 'before' });
+  const at = cursor ? Number(cursor[1]) : Number.MAX_SAFE_INTEGER;
+  const id = cursor?.[2] || '';
+  const size = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 50)));
   const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
-    FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ? AND r.created_at < ?
-    ORDER BY r.created_at DESC LIMIT ?`, formId, workspaceId, Number(before) || Number.MAX_SAFE_INTEGER, Math.min(200, Number(limit) || 50));
-  return rows.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row) }));
+    FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ?
+    AND (r.created_at < ? OR (r.created_at = ? AND r.id < ?))
+    ORDER BY r.created_at DESC, r.id DESC LIMIT ?`, formId, workspaceId, at, at, id, size + 1);
+  const page = rows.slice(0, size);
+  const last = page.at(-1);
+  return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row) })),
+    next: rows.length > size ? `${last.created_at}.${last.id}` : null };
 }
 
 // Booking state is read from Meet, following reschedules, so the inbox never claims more than Meet records.

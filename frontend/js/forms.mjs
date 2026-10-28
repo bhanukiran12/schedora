@@ -1,23 +1,9 @@
 import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FORM_TEMPLATES, questionCount } from './forms-templates.mjs';
-import { buildTrail, STATE_LABELS } from './enquiry-trail.mjs';
+import { buildTrail, responseTrailContext, STATE_LABELS } from './enquiry-trail.mjs';
 import { assessFormReadiness } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
-
-// Linked records for the enquiry trail. Each source loads independently, so a role that cannot see
-// one of them still gets the rest, with that part marked unavailable rather than guessed.
-export async function loadTrailContext() {
-  const [runs, tasks, ...scopes] = await Promise.allSettled([api('GET', wsPath('/runs')), api('GET', wsPath('/tasks')),
-    ...['upcoming', 'past', 'canceled'].map(scope => api('GET', wsPath('/bookings?scope=' + scope)))]);
-  const bookingsByReference = new Map();
-  for (const scope of scopes) if (scope.status === 'fulfilled') for (const booking of scope.value) bookingsByReference.set(booking.reference, booking);
-  return {
-    runs: runs.value || [], runsAvailable: runs.status === 'fulfilled', tasks: tasks.value || [], tasksAvailable: tasks.status === 'fulfilled',
-    bookingsByReference, bookingsAvailable: scopes.every(scope => scope.status === 'fulfilled'), provider: boot.providers?.email, now: Date.now(),
-    capped: (runs.value?.length || 0) >= 200 || (tasks.value?.length || 0) >= 200
-  };
-}
 
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
@@ -807,8 +793,12 @@ export async function responses(ctx) {
   if (!ctx.alive()) return;
   const { form, versions } = data;
   let rows = data.responses;
-  let more = rows.length === 50;
-  let context = null; // linked follow-up records, loaded after the inbox renders
+  // Keep older server responses usable during a staggered frontend/backend deployment.
+  const pageCursor = page => 'next' in page ? page.next : (page.responses.length === 50 ? String(page.responses.at(-1).created_at) : null);
+  let cursor = pageCursor(data);
+  let more = Boolean(cursor);
+  const trailPages = [data];
+  let context = responseTrailContext(trailPages);
   let filter = 'all';
   const trailOf = row => context ? buildTrail(row, context) : null;
   setTitle(`Responses: ${form.draft.title} · Forms by Schedora`);
@@ -828,14 +818,15 @@ export async function responses(ctx) {
     mount($('#responses'), rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
         <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
-        <span class="muted" role="status">${context ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline.${context.capped ? ' Based on the latest 200 runs and tasks.' : ''}` : 'Checking follow-ups…'}</span></div>
+        <span class="muted" role="status">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. Follow-ups cover every loaded response.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
       ${shown.length ? html`<div class="table-wrap"><table><caption class="visually-hidden">Responses to ${form.draft.title}</caption>
       <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}</tr></thead>
       <tbody>${shown.map(row => html`<tr><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
           <button class="btn btn-small" data-view-response="${row.id}">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
         <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}</tr>`)}</tbody></table></div>
+      `
+      : html`<div class="empty"><h2>Nothing needs attention</h2><p>None of the loaded responses has a booking problem, a failed follow-up or an open follow-up task.</p></div>`}
       ${more ? html`<div class="actions"><button class="btn" id="more">Load older responses</button></div>` : ''}`
-      : html`<div class="empty"><h2>Nothing needs attention</h2><p>None of the loaded responses has a booking problem, a failed follow-up or an open follow-up task.</p></div>`}`
     : html`<div class="empty"><h2>No responses yet</h2><p>${form.published_version ? 'Share the form link to start collecting responses.' : 'Publish the form to start collecting responses.'}</p></div>`);
   };
 
@@ -859,14 +850,10 @@ export async function responses(ctx) {
     <p class="muted">${form.draft.title} · ${form.response_count} total · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
     <div id="export-status" tabindex="-1"></div>
     <div id="response-detail"></div>
+    <p id="responses-status" class="hint" role="status"></p>
     <div id="responses"></div></div>`);
   draw();
-  loadTrailContext().then(loaded => {
-    if (!ctx.alive()) return;
-    context = loaded;
-    draw();
-    if (openRow && $('#detail-title')) { const row = rows.find(item => item.id === openRow); if (row) showDetail(row, { focus: false }); } // refresh without moving focus
-  });
+
 
   // The export is fetched here so a failure is shown with a retry instead of downloading an error page.
   $('#export').onclick = async () => {
@@ -892,12 +879,22 @@ export async function responses(ctx) {
     const target = event.target.closest('button');
     if (!target) return;
     if (target.id === 'more') {
+      if (!cursor || target.disabled) return;
+      target.disabled = true;
+      mount($('#responses-status'), 'Loading older responses…');
       try {
-        const older = await api('GET', wsPath(`/forms/${form.id}/responses?before=${rows[rows.length - 1].created_at}`));
-        rows = rows.concat(older.responses);
-        more = older.responses.length === 50;
+        const older = await api('GET', wsPath(`/forms/${form.id}/responses?before=${encodeURIComponent(cursor)}`));
+        if (!ctx.alive()) return;
+        rows = [...new Map(rows.concat(older.responses).map(row => [row.id, row])).values()];
+        trailPages.push(older);
+        context = responseTrailContext(trailPages);
+        cursor = pageCursor(older);
+        more = Boolean(cursor);
         draw();
-      } catch (error) { toast(`Older responses could not be loaded. ${error.message}`); }
+        mount($('#responses-status'), `Loaded ${older.responses.length} older responses. ${rows.length} responses loaded${more ? '; more are available.' : '; all responses are loaded.'}`);
+        if (openRow) { const row = rows.find(item => item.id === openRow); if (row) showDetail(row, { focus: false }); }
+        ($('#more') || $('[data-filter="all"]'))?.focus();
+      } catch (error) { mount($('#responses-status'), `Older responses could not be loaded. ${error.message}`); target.disabled = false; }
       return;
     }
     if (target.dataset.filter) {
