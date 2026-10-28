@@ -7,6 +7,7 @@ import { syncMeetingCalendars } from './platform/oauth.mjs';
 import { videoTick } from './video/rooms.mjs';
 import { expireLots } from './video/credits.mjs';
 import { reconcileRecharges } from './video/recharge.mjs';
+import { MONITOR_INTERVAL_MS, runMonitoring } from './platform/monitoring.mjs';
 
 const DAY = 86400000;
 
@@ -42,6 +43,7 @@ export function createWorker(app, { intervalMs = 2000 } = {}) {
   let running = false;
   let again = false;
   let lastRetention = 0;
+  let lastMonitor = 0;
   const state = { lastTickAt: null, lastError: null };
 
   async function tick() {
@@ -67,6 +69,12 @@ export function createWorker(app, { intervalMs = 2000 } = {}) {
     } catch (error) {
       state.lastError = error.message;
       app.log('error', 'worker_tick_failed', { error: error.message });
+    }
+    // Runs after a failed pass too, so the failure itself can raise worker_error.
+    try {
+      if (app.now() - lastMonitor >= MONITOR_INTERVAL_MS) { lastMonitor = app.now(); await runMonitoring(app); }
+    } catch (error) {
+      app.log('error', 'monitoring_failed', { error: error.message });
     } finally {
       running = false;
     }

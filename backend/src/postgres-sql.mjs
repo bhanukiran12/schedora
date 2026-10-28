@@ -17,6 +17,9 @@ export const VIDEO_TABLES = ['video_rooms', 'video_invites', 'video_participants
 // Tables of migration 006 (Forms reliability), created by the postgres_v5 upgrade. Its added
 // columns are part of the generated base schema for new databases and are added here for existing ones.
 export const FORMS_V5_TABLES = ['form_handoffs'];
+
+// Table of migration 008 (operator monitoring), created by the postgres_v7 upgrade.
+export const MONITORING_TABLES = ['monitor_alerts'];
 export const FORMS_V5_COLUMNS = [
   'ALTER TABLE forms ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1',
   'ALTER TABLE form_versions ADD COLUMN IF NOT EXISTS routing TEXT',

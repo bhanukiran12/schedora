@@ -70,6 +70,8 @@ export function loadConfig(env = process.env, overrides = {}) {
       jurisdiction: env.OPERATOR_JURISDICTION || ''
     },
     workerIntervalMs: Number(env.WORKER_INTERVAL_MS || 2000),
+    // Operator alerts (codes and counts only). Either channel may be empty; health still reports firing alerts.
+    alerts: { webhookUrl: env.ALERT_WEBHOOK_URL || '', email: env.ALERT_EMAIL || '' },
     video: loadVideoConfig(env, production),
     ...overrides
   };
@@ -85,6 +87,12 @@ export function loadConfig(env = process.env, overrides = {}) {
   if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
   if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
+  if (config.alerts.webhookUrl) {
+    let url;
+    try { url = new URL(config.alerts.webhookUrl); } catch { throw new Error('ALERT_WEBHOOK_URL must be a URL.'); }
+    if (url.protocol !== 'https:' && (production || url.protocol !== 'http:')) throw new Error('ALERT_WEBHOOK_URL must use HTTPS.');
+  }
+  if (config.alerts.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.alerts.email)) throw new Error('ALERT_EMAIL must be one email address.');
   if (config.smsProvider === 'twilio' && (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioFrom)) throw new Error('SMS_PROVIDER=twilio needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.');
   return config;
 }
@@ -121,6 +129,7 @@ export function releaseWarnings(config) {
   if (config.production && !config.encryptionKey) warnings.push('APP_ENCRYPTION_KEY is not set: integrations (calendars, Stripe, SSO) cannot be connected.');
   if (config.video?.enabled && config.video.provider === 'fake') warnings.push('Schedora Meet video uses the fake provider; no real meeting can connect.');
   for (const reason of config.video?.blocked || []) warnings.push('Schedora Meet video is off: ' + reason);
+  if (!config.alerts?.webhookUrl && !(config.alerts?.email && config.emailProvider === 'http')) warnings.push('No operator alert channel: set ALERT_WEBHOOK_URL or ALERT_EMAIL with the HTTP email provider.');
   if (config.video?.killSwitch !== 'off') warnings.push(`Schedora Meet video kill switch is ${config.video?.killSwitch}.`);
   return warnings;
 }

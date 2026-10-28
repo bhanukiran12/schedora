@@ -7,7 +7,38 @@
 - **Release warnings:** logged at start-up for missing operator details, outbox email, missing webhook secret and open billing mode.
 - **Product views:** hosts see email delivery status per booking (Meet → Email delivery); Flow shows every run with attempts and the last error.
 
-Not yet connected: an external uptime monitor, alerting and log retention. Choose these with the hosting setup (Render offers log streams to external providers).
+### Operator alerts
+
+The worker evaluates these conditions once a minute (`backend/src/platform/monitoring.mjs`). Each one fires when its count is above zero:
+
+| Code | Fires when |
+| --- | --- |
+| `worker_error` | The worker's last pass failed |
+| `email_failed` | An email created in the last 24 hours failed permanently |
+| `email_overdue` | An email is more than 15 minutes past its send time |
+| `flow_failed` | A Flow run failed in the last 24 hours |
+| `flow_overdue` | A run of an enabled flow is more than 15 minutes overdue (paused flows hold runs on purpose) |
+| `events_overdue` | A product event is undispatched after 15 minutes |
+| `video_events_overdue` | A video provider webhook is unprocessed after 15 minutes |
+| `video_ops_failed` / `video_ops_stuck` | A video provider operation failed, or is still pending after 5 attempts |
+| `video_settlement_overdue` | A credit reservation is unsettled more than an hour after it ended |
+| `video_unfunded_usage` | Video units were used without credit in the last 24 hours |
+| `video_capacity` | Connected participants reach 80% of `MEET_VIDEO_MAX_GLOBAL_PARTICIPANTS` |
+| `video_budget` | The month's estimated provider cost reaches 80% of `MEET_VIDEO_MONTHLY_COST_BUDGET_MICROS` |
+
+State is kept in `monitor_alerts`. A notification is sent when a condition starts firing, again every 6 hours while it stays firing, and once when it resolves. A condition that clears before any notification was delivered sends nothing. Undelivered notifications are retried on the next pass. Messages contain codes and counts only: no workspace names, addresses, answers or message bodies. `/api/health` shows `alerts.channels` and `alerts.firing`; logs show `alert_firing`, `alert_resolved` and `alert_delivery_failed`.
+
+Channels (either or both):
+- `ALERT_WEBHOOK_URL`: HTTPS incoming webhook. The JSON body has `text` (Slack-style), `content` (Discord-style) and `alerts` (`code`, `state`, `value`).
+- `ALERT_EMAIL`: one operator address. Used only with `EMAIL_PROVIDER=http`; the local outbox would deliver nothing. Alert email depends on the same provider it may be reporting on, so prefer a webhook as well.
+
+**Test a channel safely:** `node --env-file=<private env file> scripts/alert-test.mjs` (or `npm run alert-test` with the variables set). It sends one message labelled `[TEST]` to each configured channel, uses no database and changes no alert state.
+
+**What in-process alerts cannot cover:** a stopped process, a crashed instance or a host outage cannot alert about itself. Add an external uptime check on `GET /api/health` that alerts on a non-200 response, on `"database":"error"` or on `"stale":true` (the worker has not completed a pass for 2 minutes).
+
+**Before setting `MONITORING_CONFIRMED=true`:** configure at least one alert channel on the production service, run the test alert and confirm it arrived, and configure the external uptime check and see it alert once (for example by checking a deliberately wrong URL). Record the dates in the release checklist. Code alone does not satisfy this gate. It also gates Meet video (`MEET_VIDEO_ENABLED`), together with the webhook and smoke confirmations.
+
+Not yet connected: log retention (Render offers log streams to external providers).
 
 ## Background work
 

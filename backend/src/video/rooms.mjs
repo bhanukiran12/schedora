@@ -265,7 +265,7 @@ function activeCount(app, where, ...params) {
   return app.db.get(`SELECT COUNT(*) AS count FROM video_participants p WHERE ${ACTIVE} AND ${where}`, app.now(), ...params).count;
 }
 
-function estimatedMonthCostMicros(app) {
+export function estimatedMonthCostMicros(app) {
   const date = new Date(app.now());
   const since = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
   const settled = app.db.get('SELECT CAST(COALESCE(SUM(estimated_cost_micros), 0) AS BIGINT) AS micros FROM video_usage_records WHERE created_at >= ?', since).micros;

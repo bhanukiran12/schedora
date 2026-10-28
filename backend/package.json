@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "production-check": "node scripts/production-check.mjs",
+    "alert-test": "node --disable-warning=ExperimentalWarning scripts/alert-test.mjs",
     "start": "node --disable-warning=ExperimentalWarning server.mjs",
     "dev": "node --disable-warning=ExperimentalWarning --watch server.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 \"test/*.test.mjs\"",

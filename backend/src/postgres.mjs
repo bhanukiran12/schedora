@@ -1,5 +1,5 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
-import { FORMS_V5_COLUMNS, FORMS_V5_TABLES, postgresSchema, postgresUpgrade, VIDEO_TABLES } from './postgres-sql.mjs';
+import { FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, VIDEO_TABLES } from './postgres-sql.mjs';
 import { openDatabase } from './db.mjs';
 
 export function openPostgres(connectionString, { ca, schemaName = 'schedora' } = {}) {
@@ -12,14 +12,15 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
     const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
     // Tables added after the first PostgreSQL release are created by versioned upgrade steps, the
     // same way for new and existing databases.
-    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES];
+    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES, ...MONITORING_TABLES];
     schema = postgresSchema(tables.filter(table => !later.includes(table.name)), indexes.filter(index => !later.includes(index.tbl_name)));
     upgrades = [{ name: 'postgres_v4_meet_video', statements: postgresUpgrade(tables.filter(table => VIDEO_TABLES.includes(table.name)), indexes.filter(index => VIDEO_TABLES.includes(index.tbl_name)), [
       "CREATE FUNCTION credit_ledger_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'credit_ledger_immutable'; END $$",
       'CREATE TRIGGER credit_ledger_no_update BEFORE UPDATE ON credit_ledger FOR EACH ROW EXECUTE FUNCTION credit_ledger_immutable()'
     ]) }, { name: 'postgres_v5_forms_reliability', statements: [...FORMS_V5_COLUMNS,
       ...postgresUpgrade(tables.filter(table => FORMS_V5_TABLES.includes(table.name)), indexes.filter(index => FORMS_V5_TABLES.includes(index.tbl_name)))] },
-      { name: 'postgres_v6_email_transport', statements: ['ALTER TABLE emails ADD COLUMN IF NOT EXISTS accepted_transport TEXT'] }];
+      { name: 'postgres_v6_email_transport', statements: ['ALTER TABLE emails ADD COLUMN IF NOT EXISTS accepted_transport TEXT'] },
+      { name: 'postgres_v7_monitoring', statements: postgresUpgrade(tables.filter(table => MONITORING_TABLES.includes(table.name)), indexes.filter(index => MONITORING_TABLES.includes(index.tbl_name))) }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

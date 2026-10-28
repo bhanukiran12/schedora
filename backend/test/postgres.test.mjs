@@ -108,6 +108,18 @@ test('PostgreSQL upgrade for Forms reliability adds columns idempotently and cre
   assert.ok(statements.some(sql => /ALTER TABLE "form_handoffs" ADD FOREIGN KEY \(response_id\) REFERENCES responses\(id\) ON DELETE CASCADE/.test(sql)));
 });
 
+test('PostgreSQL upgrade for monitoring creates only the alert table, with no INTEGER columns', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { postgresUpgrade, MONITORING_TABLES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const tables = template.all("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
+  template.close();
+  const statements = postgresUpgrade(tables.filter(table => MONITORING_TABLES.includes(table.name)), indexes.filter(index => MONITORING_TABLES.includes(index.tbl_name)));
+  assert.deepEqual(statements.filter(sql => /^CREATE TABLE/.test(sql)).map(sql => sql.match(/^CREATE TABLE (\w+)/)[1]), ['monitor_alerts']);
+  assert.ok(statements.every(sql => !/\bINTEGER\b|users_email_lower/.test(sql)));
+});
+
 test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const { reconcileWallet } = await import('../src/video/credits.mjs');
   const config = loadConfig();
