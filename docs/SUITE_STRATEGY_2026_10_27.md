@@ -43,7 +43,11 @@ Adopt meaningful templates, quick preview, explicit timezone and state, reversib
 
 The direct Meet reference set is Calendly/Cal.com/SavvyCal; Reclaim and Motion are adjacent calendar/task suites. Forms references are Typeform/Fillout/Tally/Jotform/Google Forms/Paperform. Flow references are Zapier/Make/n8n; Power Automate is enterprise/RPA-adjacent, current Pipedream Connect is embedded integration infrastructure, and Relay.app is historical only after its September 2026 shutdown. ([Relay notice](https://relay.app/), [Pipedream pricing](https://pipedream.com/pricing))
 
-## Rollout and evidence gates
+## Current release checkpoint — 28 October 2026
+
+`328ed25` is deployed to existing Vercel/Render, with successful branch/main CI including PostgreSQL 17 and Linux browser checks. Product context/sidebar, live persisted onboarding and real split-screen auth are released; current Enquiries uses server pagination and task deadlines/assignees exist. Earlier release paragraphs below are historical. Local PostgreSQL credentials remain unusable, but that does not invalidate the passing disposable CI evidence. Real email provider delivery, operator alert receipt, real Google cross-host sign-in, human usability and production video acceptance remain open; pricing is unapproved. See [release acceptance](RELEASE_ACCEPTANCE.md) for current gates and evidence scope.
+
+## Rollout and evidence gates (historical release notes)
 
 **Release state, 27 October 2026:** research-led increments are deployed on the existing Vercel frontend and Render backend. `c06330e` released Flow starters/outcome previews, Forms templates/reliability, linked response trails, the isolated pricing proposal and Meet readiness. `f8cd341` released shared readiness presentation, Forms readiness and the read-only Enquiries list. `eb7fd06` added server-backed saved-revision publish checks and separate live routing. The source, tests and dated evidence are recorded in [RESEARCH_IMPLEMENTATION.md](RESEARCH_IMPLEMENTATION.md). This is an incremental product improvement, not proof that a complete visual redesign or market validation is finished.
 

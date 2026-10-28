@@ -668,3 +668,8 @@ See [product shell contract and evidence](PRODUCT_SHELL.md). Local evidence: 207
 ### 2026-10-28 — Real authentication matches the selected welcome design
 
 Pain: the real account page looked unrelated to the polished demo, and users faced multiple account forms. Implemented the user's chosen `/start` split-screen design for real login/signup, with only one primary form per route and product-scoped benefits. Suite retains all three. New signup defaults to the appropriate persisted setup; old `/account` links still work. This is a user-selected design change, not a validated conversion improvement. Existing auth, access rules and commercial plans remain unchanged. Product shell documentation and design QA contain the verification scope.
+
+
+### 2026-10-28 — Reconcile current release evidence and remaining acceptance gates
+
+Inspected main 328ed25, enquiries.mjs, Flow task service, monitoring implementation, tests and final main CI (40681407234: success). Corrected historical local/uncommitted labels and superseded Enquiries coverage limits in current scope documents; preserved historical release notes. Added RELEASE_ACCEPTANCE.md separating implementation/CI/deployment, real-provider outcomes, accessibility checks, commercial approval and human validation. Corrected the owner's manual auth URL from unsupported /signin to /login. No new customer research, provider activation, pricing decision or application behaviour was introduced. Monitoring and real email remain first operational gates; readiness backend evidence and per-form history remain independent engineering opportunities.
