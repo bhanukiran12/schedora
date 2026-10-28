@@ -30,7 +30,7 @@ State is kept in `monitor_alerts`. A notification is sent when a condition start
 
 Channels (either or both):
 - `ALERT_WEBHOOK_URL`: HTTPS incoming webhook. The JSON body has `text` (Slack-style), `content` (Discord-style) and `alerts` (`code`, `state`, `value`).
-- `ALERT_EMAIL`: one operator address. Used only with `EMAIL_PROVIDER=http`; the local outbox would deliver nothing. Alert email depends on the same provider it may be reporting on, so prefer a webhook as well.
+- `ALERT_EMAIL`: one operator address. By default it inherits the customer email provider; the local outbox would deliver nothing. Set `ALERT_EMAIL_PROVIDER=http` to send operator alerts using the existing `EMAIL_HTTP_URL`, `EMAIL_HTTP_TOKEN` and `EMAIL_FROM` while keeping customer mail at `EMAIL_PROVIDER=outbox`. This opt-in does not deliver or replay customer messages, change their stored transport evidence, or change video/billing confirmation flags. In production the alert HTTP endpoint must use HTTPS. Alert email still depends on the same HTTP service it may be reporting on, so prefer an independent webhook as well.
 
 **Test a channel safely:** `node --env-file=<private env file> scripts/alert-test.mjs` (or `npm run alert-test` with the variables set). It sends one message labelled `[TEST]` to each configured channel, uses no database and changes no alert state.
 

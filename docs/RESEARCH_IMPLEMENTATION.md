@@ -690,3 +690,11 @@ Confirmed that `last_synced_at` changes on failed attempts, and that the live on
 ### 2026-10-28 — Record owner-approved video recharge economics
 
 Owner approved the retained 30%-of-cost markup after payment fees, no customer GST under the confirmed unregistered status, and purchased-credit carry-forward/no automatic expiry. Added VIDEO_RECHARGE_PRICING.md with the formula and verified arithmetic; kept infrastructure-only scenarios distinct from fully loaded costs and live prices. No application, billing configuration, catalog or activation flag changed. Operational video/recharge gates and measured full costs remain outstanding.
+
+## 28 October 2026 — Isolate operator alert transport
+
+Pain: configuring operator email previously required turning customer email delivery on as well. Production currently uses outbox; existing HTTP credentials alone do not establish provider delivery.
+
+Added explicit ALERT_EMAIL_PROVIDER=http opt-in using the existing private HTTP email credentials and sender. Default inherit preserves behavior. Customer transport, queues, stored evidence, commercial settings and video gates remain unchanged. Configuration rejects missing credentials or non-HTTPS production alert endpoints. The alert-test script and worker use the same isolated provider.
+
+Validation: syntax 144 files; full local suite 216 tests, 211 passed, five optional PostgreSQL skips, no failures. The added regression sends to a captured HTTP provider, proves queued customer mail stays outbox, checks operator-only recipients/no customer content, tests retries and confirms alerts never enter customer history. No frontend changed, so no new screenshot/keyboard claims. CI/release and real alert receipt remain separate gates; no production confirmation flags set.

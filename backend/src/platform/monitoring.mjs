@@ -44,7 +44,7 @@ export const CHECKS = [
 ];
 
 export function alertChannels(app) {
-  return [...(app.config.alerts?.webhookUrl ? ['webhook'] : []), ...(app.config.alerts?.email && app.emailProvider.name === 'http' ? ['email'] : [])];
+  return [...(app.config.alerts?.webhookUrl ? ['webhook'] : []), ...(app.config.alerts?.email && (app.alertEmailProvider || app.emailProvider).name === 'http' ? ['email'] : [])];
 }
 
 export function firingAlerts(app) {
@@ -74,7 +74,7 @@ export async function notify(app, { subject, text, alerts = [] }, { test = false
         });
         if (!response.ok) throw new Error(`Alert webhook returned ${response.status}`);
       } else {
-        await app.emailProvider.send({ to: app.config.alerts.email, subject, body: text, idempotencyKey: `alert:${subject}:${app.now()}` });
+        await (app.alertEmailProvider || app.emailProvider).send({ to: app.config.alerts.email, subject, body: text, idempotencyKey: `alert:${subject}:${app.now()}` });
       }
       results[channel] = 'sent';
     } catch (error) {

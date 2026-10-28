@@ -34,6 +34,14 @@ export function createEmailProvider(config, fetchImpl = fetch) {
   return { name: 'outbox', async send() { return { id: 'local-' + randomUUID() }; } };
 }
 
+// Operator-only opt-in: customer mail keeps its configured transport and queue behavior.
+// Reuse the privately configured HTTP credentials without changing EMAIL_PROVIDER.
+export function createAlertEmailProvider(config, customerProvider, fetchImpl = fetch) {
+  return config.alerts?.emailProvider === 'http'
+    ? createEmailProvider({ ...config, emailProvider: 'http' }, fetchImpl)
+    : customerProvider;
+}
+
 // SMS providers. 'outbox' records messages locally; 'twilio' uses the Twilio Messages API.
 export function createSmsProvider(config, fetchImpl = fetch) {
   if (config.smsProvider === 'twilio') {

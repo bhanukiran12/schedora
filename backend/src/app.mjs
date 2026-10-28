@@ -5,7 +5,7 @@ import { loadConfig, releaseWarnings } from './config.mjs';
 import { createRateLimiter, send, clientAddress } from './http.mjs';
 import { createApi } from './api.mjs';
 import { createWeb, isSecure, securityHeaders } from './web.mjs';
-import { createEmailProvider, createSmsProvider } from './platform/email.mjs';
+import { createEmailProvider, createAlertEmailProvider, createSmsProvider } from './platform/email.mjs';
 import { createPayments } from './meet/payments.mjs';
 import { oauthBusy } from './platform/oauth.mjs';
 import { createAnthropic } from './ai/service.mjs';
@@ -39,6 +39,7 @@ export function createApp(options = {}) {
       process.stdout.write(JSON.stringify({ time: new Date().toISOString(), level, message, ...fields }) + '\n');
     })
   };
+  app.alertEmailProvider = options.alertEmailProvider || createAlertEmailProvider(config, app.emailProvider, (url, init) => app.fetchProvider(url, init));
   app.meetingCsp = meetingCsp(config, CSP);
   // Video providers by deployment id; tests inject fakes with options.videoProviders.
   app.video = { providers: createProviders(config, options.videoProviders) };

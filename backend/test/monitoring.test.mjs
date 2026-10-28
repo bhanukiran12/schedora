@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, START } from './helpers.mjs';
-import { loadConfig } from '../src/config.mjs';
+import { loadConfig, releaseWarnings } from '../src/config.mjs';
+import { createEmailProvider, queueEmail, deliverEmail } from '../src/platform/email.mjs';
 import { CHECKS, runMonitoring, sendTestAlert } from '../src/platform/monitoring.mjs';
 
 const HOUR = 3600000;
@@ -192,4 +193,46 @@ test('alert channel configuration is validated; production webhooks need HTTPS',
   assert.throws(() => loadConfig({ ALERT_WEBHOOK_URL: 'not a url' }), /ALERT_WEBHOOK_URL must be a URL/);
   assert.throws(() => loadConfig({ ALERT_EMAIL: 'a@example.com, b@example.com' }), /ALERT_EMAIL must be one email address/);
   assert.equal(loadConfig({ ALERT_WEBHOOK_URL: 'http://127.0.0.1:9/x' }).alerts.webhookUrl, 'http://127.0.0.1:9/x', 'plain HTTP only outside production');
+  assert.throws(() => loadConfig({ ALERT_EMAIL_PROVIDER: 'smtp' }), /ALERT_EMAIL_PROVIDER must be inherit or http/);
+  assert.throws(() => loadConfig({ ALERT_EMAIL_PROVIDER: 'http' }), /needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN/);
+  assert.throws(() => loadConfig({ NODE_ENV: 'production', ALERT_EMAIL_PROVIDER: 'http', EMAIL_HTTP_URL: 'http://email.example.test/send', EMAIL_HTTP_TOKEN: 'test' }), /must use HTTPS/);
+  assert.equal(loadConfig({}).alerts.emailProvider, 'inherit');
+});
+
+test('operator HTTP alerts leave customer messages in outbox and retry failed alerts without exposing customer content', async () => {
+  const config = loadConfig({ EMAIL_PROVIDER: 'outbox', ALERT_EMAIL_PROVIDER: 'http', ALERT_EMAIL: 'operator@example.com', EMAIL_HTTP_URL: 'https://email.example.test/send', EMAIL_HTTP_TOKEN: 'private-test-token' });
+  const env = await setup({ config });
+  try {
+    env.app.emailProvider = createEmailProvider(config);
+    const calls = [];
+    let fail = false;
+    env.app.fetchProvider = async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return { ok: !fail, status: fail ? 503 : 200, json: async () => ({ id: 'operator-message' }) };
+    };
+    const ws = workspace(env);
+    const id = queueEmail(env.app, { workspaceId: ws, key: 'customer-outbox', kind: 'flow', relatedId: null, to: 'client@private.example', subject: 'Secret subject', body: 'Secret body' });
+    await deliverEmail(env.app, id);
+    assert.equal(calls.length, 0, 'customer email never reaches HTTP provider');
+    assert.equal(env.app.db.get('SELECT accepted_transport FROM emails WHERE id = ?', id).accepted_transport, 'outbox');
+    assert.deepEqual(await sendTestAlert(env.app), { email: 'sent' });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].body.to, ['operator@example.com']);
+    assert.match(calls[0].body.subject, /^\[TEST\]/);
+    assert.equal(env.app.db.get('SELECT COUNT(*) AS count FROM monitor_alerts').count, 0);
+    assert.ok(!releaseWarnings(config).some(warning => warning.startsWith('No operator alert channel')));
+    failedEmail(env, ws);
+    fail = true;
+    await runMonitoring(env.app);
+    fail = false;
+    env.clock.now += 60000;
+    await runMonitoring(env.app);
+    assert.equal(calls.length, 3, 'failed operator notification retries on the next pass');
+    for (const call of calls) {
+      assert.deepEqual(call.body.to, ['operator@example.com']);
+      for (const secret of ['client@private.example', 'Secret subject', 'Secret body', 'Private Client Studio']) assert.ok(!JSON.stringify(call.body).includes(secret));
+    }
+    assert.equal(env.app.emailProvider.name, 'outbox');
+    assert.equal(env.app.db.get('SELECT COUNT(*) AS count FROM emails').count, 2, 'alerts do not enter customer email history');
+  } finally { await env.close(); }
 });

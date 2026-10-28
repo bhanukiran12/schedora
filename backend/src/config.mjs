@@ -74,7 +74,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     },
     workerIntervalMs: Number(env.WORKER_INTERVAL_MS || 2000),
     // Operator alerts (codes and counts only). Either channel may be empty; health still reports firing alerts.
-    alerts: { webhookUrl: env.ALERT_WEBHOOK_URL || '', email: env.ALERT_EMAIL || '' },
+    alerts: { webhookUrl: env.ALERT_WEBHOOK_URL || '', email: env.ALERT_EMAIL || '', emailProvider: env.ALERT_EMAIL_PROVIDER || 'inherit' },
     video: loadVideoConfig(env, production),
     ...overrides
   };
@@ -97,6 +97,13 @@ export function loadConfig(env = process.env, overrides = {}) {
     if (url.protocol !== 'https:' && (production || url.protocol !== 'http:')) throw new Error('ALERT_WEBHOOK_URL must use HTTPS.');
   }
   if (config.alerts.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.alerts.email)) throw new Error('ALERT_EMAIL must be one email address.');
+  if (!['inherit', 'http'].includes(config.alerts.emailProvider || 'inherit')) throw new Error('ALERT_EMAIL_PROVIDER must be inherit or http.');
+  if (config.alerts.emailProvider === 'http') {
+    if (!config.emailHttpUrl || !config.emailHttpToken) throw new Error('ALERT_EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
+    let url;
+    try { url = new URL(config.emailHttpUrl); } catch { throw new Error('EMAIL_HTTP_URL must be a URL.'); }
+    if (url.protocol !== 'https:' && (production || url.protocol !== 'http:')) throw new Error('Alert email HTTP provider must use HTTPS.');
+  }
   if (config.smsProvider === 'twilio' && (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioFrom)) throw new Error('SMS_PROVIDER=twilio needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.');
   return config;
 }
@@ -127,13 +134,13 @@ export function publicConfig(config) {
 export function releaseWarnings(config) {
   const warnings = [];
   if (!config.operator.name || !config.operator.contact) warnings.push('Legal operator name and privacy contact are not configured.');
-  if (config.emailProvider === 'outbox') warnings.push('Email provider is the local outbox; no email leaves the server.');
+  if (config.emailProvider === 'outbox') warnings.push('Customer email provider is the local outbox; no customer email leaves the server.');
   if (config.billingProvider !== 'test' && !config.billingWebhookSecret) warnings.push('No payment provider webhook secret is configured.');
   if (config.billingMode === 'open') warnings.push('Billing mode is open: every workspace has evaluation access to all products.');
   if (config.production && !config.encryptionKey) warnings.push('APP_ENCRYPTION_KEY is not set: integrations (calendars, Stripe, SSO) cannot be connected.');
   if (config.video?.enabled && config.video.provider === 'fake') warnings.push('Schedora Meet video uses the fake provider; no real meeting can connect.');
   for (const reason of config.video?.blocked || []) warnings.push('Schedora Meet video is off: ' + reason);
-  if (!config.alerts?.webhookUrl && !(config.alerts?.email && config.emailProvider === 'http')) warnings.push('No operator alert channel: set ALERT_WEBHOOK_URL or ALERT_EMAIL with the HTTP email provider.');
+  if (!config.alerts?.webhookUrl && !(config.alerts?.email && (config.alerts.emailProvider === 'http' || config.emailProvider === 'http'))) warnings.push('No operator alert channel: set ALERT_WEBHOOK_URL or ALERT_EMAIL with the HTTP email provider.');
   if (config.video?.killSwitch !== 'off') warnings.push(`Schedora Meet video kill switch is ${config.video?.killSwitch}.`);
   return warnings;
 }
