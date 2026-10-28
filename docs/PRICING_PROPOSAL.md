@@ -63,3 +63,8 @@ Model three separate customer baskets: a solo consultant at 250 responses/month;
 Illustration only: at ₹1,199 monthly revenue, hypothetical 3% payment processing and ₹300 variable/allocated service+support cost, contribution is ₹863.03, or 72.0% of gross revenue, before applicable taxes/refunds/acquisition/general overhead. At ₹800 service cost it falls to ₹363.03, or 30.3%. At the illustrative annual equivalent ₹999.17, the same ₹300 cost and 3% assumption leave about ₹669.19/month; annual discounts cannot be approved from the monthly margin alone. The 3% is an assumption, not a provider quote.
 
 Measure database/hosting, storage/egress, email, media participant time and bandwidth, retries/failures, support minutes, refunds and taxes. Test normal, heavy and abusive workloads; define free/trial budgets and capacity. Approve prices only after measured contribution floors, willingness-to-pay evidence, billing semantics, legal/tax review and real payment lifecycle checks. This document authorises no sale or charge.
+
+
+## Owner-approved video recharge rule — 28 October 2026
+
+The owner approved retaining 30% over fully loaded cost after payment fees, confirmed Schedora is not GST-registered, and approved purchased credits carrying forward without automatic expiry. See [video recharge pricing](VIDEO_RECHARGE_PRICING.md) for the formula, assumptions and remaining gates. This approval is specific to video recharge policy: the Meet/Forms/Flow/Suite price anchors above remain research proposals. No live pack amounts, catalog activation, paid hosting upgrade or production video readiness is asserted.

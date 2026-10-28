@@ -685,3 +685,8 @@ Reused Enquiries subject-scoped authorization/hydration in the response API, add
 ### 2026-10-28 — Calendar success evidence and working live calendar setup
 
 Confirmed that `last_synced_at` changes on failed attempts, and that the live onboarding form sent `url` instead of the required `feed_url`. Added separate nullable successful-sync evidence, truthful freshness/failure labels, reconnection invalidation and first-sync failure handling. No success is backfilled for older rows. This fixes a functional onboarding blocker as well as evidence quality; team readiness remains unverified. Details, migration/rollback and tests: CALENDAR_SYNC_EVIDENCE.md. Local syntax 144 modules, tests 215 total / 210 pass / five opt-in PostgreSQL skips; browser 760 layout checks, fake feed only. Exact CI and any release state are recorded separately, never inferred from these local results.
+
+
+### 2026-10-28 — Record owner-approved video recharge economics
+
+Owner approved the retained 30%-of-cost markup after payment fees, no customer GST under the confirmed unregistered status, and purchased-credit carry-forward/no automatic expiry. Added VIDEO_RECHARGE_PRICING.md with the formula and verified arithmetic; kept infrastructure-only scenarios distinct from fully loaded costs and live prices. No application, billing configuration, catalog or activation flag changed. Operational video/recharge gates and measured full costs remain outstanding.
