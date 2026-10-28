@@ -114,3 +114,43 @@ test('form response trigger emails the respondent; missing recipient fails witho
     assert.match(failed[0].last_error, /recipient/);
   } finally { await env.close(); }
 });
+
+test('run email evidence survives provider changes, legacy records and a crash without exposing message data', async () => {
+  const env = await setup();
+  try {
+    const { host, ws, book } = await world(env);
+    const path = `/api/workspaces/${ws.id}/runs`;
+    await host.post(`/api/workspaces/${ws.id}/flows`, { name: 'Evidence', trigger_type: 'meet.booking.created', action_type: 'email', action_config: { to: 'invitee', subject: 'Evidence only', body: 'Private body' }, status: 'enabled' });
+    env.emailProvider.name = 'outbox';
+    await book(0);
+    await env.app.worker.tick();
+    let [first] = (await host.get(path)).body;
+    assert.deepEqual(first.email_delivery, { status: 'sent', transport: 'outbox', accepted_at: env.clock.now });
+    const sent = env.sent.length;
+    // A configuration change between a successful email hand-off and a crashed run's recovery
+    // must preserve the original evidence and must not send again.
+    env.emailProvider.name = 'http';
+    env.app.db.run("UPDATE flow_runs SET status = 'queued', next_attempt_at = 0 WHERE id = ?", first.id);
+    await env.app.worker.tick();
+    [first] = (await host.get(path)).body;
+    assert.equal(first.email_delivery.transport, 'outbox');
+    assert.equal(env.sent.length, sent);
+    env.clock.now += 1000;
+    await book(1);
+    await env.app.worker.tick();
+    env.emailProvider.name = 'outbox';
+    let runs = (await host.get(path)).body;
+    assert.equal(runs.find(run => run.id !== first.id).email_delivery.transport, 'http');
+    assert.equal(runs.find(run => run.id === first.id).email_delivery.transport, 'outbox');
+    assert.ok(!JSON.stringify(runs).includes('Private body'));
+    assert.ok(!JSON.stringify(runs).includes('provider_message_id'));
+    // Migrated messages have no transport evidence. Never guess from today's configuration.
+    env.app.db.run('UPDATE emails SET accepted_transport = NULL WHERE id = ?', first.result.email);
+    runs = (await host.get(path)).body;
+    assert.equal(runs.find(run => run.id === first.id).email_delivery.transport, null);
+    const outsider = env.client();
+    await signUp(outsider, 'Other');
+    assert.equal((await outsider.get(path)).status, 404);
+    assert.equal((await env.client().get(path)).status, 401);
+  } finally { await env.close(); }
+});

@@ -224,10 +224,19 @@ export async function processDueRuns(app, limit = 25) {
 }
 
 export function listRuns(app, workspaceId, { flowId, status } = {}) {
-  return app.db.all(`SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at
-    FROM flow_runs r JOIN flows f ON f.id = r.flow_id WHERE r.workspace_id = ? AND (? IS NULL OR r.flow_id = ?) AND (? IS NULL OR r.status = ?)
+  return app.db.all(`SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at,
+      e.id AS email_id, e.status AS email_status, e.accepted_transport AS email_transport, e.sent_at AS email_accepted_at
+    FROM flow_runs r JOIN flows f ON f.id = r.flow_id
+    LEFT JOIN emails e ON e.idempotency_key = 'flow-run:' || r.id AND e.workspace_id = r.workspace_id AND e.channel = 'email'
+    WHERE r.workspace_id = ? AND (? IS NULL OR r.flow_id = ?) AND (? IS NULL OR r.status = ?)
     ORDER BY r.created_at DESC LIMIT 200`, workspaceId, flowId ?? null, flowId ?? null, status ?? null, status ?? null)
-    .map(row => ({ ...row, result: row.result ? JSON.parse(row.result) : null }));
+    .map(({ email_id, email_status, email_transport, email_accepted_at, ...row }) => {
+      const result = row.result ? JSON.parse(row.result) : null;
+      // Only expose coarse evidence for this run's actual result, never addresses, bodies or
+      // provider message IDs. Missing/legacy transport evidence stays unknown after reconfiguration.
+      return { ...row, result, email_delivery: result?.email === email_id
+        ? { status: email_status, transport: email_transport, accepted_at: email_accepted_at } : null };
+    });
 }
 
 // Manual retry of a failed run. Side effects stay idempotent because the run id is reused.

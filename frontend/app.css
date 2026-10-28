@@ -139,6 +139,8 @@ legend { font-weight: 600; padding: 0; margin-bottom: 8px; }
 .table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* main's overflow-wrap: anywhere lets auto-layout columns shrink below a word ("Respon se"). */
+td { overflow-wrap: break-word; }
 th { font-size: 13px; color: var(--muted); font-weight: 650; white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 .meter { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; margin-top: 6px; }

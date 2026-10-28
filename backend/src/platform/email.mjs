@@ -101,7 +101,7 @@ export async function deliverEmail(app, id) {
   try {
     const provider = message.channel === 'sms' ? app.smsProvider : app.emailProvider;
     const result = await provider.send({ to: message.to_address, subject: message.subject, body, ics: message.ics, idempotencyKey: message.idempotency_key });
-    app.db.run("UPDATE emails SET status = 'sent', sent_at = ?, provider_message_id = ?, last_error = NULL, claimed_until = NULL WHERE id = ?", app.now(), result?.id ?? null, id);
+    app.db.run("UPDATE emails SET status = 'sent', sent_at = ?, provider_message_id = ?, accepted_transport = ?, last_error = NULL, claimed_until = NULL WHERE id = ?", app.now(), result?.id ?? null, provider.name || null, id);
     return 'sent';
   } catch (error) {
     const permanent = error.permanent || message.attempts >= MAX_ATTEMPTS;

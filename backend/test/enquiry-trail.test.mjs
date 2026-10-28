@@ -31,7 +31,7 @@ test('follow-ups from the response and from its booking are joined through real 
   const booking = { id: 'booking-1', reference: 'SCH-9' };
   const runs = [
     run({ id: 'r1', result: { task: 't1' }, created_at: 3000 }),
-    run({ id: 'r2', event_type: 'meet.booking.created', subject_id: 'booking-1', flow_name: 'Notify host', result: { email: 'e1' }, created_at: 4000 }),
+    run({ id: 'r2', event_type: 'meet.booking.created', subject_id: 'booking-1', flow_name: 'Notify host', result: { email: 'e1' }, email_delivery: { status: 'sent', transport: 'outbox' }, created_at: 4000 }),
     run({ id: 'r3', subject_id: 'someone-else', flow_name: 'Unrelated' })
   ];
   const tasks = [{ id: 't1', title: 'Review enquiry', status: 'open' }];
@@ -52,9 +52,25 @@ test('run outcomes: failure, retry, paused hold and provider email wording', () 
   assert.deepEqual(buildTrail(row(), context({ runs: [run({ status: 'retrying', last_error: 'timeout' })] })).attention, ['Follow-up retrying (Review)']);
   const held = buildTrail(row(), context({ runs: [run({ status: 'queued', flow_status: 'paused' })] }));
   assert.deepEqual([held.steps[2].state, held.steps[2].text], ['waiting', 'Held while the flow is paused.']);
-  const provider = buildTrail(row(), context({ provider: 'resend', runs: [run({ result: { email: 'e1' } })] }));
+  const provider = buildTrail(row(), context({ provider: 'outbox', runs: [run({ result: { email: 'e1' }, email_delivery: { status: 'sent', transport: 'http' } })] }));
   assert.match(provider.steps[2].text, /Accepted by the email provider; inbox delivery is not tracked/);
   assert.ok(!/delivered\./.test(provider.steps[2].text));
+});
+
+test('historic email outcomes cannot be rewritten by the current provider or assumed for legacy records', () => {
+  const legacy = run({ result: { email: 'old-email' } });
+  for (const provider of ['http', 'outbox']) {
+    const step = buildTrail(row(), context({ provider, runs: [legacy] })).steps[2];
+    assert.equal(step.state, 'unknown');
+    assert.match(step.text, /sending method is not verified/);
+    const recorded = run({ result: { email: 'e1' }, email_delivery: { status: 'sent', transport: 'outbox' } });
+    assert.match(buildTrail(row(), context({ provider, runs: [recorded] })).steps[2].text, /local outbox; not delivered/);
+  }
+  for (const evidence of [{ status: 'queued', transport: 'http' }, { status: 'sent', transport: 'unrecognized' }]) {
+    const step = buildTrail(row(), context({ runs: [run({ result: { email: 'e1' }, email_delivery: evidence })] })).steps[2];
+    assert.equal(step.state, 'unknown');
+    assert.ok(!step.text.includes('Accepted by the email provider'));
+  }
 });
 
 test('sources that cannot be read are reported as unknown, never as "nothing happened"', () => {

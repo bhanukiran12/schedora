@@ -1,6 +1,7 @@
 // What happened after a form response or a booking: booking step, follow-up runs and their tasks.
 // Built only from records the existing APIs return (response next_step, bookings, Flow runs and
 // tasks); no state is invented. Plain logic with no browser dependencies, so it is unit-tested.
+import { emailEvidence } from './email-evidence.mjs';
 
 // A Forms booking link lasts this long (HANDOFF_TTL_MS in backend/src/forms/service.mjs). The
 // handoff keeps the status "offered" afterwards, so an older offer was never used.
@@ -27,11 +28,7 @@ function bookingStep(next, receivedAt, now) {
   }
 }
 
-function emailOutcome(provider) {
-  return provider === 'outbox' ? 'Recorded in the local outbox; not delivered to an inbox.' : 'Accepted by the email provider; inbox delivery is not tracked.';
-}
-
-function runStep(run, tasks, provider) {
+function runStep(run, tasks) {
   const base = { key: 'run', runId: run.id, title: run.flow_name, source: run.event_type === 'meet.booking.created' ? 'booking' : 'response', at: run.created_at };
   if (run.status === 'failed') return { ...base, state: 'attention', reason: 'followup_failed', attention: `Follow-up failed (${run.flow_name})`, text: `Failed after ${run.attempts} ${run.attempts === 1 ? 'attempt' : 'attempts'}: ${run.last_error || 'no error recorded'}.` };
   if (run.status === 'retrying') return { ...base, state: 'attention', reason: 'followup_retrying', attention: `Follow-up retrying (${run.flow_name})`, text: `Retrying: ${run.last_error || 'previous attempt did not finish'}.`, nextAttempt: run.next_attempt_at };
@@ -42,13 +39,16 @@ function runStep(run, tasks, provider) {
     if (!task) return { ...base, state: 'unknown', text: 'Task created; its current status is not available.', taskId: run.result.task };
     return { ...base, state: task.status === 'done' ? 'done' : 'attention', reason: task.status === 'done' ? undefined : 'task_open', attention: task.status === 'done' ? undefined : `Open task (${run.flow_name})`, text: task.status === 'done' ? `Task done: ${task.title}` : `Task open: ${task.title}`, taskId: task.id };
   }
-  if (run.result?.email) return { ...base, state: 'done', text: `Email: ${emailOutcome(provider)}` };
+  if (run.result?.email) {
+    const evidence = emailEvidence(run);
+    return { ...base, state: evidence.verified ? 'done' : 'unknown', text: `Email: ${evidence.text}` };
+  }
   return { ...base, state: 'done', text: 'Completed.' };
 }
 
 /**
  * @param row a response from GET /forms/:id/responses (id, created_at, form_version, next_step)
- * @param context { runs, tasks, bookingsByReference: Map, provider, runsAvailable, tasksAvailable, bookingsAvailable }
+ * @param context { runs, tasks, bookingsByReference: Map, runsAvailable, tasksAvailable, bookingsAvailable }
  */
 export function buildTrail(row, context) {
   const steps = [{ key: 'received', state: 'done', title: 'Response received', at: row.created_at, reference: row.id.replace(/-/g, '').slice(0, 8).toUpperCase() }];
@@ -75,7 +75,7 @@ function followUps(context, matches, subject) {
   if (!context.runsAvailable) return [{ key: 'followup', state: 'unknown', title: 'Follow-up status unavailable', text: 'Flow run history could not be loaded.' }];
   const runs = context.runs.filter(matches);
   if (!runs.length) return [{ key: 'followup', state: 'none', title: 'No follow-up recorded', text: `No enabled flow ran for ${subject}. Flows run only for events after they are enabled.` }];
-  return runs.sort((a, b) => a.created_at - b.created_at).map(run => runStep(run, context.tasksAvailable ? context.tasks : null, context.provider));
+  return runs.sort((a, b) => a.created_at - b.created_at).map(run => runStep(run, context.tasksAvailable ? context.tasks : null));
 }
 
 function finish(steps, notes) {

@@ -18,7 +18,8 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
       "CREATE FUNCTION credit_ledger_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'credit_ledger_immutable'; END $$",
       'CREATE TRIGGER credit_ledger_no_update BEFORE UPDATE ON credit_ledger FOR EACH ROW EXECUTE FUNCTION credit_ledger_immutable()'
     ]) }, { name: 'postgres_v5_forms_reliability', statements: [...FORMS_V5_COLUMNS,
-      ...postgresUpgrade(tables.filter(table => FORMS_V5_TABLES.includes(table.name)), indexes.filter(index => FORMS_V5_TABLES.includes(index.tbl_name)))] }];
+      ...postgresUpgrade(tables.filter(table => FORMS_V5_TABLES.includes(table.name)), indexes.filter(index => FORMS_V5_TABLES.includes(index.tbl_name)))] },
+      { name: 'postgres_v6_email_transport', statements: ['ALTER TABLE emails ADD COLUMN IF NOT EXISTS accepted_transport TEXT'] }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

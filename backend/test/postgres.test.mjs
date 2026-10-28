@@ -13,6 +13,26 @@ test('PostgreSQL query parameters preserve quoted literals and translate support
   assert.match(postgresQuery('INSERT OR IGNORE INTO tasks(id) VALUES (?)'), /ON CONFLICT DO NOTHING$/);
 });
 
+test('PostgreSQL: legacy sent email survives the nullable transport upgrade and reconnect', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
+  const config = loadConfig();
+  const schemaName = 'schedora_test_' + randomUUID().replaceAll('-', '');
+  let db = openPostgres(config.databaseUrl, { ca: config.databaseCa, schemaName });
+  try {
+    db.run("INSERT INTO workspaces (id, slug, name, created_at) VALUES ('legacy-ws', 'legacy-ws', 'Legacy workspace', 1)");
+    db.run("INSERT INTO emails (id, workspace_id, idempotency_key, kind, to_address, subject, body, status, next_attempt_at, created_at, sent_at) VALUES ('legacy-email', 'legacy-ws', 'legacy-key', 'flow', 'legacy@example.com', 'Subject', 'Body', 'sent', 1, 1, 2)");
+    db.exec('ALTER TABLE emails DROP COLUMN accepted_transport');
+    db.run("DELETE FROM schema_migrations WHERE name = 'postgres_v6_email_transport'");
+    db.close();
+    db = openPostgres(config.databaseUrl, { ca: config.databaseCa, schemaName });
+    assert.equal(db.get("SELECT accepted_transport FROM emails WHERE id = 'legacy-email'").accepted_transport, null);
+    assert.equal(db.get("SELECT body FROM emails WHERE id = 'legacy-email'").body, 'Body');
+    db.close();
+    db = openPostgres(config.databaseUrl, { ca: config.databaseCa, schemaName });
+    assert.equal(db.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE name = 'postgres_v6_email_transport'").count, 1);
+    assert.equal(db.get("SELECT COUNT(*) AS count FROM emails WHERE id = 'legacy-email'").count, 1);
+  } finally { db.exec('DROP SCHEMA "' + schemaName + '" CASCADE'); db.close(); }
+});
+
 test('Supabase persists auth and bookings across reconnects; tenant and overlap checks hold', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const config = loadConfig();
   assert.ok(config.databaseUrl, 'Set DATABASE_URL privately for this opt-in test.');

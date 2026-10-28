@@ -1,7 +1,7 @@
 name: Schedora checks
 on:
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
   pull_request:
 permissions:
   contents: read
@@ -32,3 +32,40 @@ jobs:
         run: npm run browser-check
         env:
           CHROME_PATH: /usr/bin/google-chrome
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Start disposable PostgreSQL with verified TLS
+        run: |
+          mkdir -p "$RUNNER_TEMP/schedora-pg-tls"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout "$RUNNER_TEMP/schedora-pg-tls/server.key" -out "$RUNNER_TEMP/schedora-pg-tls/server.crt" -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' > /dev/null 2>&1
+          pg_uid=$(docker run --rm --entrypoint id postgres:17 -u postgres)
+          chmod 600 "$RUNNER_TEMP/schedora-pg-tls/server.key"
+          sudo chown "$pg_uid" "$RUNNER_TEMP/schedora-pg-tls/server.key"
+          docker run --detach --name schedora-test-pg -p 127.0.0.1:54329:5432 -e POSTGRES_PASSWORD=schedora-ci-disposable -v "$RUNNER_TEMP/schedora-pg-tls:/tls:ro" postgres:17 -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          for attempt in {1..30}; do
+            if docker exec schedora-test-pg pg_isready -h 127.0.0.1 -U postgres; then exit 0; fi
+            sleep 1
+          done
+          docker logs schedora-test-pg
+          exit 1
+      - name: PostgreSQL upgrades, Flow evidence, Forms and concurrency
+        env:
+          DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
+        run: |
+          export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
+          npm run test:postgres -- test/flow.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/postgres.test.mjs
+      - name: Remove disposable database
+        if: always()
+        run: docker rm --force schedora-test-pg || true

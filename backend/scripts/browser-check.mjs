@@ -593,6 +593,32 @@ try {
     if (await evaluate("[...document.querySelectorAll('.enquiry .meta span:first-child')].some(s => !s.textContent.startsWith('Booked directly'))")) throw new Error('direct-booking filter shows responses');
     if (records() !== before) throw new Error('the enquiries page changed records');
   });
+  await step('email evidence: outbox, changed setting and unverified historic sending method', async () => {
+    const submitted = await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }; const created = await fetch('/api/workspaces/' + me.workspaces[0].id + '/flows', { method: 'POST', headers, body: JSON.stringify({ name: 'Email evidence check', trigger_type: 'forms.response.created', trigger_source: ${JSON.stringify(formId)}, action_type: 'email', action_config: { to: 'field:email', subject: 'Evidence check', body: 'Local browser fixture only' }, status: 'enabled' }) }); if (created.status !== 201) return created.status; return (await fetch('/api/public/forms/' + ${JSON.stringify(formSlug)} + '/responses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: { name: 'Email evidence', email: 'evidence@example.com', topic: 'support' }, submission_id: 'email-evidence-00000001' }) })).status; })()`);
+    if (submitted !== 201) throw new Error('could not prepare email evidence: ' + submitted);
+    await app.worker.tick();
+    await open('/flow/runs', "document.querySelector('table')");
+    // Change only this test page's current-provider hint: historical outcomes must ignore it.
+    await evaluate("import('/js/core.mjs').then(module => { module.boot.providers.email = 'http'; })");
+    await click('#refresh');
+    await waitFor("document.querySelector('table').innerText.includes('Recorded in the local outbox; not delivered to an inbox.')", 'saved outbox outcome');
+    await evaluate("[...document.querySelectorAll('tbody tr')].find(row => row.innerText.includes('Email evidence check'))?.scrollIntoView({ block: 'center' })");
+    await layoutCheck('email saved transport');
+    const message = app.db.get("SELECT id FROM emails WHERE subject = 'Evidence check'");
+    if (!message) throw new Error('email fixture missing');
+    app.db.run('UPDATE emails SET accepted_transport = NULL WHERE id = ?', message.id);
+    // A migrated message must not get its sending method guessed from today's provider.
+    await click('#refresh');
+    await waitFor("document.querySelector('table').innerText.includes('sending method is not verified')", 'legacy email evidence');
+    if (await evaluate("document.querySelector('table').innerText.includes('Accepted by the email provider')")) throw new Error('legacy email guessed as provider accepted');
+    await evaluate("[...document.querySelectorAll('tbody tr')].find(row => row.innerText.includes('Email evidence check'))?.scrollIntoView({ block: 'center' })");
+    await layoutCheck('email historic evidence');
+    await open('/enquiries', "document.querySelector('.enquiry-list')");
+    const emailCard = await evaluate("(() => { const cards = [...document.querySelectorAll('.enquiry')]; const card = cards.find(item => item.querySelector('.list-title').textContent === 'Email evidence'); if (!card) return null; card.querySelector('details').open = true; return card.innerText; })()");
+    if (!emailCard?.includes('sending method is not verified')) throw new Error('trail lost legacy email uncertainty');
+    await evaluate("[...document.querySelectorAll('.enquiry')].find(item => item.querySelector('.list-title').textContent === 'Email evidence')?.scrollIntoView({ block: 'start' })");
+    await layoutCheck('enquiry historic email');
+  });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");
     await layoutCheck('billing');

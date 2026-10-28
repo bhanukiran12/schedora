@@ -1,12 +1,13 @@
 import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, isAdmin, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FLOW_STARTERS } from './flow-starters.mjs';
+import { emailEvidence } from './email-evidence.mjs';
 
 const TRIGGERS = { 'meet.booking.created': 'A Meet appointment is booked', 'forms.response.created': 'A Forms response is submitted' };
 const ACTIONS = { email: 'Send an email', task: 'Create a follow-up task' };
-const emailOutcome = () => boot.providers.email === 'outbox'
-  ? 'Recorded in the local outbox. It is not delivered to an inbox.'
-  : 'Accepted by the email provider. Inbox delivery is not tracked here.';
+const configuredEmailHint = () => boot.providers.email === 'outbox'
+  ? 'This server currently records email in its local outbox. It is not delivered to an inbox.'
+  : 'This server currently uses an email provider. Acceptance does not prove inbox delivery.';
 const PLACEHOLDERS = {
   'meet.booking.created': ['invitee.name', 'invitee.email', 'booking.start', 'booking.start_host', 'booking.reference', 'event.title', 'event.location', 'host.name'],
   'forms.response.created': ['form.title', 'response.id']
@@ -51,11 +52,11 @@ async function flowsTab(ctx, panel) {
 }
 
 async function runsTab(ctx, panel) {
-  const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">A run succeeds when its task is created or its email is handed over. ${boot.providers.email === 'outbox' ? 'Email goes to the local outbox on this server and is not delivered.' : 'For email, that means the provider accepted it; inbox delivery is not tracked.'} Retrying reuses the same run, so a created task or accepted email is not repeated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
+  const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">A run succeeds when its task is created or its email action is recorded. Each email outcome uses the sending method saved for that message, where available. Inbox delivery is not tracked. Retrying reuses the same run, so a created task or accepted email is not repeated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
     ${runs.length ? html`<div class="table-wrap stack-on-mobile"><table><thead><tr><th>Started</th><th>Flow</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Outcome</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
     ${runs.map(run => html`<tr><td data-label="Started">${fmtDateTime(run.created_at)}</td><td data-label="Flow">${run.flow_name}${run.flow_status === 'paused' && ['queued', 'retrying'].includes(run.status) ? html`<div class="muted">Held while paused</div>` : ''}</td>
       <td data-label="Trigger">${run.event_type === 'meet.booking.created' ? 'Booking' : 'Response'}</td><td data-label="Status">${badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
-      <td data-label="Outcome">${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailOutcome() : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</td>
+      <td data-label="Outcome"><div>${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailEvidence(run).text : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</div></td>
       <td class="${run.status === 'failed' && isAdmin() ? '' : 'empty-cell'}">${run.status === 'failed' && isAdmin() ? html`<button class="btn btn-small" data-retry="${run.id}">Retry<span class="visually-hidden"> ${run.flow_name}</span></button>` : ''}</td></tr>`)}</tbody></table></div>`
     : html`<div class="empty">No runs yet. Runs appear when an enabled flow's trigger happens.</div>`}`);
   const load = async () => { const runs = await api('GET', wsPath('/runs')); if (ctx.alive()) draw(runs); };
@@ -123,7 +124,7 @@ export async function editor(ctx) {
     const who = to.startsWith('address:') ? (to.slice(8) || 'an address you have not entered yet') : { invitee: 'the invitee', host: 'the host' }[to] || (recipients.find(([value]) => value === to)?.[1].toLowerCase() ?? 'a recipient you have not chosen yet');
     const what = state.action_type === 'task' ? `create a task titled “${config.title || 'Untitled task'}” in Flow › Tasks` : `email ${who}`;
     const status = { draft: 'It is a draft: nothing runs until you enable it.', paused: 'It is paused: new events are held and run when you resume it.', enabled: 'Once saved as enabled, new matching events run it. Earlier events are not replayed.' }[state.status];
-    return html`<p class="flow-summary-sentence">${when}, ${what}.</p><p>${status}${state.action_type === 'email' ? ' ' + emailOutcome() : ''}</p>`;
+    return html`<p class="flow-summary-sentence">${when}, ${what}.</p><p>${status}${state.action_type === 'email' ? ' ' + configuredEmailHint() : ''}</p>`;
   };
 
   const draw = () => {
