@@ -1110,6 +1110,79 @@ try {
     await open('/start/products', "document.querySelector('#product-selection')");
     if ((await evaluate("document.querySelectorAll('#product-selection input[type=checkbox]').length")) !== 3) throw new Error('Suite must retain all product choices');
   });
+  await step('persisted live onboarding: Suite product choice, optional calendar skip, draft records, simulation and refresh persistence', async () => {
+    await open('/setup?step=products', "document.querySelector('#live-product-selection')");
+    await layoutCheck('live onboarding products');
+    await click('#select-all-live-products');
+    await click('#live-product-selection button[type=submit]');
+    await waitFor("document.querySelector('#skip-live-calendar')", 'live calendar step');
+    await click('#skip-live-calendar');
+    await waitFor("document.querySelector('#live-meet-form')", 'live availability step');
+    await fill('#live-event-title', 'Live Onboarding Call');
+    await click('#live-meet-form button[type=submit]');
+    await waitFor("document.querySelector('#live-forms-form')", 'live form step');
+    await fill('#live-form-title', 'Live Onboarding Form');
+    await click('#live-forms-form button[type=submit]');
+    await waitFor("document.querySelector('#live-flow-form')", 'live flow step');
+    await fill('#live-flow-name', 'Live Onboarding Flow');
+    await click('#live-flow-form button[type=submit]');
+    await waitFor("document.querySelector('#live-ready-meet') && document.querySelector('#live-ready-forms') && document.querySelector('#live-ready-flow')", 'live readiness review');
+    const reviewText = await text();
+    if (!reviewText.includes('Optional calendar step skipped (not verified)') || !reviewText.includes('Draft (not published)') || !reviewText.includes('draft (not enabled)')) {
+      throw new Error('live onboarding readiness did not report draft/skipped states honestly: ' + reviewText.slice(0, 300));
+    }
+    await click('#live-simulate-flow');
+    await waitFor("document.querySelector('#live-simulation-result')", 'live flow simulation');
+    await open('/setup', "document.querySelector('#live-ready-meet')");
+    if (!(await text()).includes('Live Onboarding Call') || !(await text()).includes('Live Onboarding Form') || !(await text()).includes('Live Onboarding Flow')) {
+      throw new Error('live onboarding progress did not persist across refresh');
+    }
+    await layoutCheck('live onboarding review');
+  });
+  await step('independent accessibility checks: drawer focus trap, form labels, error announcements, contrast and 200% zoom reflow', async () => {
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+    await open('/meet', "document.querySelector('#side-open')");
+    await click('#side-open');
+    await waitFor("document.activeElement?.id === 'side-close' && document.querySelector('#app-sidebar')?.getAttribute('aria-modal') === 'true'", 'drawer opened');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', modifiers: 8, windowsVirtualKeyCode: 9 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', modifiers: 8, windowsVirtualKeyCode: 9 });
+    if (!(await evaluate("Boolean(document.activeElement?.closest('#app-sidebar')) && document.activeElement?.id !== 'side-close'"))) throw new Error('Shift+Tab did not wrap inside drawer');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    if (!(await evaluate("document.activeElement?.id === 'side-close'"))) throw new Error('Tab did not wrap back to #side-close');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    if (!(await evaluate("document.activeElement?.id === 'side-open' && !document.body.classList.contains('drawer-open')"))) throw new Error('Escape did not restore focus to #side-open');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+
+    await open('/setup?step=products', "document.querySelector('#live-product-selection')");
+    const unlabeled = await evaluate("[...document.querySelectorAll('#main input:not([type=hidden]), #main select, #main textarea')].filter(el => !(el.labels?.length || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby'))).length");
+    if (unlabeled > 0) throw new Error('unlabeled form controls on /setup: ' + unlabeled);
+    await evaluate("document.querySelectorAll('#live-product-selection input[type=checkbox]').forEach(b => { b.checked = false; })");
+    await click('#live-product-selection button[type=submit]');
+    await waitFor("document.querySelector('#live-product-selection [data-form-status] [role=alert]')", 'validation alert');
+    if (!(await evaluate("document.querySelector('#live-product-selection [data-form-status] [role=alert]').innerText.includes('Choose at least one product')"))) throw new Error('validation error not announced');
+
+    const contrastOk = await evaluate(`(() => {
+      const lum = rgb => { const [r, g, b] = rgb.match(/\\d+/g).slice(0, 3).map(n => { const c = n / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const ratio = (a, b) => { const l1 = lum(a), l2 = lum(b); return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05); };
+      const bodyStyle = getComputedStyle(document.body);
+      const btn = document.querySelector('.btn-primary');
+      const btnStyle = getComputedStyle(btn);
+      return ratio(bodyStyle.color, bodyStyle.backgroundColor) >= 4.5 && ratio(btnStyle.color, btnStyle.backgroundColor) >= 4.5;
+    })()`);
+    if (!contrastOk) throw new Error('contrast ratio below 4.5:1 on body or .btn-primary');
+
+    for (const width of [640, 320]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 2, mobile: width < 640 });
+      await evaluate("document.documentElement.style.setProperty('line-height', '1.5'); document.documentElement.style.setProperty('letter-spacing', '0.12em'); document.documentElement.style.setProperty('word-spacing', '0.16em');");
+      await new Promise(resolve => setTimeout(resolve, 60));
+      const zoomOverflow = await evaluate('document.documentElement.scrollWidth - window.innerWidth');
+      await evaluate("document.documentElement.style.removeProperty('line-height'); document.documentElement.style.removeProperty('letter-spacing'); document.documentElement.style.removeProperty('word-spacing');");
+      if (zoomOverflow > 0) throw new Error('200% zoom / text-spacing overflow at ' + width + 'px: ' + zoomOverflow);
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  });
 
 } finally {
   socket.close();

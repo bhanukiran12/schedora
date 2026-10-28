@@ -39,6 +39,7 @@ const MEET_TABS = new Set(NAVIGATION.meet.flatMap(([, items]) => items.map(([key
 
 // The sidebar item for the current page, or null.
 export function currentSection(product, path, query) {
+  if (path === '/setup' || path.startsWith('/setup/')) return 'setup';
   if (path === '/account') return 'account';
   if (path === '/billing') return 'billing';
   if (path === '/enquiries') return 'enquiries';
@@ -54,6 +55,7 @@ export function currentSection(product, path, query) {
 }
 
 export function sectionLabel(product, key) {
+  if (key === 'setup') return 'Guided setup';
   if (key === 'account') return 'Account & settings';
   if (key === 'billing') return 'Plans & billing';
   for (const [, items] of NAVIGATION[product] || []) for (const [id, label] of items) if (id === key) return label;

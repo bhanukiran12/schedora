@@ -14,12 +14,13 @@ const plural = (n, [one, many]) => `${n} ${n === 1 ? one : many}`;
 
 export async function enquiries(ctx) {
   setTitle('Enquiries · Schedora');
-  if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'suite', title: 'Sign in to see enquiries', lead: 'Enquiries belong to your workspace.' }));
+  const product = ctx.product || 'suite';
+  if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product, title: 'Sign in to see enquiries', lead: 'Enquiries belong to your workspace.' }));
   if (!needsSession(ctx)) return;
   const filter = FILTERS.some(([key]) => key === ctx.query.get('show')) ? ctx.query.get('show') : 'all';
   const origin = ['response', 'booking'].includes(ctx.query.get('from')) ? ctx.query.get('from') : 'any';
   mount(ctx.main, html`<div class="container page enquiries">
-    <span class="tag">Meet · Forms · Flow</span><h1>Enquiries</h1>
+    <span class="tag">${product === 'suite' ? 'Meet · Forms · Flow' : `${product[0].toUpperCase() + product.slice(1)} · Enquiries`}</span><h1>Enquiries</h1>
     <p class="lead">Each form response and booking, with what happened next: the booking, any follow-up, and anything that needs attention.</p>
     <div id="enquiries-body">${loading('Loading responses, bookings and follow-ups…')}</div></div>`);
 

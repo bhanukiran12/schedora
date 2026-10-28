@@ -42,7 +42,7 @@ async function flowsTab(ctx, panel) {
   if (!flows.length) return mount(panel, html`<div class="empty flow-empty"><h2>No flows yet</h2><p>A flow connects one trigger to one action: when an appointment is booked or a form is submitted, send an email or create a task.</p>
     ${isAdmin() ? html`<p class="flow-empty-lead">Start from an outcome. Each opens as an unsaved draft you can edit; nothing runs until you enable it.</p>
       <ul class="flow-starter-links">${FLOW_STARTERS.map(starter => html`<li><a href="/flow/new?starter=${starter.id}"><strong>${starter.name}</strong><span>${starter.description}</span></a></li>`)}</ul>
-      <a class="btn" href="/flow/new">Start from scratch</a>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
+      <div class="row"><a class="btn" href="/flow/new">Start from scratch</a><a class="btn" href="/setup/flow">Guided setup</a></div>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
   mount(panel, html`<ul class="list">${flows.map(flow => html`<li class="row-between"><div>
       <div class="list-title">${flow.name}</div>
       <div class="meta"><span>${TRIGGERS[flow.trigger_type]} → ${ACTIONS[flow.action_type]}</span><span>${flow.run_count} runs</span>${flow.failed_count ? html`<a href="/flow/runs">${flow.failed_count} failed</a>` : ''}</div></div>

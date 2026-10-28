@@ -35,16 +35,17 @@ export function renderShell({ product, current, links, onWorkspaceChange }) {
     <nav class="side-nav" aria-label="${PRODUCT_INFO[product].name}">${groups.map(([title, items], index) => html`<h2 class="side-group" id="side-group-${index}">${title}</h2><ul aria-labelledby="side-group-${index}">${items.map(entry => item(entry, current))}</ul>`)}</nav>
     <div class="side-bottom">
       <nav aria-label="Account"><ul>
+        ${item(['setup', 'Guided setup', product === 'suite' ? '/setup' : `/setup/${product}`, 'Sparkles'], current)}
         ${item(['account', 'Account & settings', '/account', 'Settings'], current)}
         ${isAdmin() ? item(['billing', 'Plans & billing', '/billing', 'BriefcaseBusiness'], current) : ''}
       </ul></nav>
-      <details class="side-switch"><summary>Other Schedora products</summary>
+      <details class="side-switch" ${product === 'suite' ? raw('hidden') : ''}><summary>Other Schedora products</summary>
         <ul>${others.map(key => html`<li><a href="${links.home[key]}">${lockup(key)}<small>${SWITCH_TEXT[key]}</small></a></li>`)}</ul>
         <p class="hint">Same account and workspace. Access depends on your workspace plan.</p></details>
       <p class="side-person">${icon('CircleUserRound')}<span><strong>${session.user.name}</strong><small>${session.user.email}</small></span></p>
     </div>`);
   mount(topbar, html`<button class="btn btn-small" type="button" id="side-open" aria-expanded="false" aria-controls="app-sidebar">Menu</button>
-    <a class="side-brand" href="${PRODUCT_INFO[product].dashboard}">${lockup(product)}</a><span class="topbar-section" aria-hidden="true">${sectionLabel(product, current)}</span>`);
+    <a class="side-brand" href="${PRODUCT_INFO[product].dashboard}" aria-label="${PRODUCT_INFO[product].name}${product === 'suite' ? '' : ' by Schedora'}, home">${lockup(product)}</a><span class="topbar-section" aria-hidden="true">${sectionLabel(product, current)}</span>`);
   bindDrawer();
   $('#side-workspace-select')?.addEventListener('change', event => { selectWorkspace(event.target.value); onWorkspaceChange(); });
 }

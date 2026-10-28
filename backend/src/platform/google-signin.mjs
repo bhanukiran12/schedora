@@ -14,7 +14,7 @@ export const googleLoginEnabled = app => Boolean(googleLoginSettings(app)?.clien
 export const googleLoginRedirect = app => `${app.config.baseUrl}/api/auth/google/callback`;
 const cookieScope = app => `${app.config.production ? '; Secure' : ''}${app.config.cookieDomain ? '; Domain=' + app.config.cookieDomain : ''}`;
 export const clearGoogleLoginCookie = app => `${FLOW_COOKIE}=; Path=/api/auth/google; HttpOnly; SameSite=Lax; Max-Age=0${cookieScope(app)}`;
-const NEXT_PATH = /^\/(meet|forms|flow|account|billing|enquiries)(?:[/?#]|$)/;
+const NEXT_PATH = /^\/(meet|forms|flow|account|billing|enquiries|setup)(?:[/?#]|$)/;
 // Where to return after Google: a same-host app path, or an absolute https address on the product
 // domain or its meet./forms./flow. hosts (so sign-in keeps the product the person started from).
 export function safeGoogleNext(next, productDomain = 'schedora.in') {

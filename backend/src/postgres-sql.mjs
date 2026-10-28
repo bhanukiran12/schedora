@@ -24,6 +24,8 @@ export const MONITORING_TABLES = ['monitor_alerts'];
 // Migration 009 (email delivery reports): the event table is created by the postgres_v8 upgrade;
 // the columns and index are in the base schema for new databases and added here for existing ones.
 export const EMAIL_REPORT_TABLES = ['email_provider_events'];
+// Table of migration 012 (live workspace onboarding), created by the postgres_v11 upgrade.
+export const ONBOARDING_TABLES = ['workspace_onboarding'];
 // Indexes of migration 010 (enquiry feed); new databases get them from the base schema.
 export const ENQUIRY_FEED_INDEXES = [
   'CREATE INDEX IF NOT EXISTS responses_workspace_arrival ON responses(workspace_id, created_at, id)',

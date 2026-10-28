@@ -1,5 +1,5 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
-import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, postgresSchema, postgresUpgrade, TASK_ASSIGNEE_INDEXES, VIDEO_TABLES } from './postgres-sql.mjs';
+import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, ONBOARDING_TABLES, postgresSchema, postgresUpgrade, TASK_ASSIGNEE_INDEXES, VIDEO_TABLES } from './postgres-sql.mjs';
 import { openDatabase } from './db.mjs';
 
 export function openPostgres(connectionString, { ca, schemaName = 'schedora' } = {}) {
@@ -12,7 +12,7 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
     const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
     // Tables added after the first PostgreSQL release are created by versioned upgrade steps, the
     // same way for new and existing databases.
-    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES, ...MONITORING_TABLES, ...EMAIL_REPORT_TABLES];
+    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES, ...MONITORING_TABLES, ...EMAIL_REPORT_TABLES, ...ONBOARDING_TABLES];
     schema = postgresSchema(tables.filter(table => !later.includes(table.name)), indexes.filter(index => !later.includes(index.tbl_name)));
     upgrades = [{ name: 'postgres_v4_meet_video', statements: postgresUpgrade(tables.filter(table => VIDEO_TABLES.includes(table.name)), indexes.filter(index => VIDEO_TABLES.includes(index.tbl_name)), [
       "CREATE FUNCTION credit_ledger_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'credit_ledger_immutable'; END $$",
@@ -24,7 +24,8 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
       { name: 'postgres_v8_email_delivery_reports', statements: [...EMAIL_REPORT_COLUMNS,
         ...postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)))] },
       { name: 'postgres_v9_enquiry_feed', statements: ENQUIRY_FEED_INDEXES },
-      { name: 'postgres_v10_task_deadlines', statements: TASK_ASSIGNEE_INDEXES }];
+      { name: 'postgres_v10_task_deadlines', statements: TASK_ASSIGNEE_INDEXES },
+      { name: 'postgres_v11_live_onboarding', statements: postgresUpgrade(tables.filter(table => ONBOARDING_TABLES.includes(table.name)), indexes.filter(index => ONBOARDING_TABLES.includes(index.tbl_name))) }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

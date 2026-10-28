@@ -77,3 +77,26 @@ Verification: local unit/API suite 207 total, 203 pass, four opt-in PostgreSQL s
 Reviewed desktop sidebar/editor and phone authentication/account/setup screenshots. The first test attempt used outdated tab selectors and consequently lost its workspace fixture; that run failed. Updated navigation assertions to the implemented drawer contract; the subsequent full run passed. Screenshots are kept outside Git in the ChatGPT workspace under outputs/product-shell-*. Google mark source: https://developers.google.com/static/identity/images/g-logo.png; branding guidance: https://developers.google.com/identity/branding-guidelines .
 
 Main was b46e943 at fetch. This branch also contains Claude's previously committed task-deadline/assignee increment 2a4ea83, which the full-tree tests include. No production setting, video gate, price, credential, payment or migration is added by the shell redesign. Push/review the branch before merging to production.
+
+## Persisted live onboarding, product-shell defect fixes & accessibility verification — 28 October
+
+1. **Product-shell review and visual/behavioural defect fixes:**
+   - Fixed product accent tokens in `frontend/design.css` so Forms (`#6941d9`) and Flow (`#b64d18`) keep their product colours across `/start` onboarding outcomes and marketing views instead of falling back to Meet green.
+   - Fixed `.ds-setup-body > aside .ds-connected` so `Your workspace` and `Northstar Studio` render on separate lines instead of running together.
+   - Adjusted phone header navigation spacing in `frontend/app.css` so `Features · How it works · Try the demo · Plans` fit on a single row at `375px` width.
+   - Fixed `consentBanner` in `frontend/app.js` so dismissing the initial cookie banner focuses `#main` (`preventScroll: true`) instead of scrolling the viewport to `#cookie-settings` in the footer.
+   - Removed the non-functional decorative notification bell button from `.ds-appbar` in `frontend/js/studio.mjs`, wired `id="demo-sidebar"` and keyboard `Escape` focus restoration for the mobile demo menu, and preserved product context on signed-out `/enquiries` and `/billing`.
+   - Hid the redundant `Other Schedora products` switcher on Suite pages (`product === 'suite'`), where `Meet`, `Forms` and `Flow` are already listed in the primary sidebar navigation, and added `Guided setup` (`/setup` or `/setup/<product>`) to `.side-bottom`.
+
+2. **Persisted LIVE workspace onboarding (`/setup`, `/setup/meet`, `/setup/forms`, `/setup/flow`):**
+   - Added `012_live_onboarding.sql` (`workspace_onboarding` table) and PostgreSQL upgrade `postgres_v11_live_onboarding` (`backend/src/postgres-sql.mjs`, `backend/src/postgres.mjs`).
+   - Added `GET /api/workspaces/:ws/onboarding` and `PATCH /api/workspaces/:ws/onboarding` (`backend/src/onboarding.mjs`) and `frontend/js/onboarding.mjs`.
+   - Separate and explicitly labelled from browser-local demo setup (`/start`). Progress is persisted in the workspace database across browser refreshes and sign-ins.
+   - Suite users can choose which products (`meet`, `forms`, `flow`) to set up without purchasing a plan or changing entitlements.
+   - Supports skipping the optional Meet calendar step (`meet_calendar_skipped: true`), which is explicitly labelled `Skipped · not verified` and never reported as a connected or verified calendar.
+   - Saves real working hours (`PUT /schedule`), unpublished draft event types (`POST / PATCH /event-types`), unpublished draft forms (`POST / PATCH /forms`) and disabled draft workflows (`POST / PATCH /flows`), plus safe workflow simulations (`POST /flows/:id/simulate`).
+   - Readiness in `/setup` is computed strictly from actual saved records (`assessReadiness`, `assessFormReadiness`, server `checkFormPublish`, and saved flow status). Deleting a record immediately updates onboarding readiness. Live onboarding never auto-publishes event types or forms, never auto-enables flows, and never grants entitlements.
+
+3. **Independent accessibility checks:**
+   - Verified automatically in `backend/scripts/browser-check.mjs`: mobile drawer focus trap (`Tab` and `Shift+Tab` wrap inside `#app-sidebar`, background is `inert`, `Escape` closes and restores focus to `#side-open`), explicit form control labels, `role="alert"` error announcements on invalid submit, WCAG AA contrast ratios (>= 4.5:1), and 200% zoom / text-spacing reflow at `640px` and `320px` with zero horizontal overflow across 696 layout checks (`320/375/768/1280` px).
+   - **Still requires human / assistive-technology testing:** real screen-reader traversal and live-region announcement timing with NVDA (Windows), VoiceOver (macOS/iOS) and TalkBack (Android), hardware switch/voice control, and moderated human usability sessions.

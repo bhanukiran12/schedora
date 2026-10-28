@@ -158,8 +158,9 @@ export async function billing(ctx) {
     </tbody></table></div>
     <p class="muted">Prices will be shown once they are approved. Our goal is a lower price than comparable paid plans elsewhere, measured against the same features and usage, without cutting reliability or privacy.</p>`;
   if (!session.user || !workspace()) {
-    return mount(ctx.main, html`<div class="container page"><span class="tag">Plans</span><h1>One account. Your choice of tools.</h1><p class="lead">Subscribe to one product or to the Suite for all three. One workspace, one bill.</p>${comparison}
-      <div class="actions"><a class="btn btn-primary" href="/account?mode=signup&next=/billing">Create an account</a></div></div>`);
+    const product = ctx.product || 'suite'; const info = PRODUCT_INFO[product] || PRODUCT_INFO.suite;
+    return mount(ctx.main, html`<div class="container page"><span class="tag">${product === 'suite' ? 'Plans' : `${info.name} · Plans`}</span><h1>One account. Your choice of tools.</h1><p class="lead">Subscribe to one product or to the Suite for all three. One workspace, one bill.</p>${comparison}
+      <div class="actions"><a class="btn btn-primary" href="/account?mode=signup${product !== 'suite' ? '&product=' + product : ''}&next=/billing">Create an account</a></div></div>`);
   }
   mount(ctx.main, html`<div class="container page">${loading()}</div>`);
   let data;

@@ -13,7 +13,7 @@ const APP_ROUTES = {
   flow: new RegExp(`^/flow(?:/(?:runs|tasks|new|${UUID}))?$`)
 };
 // Shared signed-in pages: they take the context of the host (Suite on the apex domain).
-const SHARED_APP = /^\/(account|billing|enquiries)$/;
+const SHARED_APP = /^\/(account|billing|enquiries|setup(?:\/(meet|forms|flow))?)$/;
 // Pages anyone may open from a link. They keep their own identity and are never redirected.
 const PUBLIC = [/^\/meet\/(manage|pay|room|join|poll)\//, /^\/(?:embed\/)?meet\/[a-z0-9-]{2,60}\/[a-z0-9-]{2,60}$/, /^\/meet\/[a-z0-9-]{2,60}$/, /^\/recap\//, /^\/f\//];
 
@@ -32,7 +32,7 @@ export function routeProduct(path) {
   if (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap')) return 'meet';
   if (path.startsWith('/forms') || path.startsWith('/f/')) return 'forms';
   if (path.startsWith('/flow')) return 'flow';
-  const demo = /^\/(?:demo|start)\/(meet|forms|flow)(?:\/|$)/.exec(path)?.[1];
+  const demo = /^\/(?:demo|start|setup)\/(meet|forms|flow)(?:\/|$)/.exec(path)?.[1];
   return demo || 'suite';
 }
 

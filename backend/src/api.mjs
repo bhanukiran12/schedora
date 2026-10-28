@@ -14,6 +14,7 @@ import { videoHealth } from './video/rooms.mjs';
 import { alertChannels, firingAlerts } from './platform/monitoring.mjs';
 import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
 import { listEnquiries } from './enquiries.mjs';
+import { getOnboarding, updateOnboarding } from './onboarding.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
 import { handleMcp } from './platform/mcp.mjs';
@@ -116,6 +117,8 @@ export function createApi(app) {
   // ---- Workspaces ----
   post('/api/workspaces', async ctx => ({ status: 201, body: { id: createWorkspace(app, ctx.user, await ctx.json()), workspaces: listWorkspaces(app, ctx.user.id) } }));
   get('/api/workspaces/:ws', ctx => { const { workspace, role } = member(ctx, 'workspace.read'); return { ...workspace, role, entitlements: entitlementsFor(app, workspace.id) }; });
+  get('/api/workspaces/:ws/onboarding', ctx => getOnboarding(app, member(ctx, 'workspace.read')));
+  patch('/api/workspaces/:ws/onboarding', async ctx => updateOnboarding(app, member(ctx, 'workspace.read'), await ctx.json()));
   patch('/api/workspaces/:ws', async ctx => {
     const actor = member(ctx, 'workspace.update');
     const body = await ctx.json(400 * 1024);

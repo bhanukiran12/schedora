@@ -11,6 +11,7 @@ import { productLanding } from './js/product-landing.mjs';
 import { pricingProposal } from './js/pricing-proposal-page.mjs';
 import { enquiries } from './js/enquiries.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
+import { liveOnboarding } from './js/onboarding.mjs';
 const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
 
 import { canonicalRedirect, contextFor, hostInfo, isAppRoute, productUrl, landingUrl, safeReturnPath } from './js/context.mjs';
@@ -22,6 +23,7 @@ const routes = [
   [/^\/$/, ecosystemHome],
   [/^\/demo(?:\/.*)?$/, previewView('studio')],
   [/^\/start(?:\/.*)?$/, previewView('onboarding')],
+  [/^\/setup(?:\/(meet|forms|flow))?$/, liveOnboarding],
   [/^\/products\/(meet|forms|flow)$/, productLanding],
   [/^\/meet$/, meet.dashboard],
   [new RegExp(`^/meet/event-types/(new|${UUID.slice(1, -1)})$`), meet.editor],
@@ -55,7 +57,7 @@ const PRODUCTS = {
   forms: { name: 'Forms', logo: '/logo-forms.png' },
   flow: { name: 'Flow', logo: '/logo-flow.png' }
 };
-export const productFor = path => /^\/products\/(meet|forms|flow)$/.exec(path)?.[1] || (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite');
+export const productFor = path => /^\/(?:products|setup)\/(meet|forms|flow)$/.exec(path)?.[1] || (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap') ? 'meet' : path.startsWith('/forms') || path.startsWith('/f/') ? 'forms' : path.startsWith('/flow') ? 'flow' : 'suite');
 export const lockup = (key, large = false) => html`<span class="lockup ${large ? 'lockup-lg' : ''}"><img src="${PRODUCTS[key].logo}" alt="" width="28" height="28"><span class="lockup-name">${PRODUCTS[key].name}${key === 'suite' ? '' : html`<small>by Schedora</small>`}</span></span>`;
 
 // ---- Theme ----
@@ -103,7 +105,7 @@ function consentBanner(focus) {
   panel.querySelectorAll('[data-choice]').forEach(button => button.onclick = () => {
     storage.set(CONSENT_KEY, JSON.stringify({ choice: button.dataset.choice, time: Date.now() }));
     panel.remove();
-    $('#cookie-settings')?.focus();
+    if (focus) $('#cookie-settings')?.focus(); else $('#main')?.focus({ preventScroll: true });
     countPage();
   });
   document.body.append(panel);
@@ -117,7 +119,7 @@ function countPage() {
 // ---- Router ----
 let renderToken = 0;
 export function navigate(path, { replace = false } = {}) {
-  if (!hostInfo(location.hostname, boot.productDomain).product && boot.context && boot.context !== 'suite' && /^\/(account|start|demo)(?:[/?#]|$)/.test(path) && !/^\/demo\/(meet|forms|flow)/.test(path)) {
+  if (!hostInfo(location.hostname, boot.productDomain).product && boot.context && boot.context !== 'suite' && /^\/(account|start|setup|demo)(?:[/?#]|$)/.test(path) && !/^\/(?:demo|setup)\/(meet|forms|flow)/.test(path)) {
     const target = new URL(path, location.origin); if (!target.searchParams.has('product')) target.searchParams.set('product', boot.context); path = target.pathname + target.search + target.hash;
   }
   if (replace) history.replaceState(null, '', path); else history.pushState(null, '', path);

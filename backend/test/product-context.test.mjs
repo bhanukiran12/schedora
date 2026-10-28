@@ -15,6 +15,10 @@ test('the host fixes the product for workspace, account and demo pages', () => {
   assert.equal(contextFor('localhost', '/account', D), 'suite');
   assert.equal(contextFor('schedora.in', '/meet', D), 'meet', 'routes still name a product on the apex domain');
   assert.equal(contextFor('localhost', '/demo/forms', D), 'forms');
+  assert.equal(contextFor('localhost', '/setup', D), 'suite');
+  assert.equal(contextFor('localhost', '/setup/forms', D), 'forms');
+  assert.equal(contextFor('meet.schedora.in', '/setup', D), 'meet');
+  assert.ok(isAppRoute('/setup') && isAppRoute('/setup/meet') && isAppRoute('/setup/forms') && isAppRoute('/setup/flow'));
   assert.equal(contextFor('www.schedora.in', '/account', D), 'suite', 'unknown subdomains are not product hosts');
   assert.equal(contextFor('meet.localhost', '/flow/runs', D), 'flow', 'another product workspace page keeps its own product where hosts do not redirect');
   assert.deepEqual(hostInfo('evil-meet.schedora.in.example', D), { base: null, product: null, production: false });

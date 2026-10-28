@@ -151,6 +151,19 @@ test('PostgreSQL upgrade for the enquiry feed adds exactly the base-schema index
   assert.equal(ENQUIRY_FEED_INDEXES.length, 4);
 });
 
+test('PostgreSQL upgrade for live workspace onboarding creates workspace_onboarding with portable SQL', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { postgresUpgrade, ONBOARDING_TABLES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const tables = template.all("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
+  template.close();
+  const statements = postgresUpgrade(tables.filter(table => ONBOARDING_TABLES.includes(table.name)), indexes.filter(index => ONBOARDING_TABLES.includes(index.tbl_name)));
+  assert.deepEqual(statements.filter(sql => /^CREATE TABLE/.test(sql)).map(sql => sql.match(/^CREATE TABLE (\w+)/)[1]), ['workspace_onboarding']);
+  assert.ok(statements.every(sql => !/\bINTEGER\b|users_email_lower/.test(sql)));
+  assert.ok(statements.some(sql => /ALTER TABLE "workspace_onboarding" ADD FOREIGN KEY \(meet_event_type_id\) REFERENCES event_types\(id\) ON DELETE SET NULL/.test(sql)));
+});
+
 test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const { reconcileWallet } = await import('../src/video/credits.mjs');
   const config = loadConfig();

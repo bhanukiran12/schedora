@@ -330,7 +330,7 @@ export async function dashboard(ctx) {
         <div class="meta"><span>${form.response_count} ${form.response_count === 1 ? 'response' : 'responses'}</span><span>Updated ${fmtDateTime(form.updated_at)}</span>${form.published_version && form.has_unpublished_changes ? html`<span>Unpublished changes</span>` : ''}</div></div>
       <div class="row">${form.published_version ? badge('published', 'Live · v' + form.published_version) : badge('draft', 'Not published')}
         <a class="btn btn-small" href="/forms/${form.id}">Edit</a><a class="btn btn-small" href="/forms/${form.id}/responses">Responses</a></div></li>`)}</ul>`
-      : html`<div class="empty"><h2>No forms yet</h2><p>Pick a starting point above, or start blank. You can change every question later.</p></div>`);
+      : html`<div class="empty"><h2>No forms yet</h2><p>Pick a starting point above, or start blank. You can change every question later.</p><div class="actions"><a class="btn" href="/setup/forms">Guided setup</a></div></div>`);
     if (!forms.length) showPicker(true, false);
   } catch (error) { mount($('#form-list'), errorBlock(error)); }
 }

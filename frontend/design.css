@@ -6,8 +6,8 @@ body[data-design="marketing"], body[data-design="workspace"], body[data-design="
   --meet-tint: #eaf4ec; --forms-tint: #f1edfc; --flow-tint: #fff1e7; --on-accent: #fff;
   --accent: var(--meet); --accent-tint: var(--meet-tint); font-size: 14px; font-family: 'Inter', system-ui, sans-serif;
 }
-body[data-design="workspace"][data-product="forms"] { --accent: var(--forms); --accent-tint: var(--forms-tint); }
-body[data-design="workspace"][data-product="flow"] { --accent: var(--flow); --accent-tint: var(--flow-tint); }
+body[data-product="forms"] { --accent: var(--forms); --accent-tint: var(--forms-tint); }
+body[data-product="flow"] { --accent: var(--flow); --accent-tint: var(--flow-tint); }
 body[data-design="workspace"] > .site-header, body[data-design="workspace"] > .site-footer,
 body[data-design="onboarding"] > .site-header, body[data-design="onboarding"] > .site-footer { display: none; }
 body[data-design="marketing"] .header-inner, body[data-design="marketing"] .footer-inner { max-width: 1296px; }
@@ -253,8 +253,10 @@ body[data-design="marketing"] .lockup-name { font-size: 20px; font-weight: 550; 
 .ds-setup-body > aside nav a { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--muted); font-size: 12px; min-height: 44px; }
 .ds-setup-body > aside nav [aria-current="step"] { color: var(--ink); font-weight: 600; }
 .ds-step-number { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: var(--surface); font-size: 11px; flex: 0 0 26px; }
-.ds-step-number.done { background: var(--meet-tint); color: var(--meet); }
+.ds-step-number.done { background: var(--accent-tint); color: var(--accent); }
 .ds-step-number .ds-icon { margin: 0; }
+.ds-setup-body > aside .ds-connected small, .ds-setup-body > aside .ds-connected strong { display: block; }
+.ds-setup-body > aside .ds-connected strong { margin-top: 2px; font-size: 14px; }
 .ds-setup-body > section { min-width: 0; }
 .ds-setup h1 { font-size: clamp(28px, 3vw, 36px); line-height: 1.25; }
 .ds-setup-body > section > p:not(.ds-eyebrow) { color: var(--muted); margin-bottom: 24px; }

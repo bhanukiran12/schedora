@@ -96,7 +96,7 @@ async function eventTypesTab(ctx, panel) {
       ${type.published && !type.managed_template ? html`<button class="btn btn-small" data-copy="${bookingUrl(type)}">Copy link</button>` : ''}
       <a class="btn btn-small" href="/meet/event-types/${type.id}">Edit</a></div></li>`;
   mount(panel, html`<div class="row"><a class="btn btn-small" href="/meet/event-types/new?one_off=1">New one-off link</a>${isAdmin() ? html`<a class="btn btn-small" href="/meet/event-types/new?kind=round_robin">New team event</a><a class="btn btn-small" href="/meet/event-types/new?template=1">New managed template</a>` : ''}</div>
-    ${regular.length ? html`<ul class="list section-gap">${regular.map(item)}</ul>` : html`<div class="empty section-gap"><h2>Create your first event type</h2><p>An event type is a kind of meeting people can book, such as a 30-minute introduction call.</p><a class="btn btn-primary" href="/meet/event-types/new">New event type</a></div>`}
+    ${regular.length ? html`<ul class="list section-gap">${regular.map(item)}</ul>` : html`<div class="empty section-gap"><h2>Create your first event type</h2><p>An event type is a kind of meeting people can book, such as a 30-minute introduction call.</p><div class="actions"><a class="btn btn-primary" href="/meet/event-types/new">New event type</a><a class="btn" href="/setup/meet">Guided setup</a></div></div>`}
     ${templates.length ? html`<h2 class="section-gap">Managed templates</h2><ul class="list">${templates.map(item)}</ul>` : ''}`);
   $$('[data-copy]', panel).forEach(button => button.onclick = () => copy(button.dataset.copy, 'Booking link'));
 }
