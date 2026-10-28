@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadVideoConfig, publicVideoConfig } from './video/config.mjs';
+import { validWebhookSecret } from './platform/email-events.mjs';
 
 // All configuration comes from the server environment. No secret is ever sent to the browser.
 export function loadConfig(env = process.env, overrides = {}) {
@@ -48,6 +49,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     emailHttpUrl: env.EMAIL_HTTP_URL || '',
     emailHttpToken: env.EMAIL_HTTP_TOKEN || '',
     emailFrom: env.EMAIL_FROM || `Schedora <no-reply@${productDomain}>`,
+    // Signing secret (whsec_...) of the provider's delivery-report webhook; empty means reports are not connected.
+    emailWebhookSecret: env.EMAIL_WEBHOOK_SECRET || '',
     smsProvider: env.SMS_PROVIDER || 'outbox',
     twilioAccountSid: env.TWILIO_ACCOUNT_SID || '',
     twilioAuthToken: env.TWILIO_AUTH_TOKEN || '',
@@ -87,6 +90,7 @@ export function loadConfig(env = process.env, overrides = {}) {
   if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
   if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
+  if (config.emailWebhookSecret && !validWebhookSecret(config.emailWebhookSecret)) throw new Error('EMAIL_WEBHOOK_SECRET must be the provider\'s whsec_ signing secret.');
   if (config.alerts.webhookUrl) {
     let url;
     try { url = new URL(config.alerts.webhookUrl); } catch { throw new Error('ALERT_WEBHOOK_URL must be a URL.'); }
@@ -109,7 +113,7 @@ export function publicConfig(config) {
     googleSignIn: Boolean((config.googleSignIn?.clientId ? config.googleSignIn.clientId && config.googleSignIn.clientSecret : config.google.clientId && config.google.clientSecret) && (!config.production || config.encryptionKey)),
     billingMode: config.billingMode,
     operator: config.operator,
-    providers: { email: config.emailProvider, sms: config.smsProvider, calendar: 'ICS feed', billing: config.billingProvider },
+    providers: { email: config.emailProvider, email_reports: config.emailProvider === 'http' && Boolean(config.emailWebhookSecret), sms: config.smsProvider, calendar: 'ICS feed', billing: config.billingProvider },
     integrations: {
       google: Boolean(config.google.clientId), microsoft: Boolean(config.microsoft.clientId), zoom: Boolean(config.zoom.clientId),
       ai: Boolean(config.anthropicApiKey), testPayments: !config.production || config.allowTestPayments

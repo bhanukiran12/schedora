@@ -41,6 +41,7 @@ function runStep(run, tasks) {
   }
   if (run.result?.email) {
     const evidence = emailEvidence(run);
+    if (evidence.problem) return { ...base, state: 'attention', reason: 'email_undelivered', attention: `Email not delivered (${run.flow_name})`, text: `Email: ${evidence.text}` };
     return { ...base, state: evidence.verified ? 'done' : 'unknown', text: `Email: ${evidence.text}` };
   }
   return { ...base, state: 'done', text: 'Completed.' };
@@ -87,7 +88,7 @@ const overall = trail => trail.attention.length ? 'attention' : trail.steps.some
   : trail.steps.some(step => step.state === 'unknown') ? 'unknown' : 'done';
 
 export const REASON_LABELS = {
-  followup_failed: ['follow-up failed', 'follow-ups failed'], followup_retrying: ['follow-up retrying', 'follow-ups retrying'], task_open: ['open task', 'open tasks'],
+  followup_failed: ['follow-up failed', 'follow-ups failed'], followup_retrying: ['follow-up retrying', 'follow-ups retrying'], email_undelivered: ['undelivered email', 'undelivered emails'], task_open: ['open task', 'open tasks'],
   booking_canceled: ['booking canceled', 'bookings canceled'], booking_unavailable: ['booking could not be offered', 'bookings could not be offered'],
   offer_expired: ['booking offer expired unused', 'booking offers expired unused']
 };

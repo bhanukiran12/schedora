@@ -181,6 +181,10 @@ try {
     await open('/meet?tab=meetings', "document.querySelector('#tab-panel .list, #tab-panel .empty')");
     if (!(await text()).includes('Ravi Invitee')) throw new Error('booking not listed');
     await open('/meet?tab=emails', "document.querySelector('table')");
+    // Local outbox, provider acceptance and mail-server delivery are named separately; nothing claims an inbox.
+    if (!(await text()).includes('This server uses the local outbox: messages are recorded here and never sent.')) throw new Error('delivery levels not explained');
+    if (!(await evaluate("document.querySelector('table').innerText.includes('Recorded in the local outbox; not delivered to an inbox.')"))) throw new Error('sent outbox email shown without its transport');
+    if (await evaluate("/Delivered to the recipient|Accepted by the email provider/.test(document.querySelector('table').innerText)")) throw new Error('outbox email described as provider-accepted or delivered');
     await layoutCheck('email delivery');
   });
   await step('Meet readiness: saved-state summary, unsaved edits, fix links; preview and copy change nothing', async () => {

@@ -31,6 +31,7 @@ export function applyRetention(app) {
     app.db.run('DELETE FROM sessions WHERE expires_at < ?', now);
     app.db.run('DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM webhook_deliveries WHERE status IN ('delivered', 'failed') AND created_at < ?", now - 30 * DAY);
+    app.db.run('DELETE FROM email_provider_events WHERE received_at < ?', now - 30 * DAY);
     // Video: provider event and operation records are kept 30 days; participant names follow workspace retention.
     app.db.run('DELETE FROM video_provider_events WHERE processed_at IS NOT NULL AND processed_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM video_provider_ops WHERE status = 'done' AND updated_at < ?", now - 30 * DAY);

@@ -125,7 +125,7 @@ test('run email evidence survives provider changes, legacy records and a crash w
     await book(0);
     await env.app.worker.tick();
     let [first] = (await host.get(path)).body;
-    assert.deepEqual(first.email_delivery, { status: 'sent', transport: 'outbox', accepted_at: env.clock.now });
+    assert.deepEqual(first.email_delivery, { status: 'sent', transport: 'outbox', accepted_at: env.clock.now, report: null });
     const sent = env.sent.length;
     // A configuration change between a successful email hand-off and a crashed run's recovery
     // must preserve the original evidence and must not send again.

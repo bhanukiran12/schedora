@@ -68,7 +68,7 @@ export function registerMeetRoutes(app, router, { member, limit }) {
 
   get(ws('/emails'), ctx => {
     const actor = member(ctx, 'emails.read');
-    return app.db.all(`SELECT id, kind, channel, to_address, subject, status, attempts, last_error, created_at, sent_at, next_attempt_at FROM emails WHERE workspace_id = ?
+    return app.db.all(`SELECT id, kind, channel, to_address, subject, status, attempts, last_error, created_at, sent_at, next_attempt_at, accepted_transport, delivery_status, delivery_event_at FROM emails WHERE workspace_id = ?
       ORDER BY created_at DESC LIMIT 100`, actor.workspace.id);
   });
   post(ws('/emails/test'), async ctx => {

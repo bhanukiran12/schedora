@@ -18,6 +18,7 @@ const count = (app, sql, ...params) => Number(app.db.get(sql, ...params).count);
 export const CHECKS = [
   { code: 'worker_error', summary: 'The background worker\'s last pass failed', value: app => app.worker?.state.lastError ? 1 : 0 },
   { code: 'email_failed', summary: 'Emails created in the last 24 hours failed permanently', value: app => count(app, "SELECT COUNT(*) AS count FROM emails WHERE status = 'failed' AND created_at > ?", app.now() - DAY) },
+  { code: 'email_undelivered', summary: 'The email provider reported bounced, failed, suppressed or spam-flagged emails in the last 24 hours', value: app => count(app, "SELECT COUNT(*) AS count FROM emails WHERE delivery_status IN ('bounced', 'provider_failed', 'suppressed', 'complained') AND delivery_event_at > ?", app.now() - DAY) },
   { code: 'email_overdue', summary: 'Emails are waiting more than 15 minutes past their send time', value: app => count(app, "SELECT COUNT(*) AS count FROM emails WHERE status IN ('queued', 'sending') AND next_attempt_at < ?", app.now() - OVERDUE_MS) },
   { code: 'flow_failed', summary: 'Flow runs failed in the last 24 hours', value: app => count(app, "SELECT COUNT(*) AS count FROM flow_runs WHERE status = 'failed' AND updated_at > ?", app.now() - DAY) },
   // Paused flows hold their runs on purpose, so they are not overdue.

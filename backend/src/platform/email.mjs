@@ -122,7 +122,7 @@ export async function deliverDueEmails(app, limit = 25) {
 }
 
 export function emailStatusFor(app, relatedId, kind) {
-  const row = app.db.get('SELECT status, last_error, attempts FROM emails WHERE related_id = ? AND kind = ? ORDER BY created_at DESC LIMIT 1', relatedId, kind);
+  const row = app.db.get('SELECT status, last_error, attempts, accepted_transport, delivery_status FROM emails WHERE related_id = ? AND kind = ? ORDER BY created_at DESC LIMIT 1', relatedId, kind);
   if (!row) return null;
-  return { status: row.status === 'sending' ? 'queued' : row.status, attempts: row.attempts, error: row.status === 'failed' ? row.last_error : null };
+  return { status: row.status === 'sending' ? 'queued' : row.status, attempts: row.attempts, error: row.status === 'failed' ? row.last_error : null, transport: row.accepted_transport, delivery: row.delivery_status };
 }

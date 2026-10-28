@@ -53,7 +53,7 @@ test('run outcomes: failure, retry, paused hold and provider email wording', () 
   const held = buildTrail(row(), context({ runs: [run({ status: 'queued', flow_status: 'paused' })] }));
   assert.deepEqual([held.steps[2].state, held.steps[2].text], ['waiting', 'Held while the flow is paused.']);
   const provider = buildTrail(row(), context({ provider: 'outbox', runs: [run({ result: { email: 'e1' }, email_delivery: { status: 'sent', transport: 'http' } })] }));
-  assert.match(provider.steps[2].text, /Accepted by the email provider; inbox delivery is not tracked/);
+  assert.match(provider.steps[2].text, /Accepted by the email provider; no delivery report yet\. Inbox delivery is not confirmed\./);
   assert.ok(!/delivered\./.test(provider.steps[2].text));
 });
 

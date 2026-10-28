@@ -12,6 +12,7 @@ import { registerMeetRoutes } from './api-meet.mjs';
 import { registerVideoRoutes } from './api-video.mjs';
 import { videoHealth } from './video/rooms.mjs';
 import { alertChannels, firingAlerts } from './platform/monitoring.mjs';
+import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
 import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
 import { handleMcp } from './platform/mcp.mjs';
@@ -185,6 +186,19 @@ export function createApi(app) {
     if (ctx.query.get('ai') === '1') limit(ctx, 'ai', 20);
     return meetingPrep(app, actor.workspace.id, ctx.params.id, ctx.query.get('ai') === '1');
   });
+  // Delivery reports from the email provider, signed with EMAIL_WEBHOOK_SECRET (Svix scheme).
+  post('/api/email/events', async ctx => {
+    const secret = app.config.emailWebhookSecret;
+    if (!secret) fail(404, 'not_found', 'Not found.');
+    const raw = (await ctx.raw(256 * 1024)).toString('utf8');
+    if (!verifySignature(secret, ctx.request.headers, raw, app.now())) fail(401, 'unauthorized', 'Invalid signature.');
+    let result;
+    try { result = recordEmailEvent(app, ctx.request.headers, raw); } catch (error) {
+      if (error instanceof SyntaxError) fail(400, 'validation_failed', 'Invalid JSON.');
+      throw error;
+    }
+    return { result };
+  }, { public: true, csrfExempt: true });
   // Inbound email webhook (from the email provider's inbound parsing), authenticated by a shared secret.
   post('/api/assist/inbound', async ctx => {
     const secret = String(ctx.request.headers['x-inbound-secret'] || '');

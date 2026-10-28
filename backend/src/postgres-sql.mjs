@@ -20,6 +20,15 @@ export const FORMS_V5_TABLES = ['form_handoffs'];
 
 // Table of migration 008 (operator monitoring), created by the postgres_v7 upgrade.
 export const MONITORING_TABLES = ['monitor_alerts'];
+
+// Migration 009 (email delivery reports): the event table is created by the postgres_v8 upgrade;
+// the columns and index are in the base schema for new databases and added here for existing ones.
+export const EMAIL_REPORT_TABLES = ['email_provider_events'];
+export const EMAIL_REPORT_COLUMNS = [
+  "ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_status TEXT CHECK (delivery_status IN ('delayed', 'delivered', 'complained', 'bounced', 'provider_failed', 'suppressed'))",
+  'ALTER TABLE emails ADD COLUMN IF NOT EXISTS delivery_event_at BIGINT',
+  'CREATE INDEX IF NOT EXISTS emails_provider_message ON emails(provider_message_id)'
+];
 export const FORMS_V5_COLUMNS = [
   'ALTER TABLE forms ADD COLUMN IF NOT EXISTS draft_revision BIGINT NOT NULL DEFAULT 1',
   'ALTER TABLE form_versions ADD COLUMN IF NOT EXISTS routing TEXT',

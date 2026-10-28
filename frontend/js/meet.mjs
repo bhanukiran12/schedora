@@ -6,6 +6,7 @@ import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { inputFor, readAnswer } from './forms.mjs';
 import { checkAnswer, FIELD_TYPES } from '/shared/forms-logic.mjs';
 import * as team from './meet-team.mjs';
+import { deliveryEvidence } from './email-evidence.mjs';
 import { videoTab } from './meet-video.mjs';
 import { assessReadiness } from './meet-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
@@ -189,15 +190,16 @@ async function bookForPanel(ctx, types) {
 async function emailsTab(ctx, panel) {
   const emails = await api('GET', wsPath('/emails'));
   if (!ctx.alive()) return;
-  mount(panel, html`${notice('info', html`<p>Every confirmation, reminder, workflow email and SMS is tracked here. A failed message never affects the meeting it belongs to.</p>`)}
+  const reports = boot.providers.email === 'http' ? (boot.providers.email_reports ? 'Delivery reports from the provider are connected.' : 'Delivery reports from the provider are not connected, so acceptance is the last step shown.') : 'This server uses the local outbox: messages are recorded here and never sent.';
+  mount(panel, html`${notice('info', html`<p>Every confirmation, reminder, workflow email and SMS is tracked here. A failed message never affects the meeting it belongs to.</p><p><strong>Accepted</strong> means the email provider took the message. <strong>Delivered</strong> means the recipient's mail server accepted it, as reported by the provider. Schedora cannot see spam-folder placement or whether a message was read. ${reports}</p>`)}
     ${isAdmin() ? html`<form id="delivery-test" class="card"><h2>Check email delivery</h2><p>Send a test message to one of your own inboxes. Each inbox receives at most one test per hour.</p><label for="delivery-target">Test inbox</label><select id="delivery-target" name="target"><option value="account">My Schedora account email</option><option value="google">My connected Google email</option></select><div data-form-status tabindex="-1"></div><button class="btn" type="submit">Send test email</button></form>` : ''}
     ${emails.length ? html`<div class="table-wrap"><table><thead><tr><th>Created</th><th>Type</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
     ${emails.map(email => html`<tr><td>${fmtDateTime(email.created_at)}</td><td>${email.channel === 'sms' ? 'SMS · ' : ''}${email.kind.replace(/_/g, ' ')}</td><td>${email.to_address}</td><td>${email.subject || '—'}</td>
-      <td>${badge(email.status)}${email.status === 'scheduled' ? html`<div class="muted">${fmtDateTime(email.next_attempt_at)}</div>` : ''}${email.last_error ? html`<div class="muted">${email.last_error}</div>` : ''}</td></tr>`)}
+      <td>${badge(email.status)}${email.status === 'scheduled' ? html`<div class="muted">${fmtDateTime(email.next_attempt_at)}</div>` : ''}${email.status === 'sent' && email.channel === 'email' ? html`<div class="muted">${email.accepted_transport ? deliveryEvidence({ status: email.status, transport: email.accepted_transport, report: email.delivery_status }).text : 'Sent before the sending method was recorded; delivery is unknown.'}</div>` : ''}${email.last_error ? html`<div class="muted">${email.last_error}</div>` : ''}</td></tr>`)}
     </tbody></table></div>` : html`<div class="empty">No messages yet.</div>`}`);
   if ($('#delivery-test', panel)) handleSubmit($('#delivery-test', panel), async data => {
     const result = await api('POST', wsPath('/emails/test'), { target: data.target });
-    toast(result.status === 'sent' ? `Test accepted by the email provider for ${result.to}.` : `Test ${result.status}: ${result.error || 'check Delivery for updates'}`);
+    toast(result.status === 'sent' ? `Test accepted by the email provider for ${result.to}. Check that inbox, including spam.${boot.providers.email_reports ? ' This list shows Delivered when the provider reports it.' : ''}` : `Test ${result.status}: ${result.error || 'check Delivery for updates'}`);
     await emailsTab(ctx, panel);
   });
 }

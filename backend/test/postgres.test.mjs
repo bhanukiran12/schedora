@@ -120,6 +120,24 @@ test('PostgreSQL upgrade for monitoring creates only the alert table, with no IN
   assert.ok(statements.every(sql => !/\bINTEGER\b|users_email_lower/.test(sql)));
 });
 
+test('PostgreSQL upgrade for email delivery reports adds columns and index idempotently and creates the event table', async () => {
+  const { openDatabase } = await import('../src/db.mjs');
+  const { postgresUpgrade, EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES } = await import('../src/postgres-sql.mjs');
+  const template = openDatabase(':memory:');
+  const tables = template.all("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
+  template.close();
+  for (const column of ['delivery_status', 'delivery_event_at']) {
+    assert.match(tables.find(item => item.name === 'emails').sql, new RegExp(`\\b${column}\\b`));
+    assert.ok(EMAIL_REPORT_COLUMNS.some(sql => sql.startsWith(`ALTER TABLE emails ADD COLUMN IF NOT EXISTS ${column}`)));
+  }
+  assert.ok(indexes.some(index => index.name === 'emails_provider_message'), 'new databases get the index from the base schema');
+  assert.ok(EMAIL_REPORT_COLUMNS.includes('CREATE INDEX IF NOT EXISTS emails_provider_message ON emails(provider_message_id)'));
+  assert.ok(EMAIL_REPORT_COLUMNS.every(sql => !/INTEGER/.test(sql)));
+  const statements = postgresUpgrade(tables.filter(table => EMAIL_REPORT_TABLES.includes(table.name)), indexes.filter(index => EMAIL_REPORT_TABLES.includes(index.tbl_name)));
+  assert.deepEqual(statements.filter(sql => /^CREATE TABLE/.test(sql)).map(sql => sql.match(/^CREATE TABLE (\w+)/)[1]), ['email_provider_events']);
+});
+
 test('PostgreSQL: video admissions, credit reservations and the ledger stay consistent under concurrency', { skip: process.env.RUN_POSTGRES_TESTS !== 'true', timeout: 120000 }, async () => {
   const { reconcileWallet } = await import('../src/video/credits.mjs');
   const config = loadConfig();
