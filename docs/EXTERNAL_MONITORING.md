@@ -1,10 +1,10 @@
 # External monitoring acceptance
 
-Prepared 28 October 2026. This is a configuration and verification contract, not evidence that an external monitor is running.
+Prepared 28 October 2026; production acceptance verified 29 October 2026. The evidence below covers configured five-minute checks and one controlled outage/recovery, not a continuous uptime guarantee.
 
 ## Zero-spend candidate
 
-UptimeRobot's official free-plan guidance currently allows commercial use, 50 monitors and five-minute checks, including HTTP and keyword monitors, without a card. Its account was not signed in in this session. The owner must complete sign-in/account creation and any terms acceptance before configuration. Select Free, with no trial upgrade or paid notifications.
+UptimeRobot's official free-plan guidance allows commercial use, 50 monitors and five-minute checks, including HTTP and keyword monitors, without a card. The owner completed account signup/sign-in and terms acceptance. The configured account remains on Free; no trial upgrade, card or paid notifications were added.
 
 Source checked 28 October 2026: https://help.uptimerobot.com/en/articles/11604710-who-should-use-uptimerobot-s-free-plan
 
@@ -32,6 +32,9 @@ Use five-minute checks on Free. Detection can take at least one polling interval
 ## Current evidence
 
 - Production operator test used the existing `alert-test` script in one temporary build command, with no database access. Provider accepted the message; owner explicitly confirmed Inbox receipt in this chat on 28 October 2026. Resend message ID: `01a182d4-3d83-7506-92e8-889fdd907f2a`. Normal build command was restored and its deployment succeeded. This proves this test's receipt, not continuous external monitoring.
-- Isolated operator transport is implemented in `ec3ccdc`; customer email remains outbox. Production health reports the email channel configured. No confirmation flag has been set for the external service.
+- Isolated operator transport is implemented in `ec3ccdc`; customer email remains outbox. Production health reports the email channel configured.
 - Local in-memory application check exercised the real `/api/health` endpoint: before first worker tick, healthy tick, worker error and stale tick. All returned HTTP 200; the worker keyword failed, passed, failed and failed respectively. The database keyword passed in these four database-healthy scenarios. No production failure was induced and no email was sent by this local check.
-- External account sign-in, saved monitors, actual failure/recovery checks and their receipts are still incomplete. The owner was asked to finish account sign-in; no credentials were reset or exported.
+- API/database monitor `804457867` and worker monitor `804457875` use the URLs/keywords above, five-minute checks, 60-second request timeout and operator email. Owner-created website monitor `804457842` was preserved. All three were observed Up on 29 October.
+- Controlled incident `373837337120738356` was created by temporarily pointing the worker monitor to `/api/monitoring-controlled-missing` (HTTP 404). The real worker and database stayed running. The monitor was restored to `/api/health`; its history shows recovery after 1 minute 34 seconds. The owner confirmed receiving both actual DOWN and UP emails. This is direct receipt evidence, not an inference from provider acceptance.
+- `MONITORING_CONFIRMED=true` was saved and read back on Render only after that evidence. Deploy `dep-dbhd6dou01pc73b09vi0` succeeded for application commit `981cfa0`. Current provider-media, commercial catalog, payment capture/refunds and video activation remain separate open gates.
+- Screenshots and the dated operational checkpoint are in `C:/Users/Nxtwave/Documents/ChatGPT/schedora/outputs/monitoring-acceptance-2026-10-29` and `reports/Schedora-recurring-progress.md`. No credentials were reset or exported.

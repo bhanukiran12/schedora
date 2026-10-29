@@ -35,7 +35,9 @@ These subtotals exclude the other costs listed above and possible supplier taxes
 
 ## Activation gates still open
 
-Configure a measured-cost-based catalog and verify live payment capture/webhooks/refund handling before enabling recharge. Do not publish development fixture prices. Video still requires an actual operator alert channel/received test, external health monitoring, production-provider media/lifecycle/settlement evidence and approved allowance/capacity/spend limits. Never set confirmation flags just to bypass checks. Current cost research and this approval do not provide that operational evidence.
+Configure a measured-cost-based catalog and verify live payment capture/webhooks/refund handling before enabling recharge. Do not publish development fixture prices. Operator alert receipt and external failure/recovery monitoring were verified on 29 October; see EXTERNAL_MONITORING.md. Video still requires production-provider media/lifecycle/settlement evidence and approved allowance/capacity/spend limits. Never set confirmation flags just to bypass checks. Current cost research and this approval do not provide the remaining operational evidence.
+
+Before changing the live payment adapter, run `node scripts/check-razorpay-connection.mjs` from `backend` with the private production environment. It makes one GET to Razorpay's plans API, discards merchant response contents and prints only a sanitized authentication result/status. It creates no plan, checkout, payment or refund and opens no database. Success proves only this read-only API access, not capture, settlement, refunds, webhook delivery or merchant eligibility. Production checkout rejects test-format keys even if other configuration flags are accidentally enabled; development fixtures retain test-key support. Do not enable checkout from a read-only check alone.
 
 ## Sources checked 28 October 2026
 

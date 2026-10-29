@@ -14,7 +14,9 @@ function serialized(app, id, operation) {
   locks.set(id, task);
   return task.finally(() => { if (locks.get(id) === task) locks.delete(id); });
 }
-export const configured = app => app.config.billingProvider === 'razorpay' && /^rzp_(live|test)_[A-Za-z0-9]+$/.test(cfg(app).keyId || '') && Boolean(cfg(app).keySecret && app.config.billingWebhookSecret);
+export const configured = app => app.config.billingProvider === 'razorpay' &&
+  (app.config.production ? /^rzp_live_[A-Za-z0-9]+$/ : /^rzp_(live|test)_[A-Za-z0-9]+$/).test(cfg(app).keyId || '') &&
+  Boolean(cfg(app).keySecret && app.config.billingWebhookSecret);
 function planConfig(app, id) {
   const plan = cfg(app).plans?.[id];
   return PLANS[id] && plan && /^plan_[A-Za-z0-9]+$/.test(plan.id || '') &&
