@@ -5,7 +5,7 @@ import { newToken, sha256 } from '../platform/auth.mjs';
 import { can } from '../platform/workspaces.mjs';
 import { entitlementsFor } from '../billing/entitlements.mjs';
 import { queueEmail } from '../platform/email.mjs';
-import { UNITS_PER_CREDIT } from './config.mjs';
+import { UNITS_PER_CREDIT, workspaceVideoConfig } from './config.mjs';
 import { chargeOverrun, grantAllowance, reserve, settleReservation, spendableUnits } from './credits.mjs';
 
 // Schedora Meet native video rooms.
@@ -42,8 +42,11 @@ const videoFail = (status, code, message, details) => fail(status, code, message
 
 export const isNativeVideo = location => (typeof location === 'string' ? JSON.parse(location) : location)?.type === 'schedora_meet';
 
-function videoReady(app) {
-  if (!app.config.video.enabled || !app.config.video.deployment) videoFail(503, 'video_unavailable', 'Schedora Meet video is not available right now. Your appointment is unaffected; contact the host for another way to meet.');
+const withinPilotLimits = room => room.kind === 'instant' && room.max_participants <= 2 && room.max_ends_at - room.starts_at <= 15 * MINUTE;
+
+function videoReady(app, workspaceId, room = null) {
+  if (!workspaceVideoConfig(app.config, workspaceId).enabled) videoFail(503, 'video_unavailable', 'Schedora Meet video is not available right now. Your appointment is unaffected; contact the host for another way to meet.');
+  if (workspaceVideoConfig(app.config, workspaceId).pilot && room && !withinPilotLimits(room)) videoFail(409, 'pilot_instant_only', 'Start a new instant pilot meeting with the current two-person, 15-minute limits.');
   if (app.config.video.killSwitch !== 'off') videoFail(503, 'video_unavailable', 'Schedora Meet video is temporarily paused. Please try again later.');
 }
 
@@ -83,7 +86,7 @@ function createInvite(app, room, { bookingId = null, kind, seats, createdBy = nu
 // ---- Rooms ----------------------------------------------------------------------------------
 
 export function createInstantRoom(app, actor, body) {
-  videoReady(app);
+  videoReady(app, actor.workspace.id);
   if (!entitlementsFor(app, actor.workspace.id).meet.active) videoFail(402, 'entitlement_required', 'This workspace needs an active Meet or Suite plan to start video meetings.');
   const title = text(body.title || 'Instant meeting', 'title', { min: 1, max: 120 });
   const now = app.now();
@@ -99,6 +102,7 @@ export function createInstantRoom(app, actor, body) {
 // first participant is admitted. One room per meeting occurrence, shared by group bookings.
 export function ensureBookingVideo(app, booking, eventType) {
   if (!isNativeVideo(booking.location)) return null;
+  if (workspaceVideoConfig(app.config, booking.workspace_id).pilot) videoFail(409, 'pilot_instant_only', 'The video pilot supports instant meetings only. Choose another location for scheduled appointments.');
   const meeting = app.db.get('SELECT id, starts_at, ends_at FROM meetings WHERE id = ?', booking.meeting_id);
   insertRoom(app, { workspaceId: booking.workspace_id, meetingId: meeting.id, kind: 'scheduled', title: eventType.title, startsAt: meeting.starts_at, endsAt: meeting.ends_at, status: 'scheduled' });
   const room = app.db.get('SELECT * FROM video_rooms WHERE meeting_id = ?', meeting.id);
@@ -223,7 +227,7 @@ export function roomView(app, room, { role = null, guestInvite = null, participa
     starts_at: room.kind === 'scheduled' ? room.starts_at : null, ends_at: room.kind === 'scheduled' ? room.ends_at : null,
     join_opens_at: room.join_opens_at, max_ends_at: room.max_ends_at, host_present: Boolean(room.host_joined_at), guest_policy: room.guest_policy,
     workspace: { name: workspace.name, brand_color: workspace.brand_color, logo: workspace.logo },
-    video: { available: app.config.video.enabled && Boolean(app.config.video.deployment) && app.config.video.killSwitch === 'off', max_video_height: app.config.video.maxVideoHeight },
+    video: { available: workspaceVideoConfig(app.config, room.workspace_id).enabled && (!workspaceVideoConfig(app.config, room.workspace_id).pilot || withinPilotLimits(room)) && app.config.video.killSwitch === 'off', max_video_height: app.config.video.maxVideoHeight, pilot: workspaceVideoConfig(app.config, room.workspace_id).pilot },
     role, end_cause: room.end_reason ? END_CAUSES[room.end_reason] || 'other' : null,
     you: selfStatus(app, room, participantId, { guestInvite, userId })
   };
@@ -288,7 +292,7 @@ function admitTx(app, room, who) {
   return app.db.transaction(() => {
     room = app.db.get('SELECT * FROM video_rooms WHERE id = ?', room.id);
     const now = app.now();
-    videoReady(app);
+    videoReady(app, room.workspace_id, room);
     // Guests get the most specific reason first (their booking was canceled or rescheduled).
     const invite = who.invite && app.db.get('SELECT * FROM video_invites WHERE id = ?', who.invite.id);
     if (invite) {

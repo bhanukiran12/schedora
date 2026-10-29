@@ -56,6 +56,24 @@ export function loadVideoConfig(env, production) {
     if (env.LIVEKIT_HOSTING === 'self_hosted' && env.MEET_VIDEO_SELF_HOSTED_REVIEWED !== 'true') blocked.push('Self-hosted LiveKit: complete the revocation and auto-create review, then set MEET_VIDEO_SELF_HOSTED_REVIEWED=true.');
   }
   const enabled = requested && !blocked.length;
+  // A single-workspace validation pilot is separate from general production enablement.
+  // It permits real-provider acceptance before a broad launch; it never confirms smoke results.
+  const pilotRequested = env.MEET_VIDEO_PILOT_ENABLED === 'true';
+  const pilotWorkspaces = json(env.MEET_VIDEO_PILOT_WORKSPACES, [], 'MEET_VIDEO_PILOT_WORKSPACES');
+  if (!Array.isArray(pilotWorkspaces) || pilotWorkspaces.length > 1 || pilotWorkspaces.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) throw new Error('MEET_VIDEO_PILOT_WORKSPACES must contain at most one workspace UUID.');
+  if (pilotRequested && requested) throw new Error('Use either the workspace validation pilot or general video enablement, not both.');
+  const pilotBlocked = [];
+  if (pilotRequested) {
+    if (pilotWorkspaces.length !== 1) pilotBlocked.push('Select one pilot workspace.');
+    if (production) {
+      if (provider !== 'livekit' || (env.LIVEKIT_HOSTING || 'cloud') !== 'cloud') pilotBlocked.push('The production pilot requires LiveKit Cloud.');
+      if (!env.LIVEKIT_URL || !env.LIVEKIT_API_KEY || !env.LIVEKIT_API_SECRET) pilotBlocked.push('Configure the LiveKit Cloud credentials.');
+      if (!env.APP_ENCRYPTION_KEY || env.APP_ENCRYPTION_KEY.length < 32) pilotBlocked.push('Configure the meeting-link encryption key.');
+      if (env.MEET_VIDEO_WEBHOOK_CONFIRMED !== 'true') pilotBlocked.push('Verify the permanent provider webhook first.');
+      if (env.MONITORING_CONFIRMED !== 'true') pilotBlocked.push('Verify operator and external monitoring first.');
+    }
+  }
+  const pilot = { enabled: pilotRequested && !pilotBlocked.length, workspaceIds: pilotWorkspaces, monthlyCredits: 60, blocked: pilotBlocked };
   const deployments = [];
   if (provider === 'livekit' && (enabled || env.LIVEKIT_URL)) {
     deployments.push(deploymentFrom({ id: env.MEET_VIDEO_DEPLOYMENT || 'livekit-cloud', url: env.LIVEKIT_URL, apiKey: env.LIVEKIT_API_KEY, apiSecret: env.LIVEKIT_API_SECRET, hosting: env.LIVEKIT_HOSTING }, production));
@@ -88,7 +106,7 @@ export function loadVideoConfig(env, production) {
   const tokenTtlSeconds = int(env.MEET_VIDEO_TOKEN_TTL_SECONDS, 120, 30, 600, 'MEET_VIDEO_TOKEN_TTL_SECONDS');
   const blockSeconds = int(env.MEET_VIDEO_RESERVATION_BLOCK_SECONDS, 600, 120, 3600, 'MEET_VIDEO_RESERVATION_BLOCK_SECONDS');
   return {
-    enabled, blocked, provider, deployments,
+    enabled, blocked, provider, deployments, pilot,
     deployment: deployments.find(item => !item.draining)?.id || null,
     killSwitch,
     tokenTtlSeconds,
@@ -100,11 +118,11 @@ export function loadVideoConfig(env, production) {
     reconcileIntervalSeconds: int(env.MEET_VIDEO_RECONCILE_SECONDS, 30, 5, 3600, 'MEET_VIDEO_RECONCILE_SECONDS'),
     joinEarlyMinutes: int(env.MEET_VIDEO_JOIN_EARLY_MINUTES, 10, 0, 120, 'MEET_VIDEO_JOIN_EARLY_MINUTES'),
     overtimeMinutes: int(env.MEET_VIDEO_OVERTIME_MINUTES, 30, 0, 240, 'MEET_VIDEO_OVERTIME_MINUTES'),
-    maxRoomMinutes: int(env.MEET_VIDEO_MAX_ROOM_MINUTES, 180, 15, 1440, 'MEET_VIDEO_MAX_ROOM_MINUTES'),
-    maxParticipants: int(env.MEET_VIDEO_MAX_PARTICIPANTS, 10, 2, 100, 'MEET_VIDEO_MAX_PARTICIPANTS'),
-    maxConcurrentRooms: int(env.MEET_VIDEO_MAX_CONCURRENT_ROOMS, 3, 1, 1000, 'MEET_VIDEO_MAX_CONCURRENT_ROOMS'),
-    maxWorkspaceParticipants: int(env.MEET_VIDEO_MAX_WORKSPACE_PARTICIPANTS, 25, 2, 10000, 'MEET_VIDEO_MAX_WORKSPACE_PARTICIPANTS'),
-    maxGlobalParticipants: int(env.MEET_VIDEO_MAX_GLOBAL_PARTICIPANTS, 200, 2, 1000000, 'MEET_VIDEO_MAX_GLOBAL_PARTICIPANTS'),
+    maxRoomMinutes: pilot.enabled ? 15 : int(env.MEET_VIDEO_MAX_ROOM_MINUTES, 180, 15, 1440, 'MEET_VIDEO_MAX_ROOM_MINUTES'),
+    maxParticipants: pilot.enabled ? 2 : int(env.MEET_VIDEO_MAX_PARTICIPANTS, 10, 2, 100, 'MEET_VIDEO_MAX_PARTICIPANTS'),
+    maxConcurrentRooms: pilot.enabled ? 1 : int(env.MEET_VIDEO_MAX_CONCURRENT_ROOMS, 3, 1, 1000, 'MEET_VIDEO_MAX_CONCURRENT_ROOMS'),
+    maxWorkspaceParticipants: pilot.enabled ? 2 : int(env.MEET_VIDEO_MAX_WORKSPACE_PARTICIPANTS, 25, 2, 10000, 'MEET_VIDEO_MAX_WORKSPACE_PARTICIPANTS'),
+    maxGlobalParticipants: pilot.enabled ? 2 : int(env.MEET_VIDEO_MAX_GLOBAL_PARTICIPANTS, 200, 2, 1000000, 'MEET_VIDEO_MAX_GLOBAL_PARTICIPANTS'),
     guestPolicy: ['open', 'host_first'].includes(env.MEET_VIDEO_GUEST_POLICY) ? env.MEET_VIDEO_GUEST_POLICY : 'host_first',
     // Highest video layer the browser publishes; the client and room settings never exceed it.
     maxVideoHeight: int(env.MEET_VIDEO_MAX_VIDEO_HEIGHT, 720, 180, 1080, 'MEET_VIDEO_MAX_VIDEO_HEIGHT'),
@@ -150,4 +168,10 @@ export const MEETING_PAGE = /^\/meet\/(room|join)\//;
 
 export function publicVideoConfig(config) {
   return { enabled: config.video.enabled && Boolean(config.video.deployment), units_per_credit: UNITS_PER_CREDIT, max_video_height: config.video.maxVideoHeight };
+}
+
+export function workspaceVideoConfig(config, workspaceId) {
+  const pilot = Boolean(config.video.pilot?.enabled && config.video.pilot.workspaceIds.includes(workspaceId));
+  return { enabled: Boolean(config.video.deployment && (config.video.enabled || pilot)), pilot,
+    ...(pilot ? { instant_only: true, monthly_credits: config.video.pilot.monthlyCredits, max_participants: 2, max_minutes: 15 } : {}) };
 }

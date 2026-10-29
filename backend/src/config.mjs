@@ -140,6 +140,7 @@ export function releaseWarnings(config) {
   if (config.production && !config.encryptionKey) warnings.push('APP_ENCRYPTION_KEY is not set: integrations (calendars, Stripe, SSO) cannot be connected.');
   if (config.video?.enabled && config.video.provider === 'fake') warnings.push('Schedora Meet video uses the fake provider; no real meeting can connect.');
   for (const reason of config.video?.blocked || []) warnings.push('Schedora Meet video is off: ' + reason);
+  for (const reason of config.video?.pilot?.blocked || []) warnings.push('Schedora Meet validation pilot is off: ' + reason);
   if (!config.alerts?.webhookUrl && !(config.alerts?.email && (config.alerts.emailProvider === 'http' || config.emailProvider === 'http'))) warnings.push('No operator alert channel: set ALERT_WEBHOOK_URL or ALERT_EMAIL with the HTTP email provider.');
   if (config.video?.killSwitch !== 'off') warnings.push(`Schedora Meet video kill switch is ${config.video?.killSwitch}.`);
   return warnings;

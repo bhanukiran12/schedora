@@ -1102,6 +1102,25 @@ try {
     await waitFor("document.querySelector('#ledger tr')", 'ledger rows');
     await layoutCheck('billing credits');
   });
+  await step('video validation pilot: scoped workspace sees limits; non-pilot stays unavailable', async () => {
+    const previous = app.config.video;
+    const workspaceId = await evaluate("fetch('/api/me').then(r=>r.json()).then(me=>me.workspaces[0].id)");
+    app.config.video = { ...previous, enabled: false, pilot: { enabled: true, workspaceIds: [workspaceId], monthlyCredits: 60 }, maxParticipants: 2, maxRoomMinutes: 15, maxConcurrentRooms: 1, maxGlobalParticipants: 2, maxWorkspaceParticipants: 2 };
+    try {
+      await open('/meet?tab=video', "document.body.innerText.includes('Limited video pilot')");
+      await waitFor("document.body.innerText.includes('15 minutes') && document.querySelector('#instant')", 'pilot controls and clear limits');
+      await fill('#instant-title', 'Pilot workspace meeting');
+      await click('#instant [type="submit"]');
+      await waitFor("document.querySelector('#join-form')", 'pilot room reaches prejoin');
+      await open('/meet?tab=video', "document.body.innerText.includes('Pilot workspace meeting')");
+      await layoutCheck('video validation pilot');
+      await open('/billing', "document.querySelector('#credits-title')");
+      await waitFor("document.body.innerText.includes('Meet video credits')", 'pilot wallet remains visible while broad video is off');
+      app.config.video.pilot.workspaceIds = [];
+      await open('/meet?tab=video', "document.body.innerText.includes('Built-in video is not available yet')");
+      if (await evaluate("Boolean(document.querySelector('#instant'))")) throw new Error('non-pilot workspace can start a pilot meeting');
+    } finally { app.config.video = previous; }
+  });
   await step('product hosts: landing, auth, account, onboarding and demo retain one product', async () => {
     const port = app.server.address().port;
     for (const product of ['meet', 'forms', 'flow']) {

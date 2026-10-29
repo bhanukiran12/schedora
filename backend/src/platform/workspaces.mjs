@@ -2,6 +2,7 @@ import { fail } from '../http.mjs';
 import { email as validEmail, integer, invalid, oneOf, slug as validSlug, text } from '../validate.mjs';
 import { createWorkspaceRecord } from './auth.mjs';
 import { entitlementsFor } from '../billing/entitlements.mjs';
+import { workspaceVideoConfig } from '../video/config.mjs';
 
 const ALL = ['owner', 'admin', 'member'];
 const ADMINS = ['owner', 'admin'];
@@ -46,7 +47,7 @@ export function requireMember(app, user, workspaceId, permission) {
 
 export function listWorkspaces(app, userId) {
   return app.db.all(`SELECT w.id, w.name, w.slug, w.retention_days, m.role FROM workspaces w JOIN memberships m ON m.workspace_id = w.id
-    WHERE m.user_id = ? ORDER BY w.created_at`, userId).map(row => ({ ...row, entitlements: entitlementsFor(app, row.id) }));
+    WHERE m.user_id = ? ORDER BY w.created_at`, userId).map(row => ({ ...row, entitlements: entitlementsFor(app, row.id), video: workspaceVideoConfig(app.config, row.id) }));
 }
 
 export function createWorkspace(app, user, body) {

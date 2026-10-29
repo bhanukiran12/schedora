@@ -199,7 +199,7 @@ export async function billing(ctx) {
     <section class="card card-plain"><h2>Usage this month</h2>${Object.entries(data.usage).map(([metric, usage]) => html`<div><div class="row-between"><span>${metric.replace('_', ' ')}</span><span>${usage.used}${usage.limit ? ` of ${usage.limit}` : ''}</span></div>
       ${usage.limit ? html`<div class="meter" role="meter" aria-label="${metric.replace('_', ' ')} used" aria-valuemin="0" aria-valuemax="${usage.limit}" aria-valuenow="${usage.used}"><span data-width="${Math.min(100, Math.round(usage.used / usage.limit * 100))}"></span></div>` : ''}</div>`)}
       <p class="hint">Allowances reset on the first day of each month (UTC). Allowances shown are proposed fair-use limits.</p></section>
-    ${boot.video?.enabled ? html`<div id="video-credits"></div>` : ''}
+    ${(workspace()?.video?.enabled ?? boot.video?.enabled) ? html`<div id="video-credits"></div>` : ''}
     <section class="card card-plain"><h2>Subscriptions</h2>
       ${data.subscriptions.length ? html`<ul class="list">${data.subscriptions.map(subscription => html`<li class="row-between"><div><div class="list-title">${PRODUCT_NAMES[subscription.plan] || 'Suite'} plan</div>
         <div class="meta">${subscription.current_period_end ? html`<span>${subscription.cancel_at_period_end ? 'Ends' : 'Renews'} ${fmtDateTime(subscription.current_period_end)}</span>` : ''}${subscription.grace_until ? html`<span>Grace until ${fmtDateTime(subscription.grace_until)}</span>` : ''}</div></div>

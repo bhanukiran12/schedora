@@ -2,7 +2,7 @@
 // Meeting pages are always full page loads (/meet/room/… for members, /meet/join/… for guests):
 // only those documents receive the camera/microphone permission and the provider CSP.
 // Provider tokens live only in memory for the current connection; nothing is persisted.
-import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, fmtFull, html, loading, mount, notice, raw, session, toast, wsPath } from './core.mjs';
+import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, fmtFull, html, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle, signInPrompt } from './pages.mjs';
 
 let sdkPromise = null;
@@ -672,23 +672,24 @@ async function meeting(ctx, flow, LK, admission, tracks) {
 // Meet dashboard tab: instant meetings and scheduled rooms
 
 export async function videoTab(ctx, panel) {
-  if (!boot.video?.enabled) {
+  const pilot = workspace()?.video?.pilot;
+  if (!(workspace()?.video?.enabled ?? boot.video?.enabled)) {
     return mount(panel, html`<div class="empty video-unavailable"><h2>Built-in video is not available yet</h2>
       <p>Schedora Meet video rooms are not enabled on this server, so instant meetings and the Schedora Meet location cannot be used. Nothing is charged for video while it is off.</p>
       <p>Your event types can still use Google Meet, Zoom, Microsoft Teams or your own video link.</p>
       <div class="actions"><a class="btn" href="/meet?tab=integrations">Connect a video app</a><a class="btn" href="/meet?tab=types">Review event types</a></div></div>`);
   }
   const scope = ctx.query.get('scope') === 'past' ? 'past' : 'current';
-  const rooms = await api('GET', wsPath('/meet-video/rooms?scope=' + scope));
+  const rooms = (await api('GET', wsPath('/meet-video/rooms?scope=' + scope))).filter(room => !pilot || room.kind === 'instant');
   if (!ctx.alive()) return;
-  mount(panel, html`<div class="row-between">
+  mount(panel, html`${pilot ? html`<div class="notice" role="status"><strong>Limited video pilot</strong><p>Instant meetings for up to 2 people, 15 minutes per meeting and 60 free participant-minutes each month. The video provider's shared free quota also applies. Scheduled video and credit purchases are not available in this validation step.</p></div>` : ''}<div class="row-between">
       <form id="instant" class="row" novalidate><label class="visually-hidden" for="instant-title">Meeting title</label><input id="instant-title" name="title" maxlength="120" placeholder="Instant meeting"><button class="btn btn-primary" type="submit">Start a meeting now</button></form>
       <nav class="row" aria-label="Meeting rooms">${[['current', 'Current and upcoming'], ['past', 'Past']].map(([key, label]) => html`<a class="btn btn-small ${key === scope ? 'btn-primary' : ''}" href="/meet?tab=video&scope=${key}">${label}</a>`)}</nav></div>
-    <p class="hint">Instant and scheduled Schedora Meet rooms use your workspace's Meet credits for every connected person, including hosts.</p>
+    <p class="hint">${pilot ? 'Instant pilot rooms' : 'Instant and scheduled Schedora Meet rooms'} use your workspace's Meet credits for every connected person, including hosts.</p>
     ${rooms.length ? html`<ul class="list section-gap">${rooms.map(room => html`<li class="row-between"><div><div class="list-title">${room.title}</div>
       <div class="meta"><span>${room.kind === 'instant' ? 'Instant' : 'Scheduled'}</span>${room.starts_at ? html`<span>${fmtDateTime(room.starts_at)}</span>` : ''}<span>${badge(room.status === 'open' ? 'active' : room.status, room.status)}</span>${room.low_balance ? html`<span>Low credits</span>` : ''}</div></div>
-      ${scope === 'current' ? html`<div class="row"><a class="btn btn-small btn-primary" href="${room.host_url}" data-external>Join</a><button class="btn btn-small" data-invite="${room.public_id}">Copy guest link</button><button class="btn btn-small btn-danger" data-end="${room.public_id}">End</button></div>` : ''}</li>`)}</ul>`
-      : html`<div class="empty section-gap">${scope === 'past' ? 'No past video meetings.' : 'No open video meetings. Start one now, or add Schedora Meet as the location of an event type.'}</div>`}`);
+      ${scope === 'current' ? html`<div class="row">${pilot && !room.video.available ? html`<button class="btn btn-small" disabled>Join unavailable</button>` : html`<a class="btn btn-small btn-primary" href="${room.host_url}" data-external>Join</a>`}<button class="btn btn-small" data-invite="${room.public_id}">Copy guest link</button><button class="btn btn-small btn-danger" data-end="${room.public_id}">End</button></div>` : ''}</li>`)}</ul>`
+      : html`<div class="empty section-gap">${scope === 'past' ? 'No past video meetings.' : pilot ? 'No open pilot meetings. Start a two-person instant meeting.' : 'No open video meetings. Start one now, or add Schedora Meet as the location of an event type.'}</div>`}`);
   $('#instant').addEventListener('submit', async event => {
     event.preventDefault();
     try {

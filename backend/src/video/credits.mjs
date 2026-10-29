@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
-import { UNITS_PER_CREDIT } from './config.mjs';
+import { UNITS_PER_CREDIT, workspaceVideoConfig } from './config.mjs';
 
 // Workspace credit wallet for Schedora Meet video.
 //
@@ -59,6 +59,10 @@ export function refreshAccount(app, workspaceId) {
 export function allowanceEligibility(app, workspaceId) {
   const now = app.now();
   const allowances = app.config.video.allowances;
+  if (workspaceVideoConfig(app.config, workspaceId).pilot) {
+    const date = new Date(now);
+    return { kind: 'evaluation', plan: 'evaluation', credits: app.config.video.pilot.monthlyCredits, start: Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1), end: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1), subscriptionId: null };
+  }
   if (app.config.billingMode === 'open') {
     const date = new Date(now);
     return { kind: 'evaluation', plan: 'evaluation', credits: allowances.evaluation || 0, start: Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1), end: Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1), subscriptionId: null };
