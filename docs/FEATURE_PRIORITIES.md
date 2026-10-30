@@ -43,6 +43,10 @@ Sources for implementation scope: [README](../README.md), [Forms contract](FORMS
 
 Tally's free logic and Fillout's native scheduling/workflows make basic feature parity a weak differentiator. Paperform's existing suite makes integration alone insufficient. ([Tally](https://tally.so/pricing), [Fillout](https://www.fillout.com/pricing), [Paperform](https://paperform.com/pricing/))
 
+## Team readiness: next implementation contract
+
+[Team setup evidence contract](TEAM_READINESS_CONTRACT.md), researched 30 October: specifies owner/admin coarse host summaries, self-only evidence for ordinary co-hosts, no calendar contents or settings control, successful-sync freshness distinct from connection status, and actual personal-schedule fallback. This is a proposed API/UI contract with explicit authorization, privacy, database, browser and human acceptance cases. The endpoint is not implemented; other-host setup remains Not verified in the released product. Competitor admin-status visibility is documented capability, not customer validation or a proven conversion benefit.
+
 ## Acceptance for each frontend slice
 
 A control produces the advertised supported action; permissions and dirty-state protection remain intact; templates start as Draft; preview/simulation cannot send; loading/empty/error/success paths have useful text; keyboard/focus/mobile layouts are verified; missing backend contracts are labelled rather than simulated as facts. Record source/reference and after screenshots at matched viewport/state. Run relevant syntax/browser/regression checks and document skipped coverage. Do not mark production ready from local or synthetic-media evidence.
