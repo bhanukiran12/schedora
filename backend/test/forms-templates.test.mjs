@@ -10,8 +10,11 @@ import { FORM_TEMPLATES, questionCount } from '../../frontend/js/forms-templates
 const visibleIds = (definition, answers) => visibleFields(definition, answers).map(field => field.id);
 
 test('every template is a valid supported definition and survives server normalisation unchanged in shape', () => {
-  assert.equal(FORM_TEMPLATES.length, 4);
-  assert.equal(new Set(FORM_TEMPLATES.map(template => template.id)).size, 4);
+  assert.equal(FORM_TEMPLATES.length, 8);
+  assert.equal(new Set(FORM_TEMPLATES.map(template => template.id)).size, 8);
+  // Existing ids keep their place (onboarding defaults to the first); the sales and client meeting set is grouped.
+  assert.deepEqual(FORM_TEMPLATES.slice(0, 4).map(template => template.id), ['consultation', 'project-brief', 'programme-interest', 'session-feedback']);
+  assert.deepEqual(FORM_TEMPLATES.filter(template => template.group === 'meetings').map(template => template.id), ['sales-discovery', 'demo-request', 'client-onboarding', 'client-review']);
   for (const template of FORM_TEMPLATES) {
     assert.deepEqual(definitionProblems(template.definition), [], template.id);
     const normalized = normalizeDefinition(template.definition);
@@ -38,6 +41,32 @@ test('template logic behaves as each card describes', () => {
   assert.deepEqual(Object.keys(validateSubmission(byId['session-feedback'], { rating: 'very', follow_up: 'yes' }).errors), ['email']);
   // Programme enquiry: says plainly that interest does not reserve a place.
   assert.match(byId['programme-interest'].description, /does not reserve a place/);
+  // Sales discovery: "what else matters" follows a ticked "Something else", and is discarded otherwise.
+  assert.ok(!visibleIds(byId['sales-discovery'], { priorities: ['ease'] }).includes('priorities_other'));
+  assert.ok(visibleIds(byId['sales-discovery'], { priorities: ['ease', 'other'] }).includes('priorities_other'));
+  assert.deepEqual(validateSubmission(byId['sales-discovery'], { name: 'Ravi', email: 'ravi@example.com', goal: 'Fewer no-shows', timing: 'month', priorities: ['cost'], priorities_other: 'x' }).answers.priorities_other, undefined);
+  // Demo request: detail is required only for "Something else"; the form says nothing is booked.
+  assert.deepEqual(Object.keys(validateSubmission(byId['demo-request'], { name: 'A', email: 'a@example.com', reason: 'other', focus: 'Reports' }).errors), ['reason_other']);
+  assert.deepEqual(validateSubmission(byId['demo-request'], { name: 'A', email: 'a@example.com', reason: 'compare', focus: 'Reports' }).errors, {});
+  assert.match(byId['demo-request'].description, /nothing is booked/);
+  // Client onboarding: phone only for phone contact; it warns against pasting passwords.
+  assert.deepEqual(validateSubmission(byId['client-onboarding'], { name: 'A', email: 'a@example.com', contact_pref: 'email', goals: 'Launch' }).errors, {});
+  assert.deepEqual(Object.keys(validateSubmission(byId['client-onboarding'], { name: 'A', email: 'a@example.com', contact_pref: 'phone', goals: 'Launch' }).errors), ['phone']);
+  assert.match(byId['client-onboarding'].fields.find(field => field.id === 'materials').help, /do not paste passwords/);
+  // Client review: "what to change" is skipped only when very satisfied; email only when a call is wanted.
+  assert.ok(!visibleIds(byId['client-review'], { satisfaction: 'very' }).includes('improve'));
+  assert.ok(visibleIds(byId['client-review'], { satisfaction: 'neutral' }).includes('improve'));
+  assert.deepEqual(Object.keys(validateSubmission(byId['client-review'], { name: 'A', satisfaction: 'very', call: 'yes' }).errors), ['email']);
+});
+
+test('templates collect only what the task needs: no marketing consent, nothing preselected', () => {
+  for (const template of FORM_TEMPLATES) {
+    for (const field of template.definition.fields) {
+      assert.doesNotMatch(`${field.label} ${field.help || ''}`, /marketing|newsletter|promotional|subscribe/i, `${template.id}.${field.id}`);
+      assert.equal(field.default, undefined, `${template.id}.${field.id} has no preselected answer`);
+    }
+    assert.ok(template.definition.fields.filter(field => field.type === 'email').length <= 1, `${template.id} asks for one email at most`);
+  }
 });
 
 test('creating from a template saves an unpublished draft that is not publicly reachable', async () => {

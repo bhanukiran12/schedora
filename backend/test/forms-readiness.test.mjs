@@ -2,8 +2,8 @@
 // unreachable questions, routing destinations by role, and no state invented from the page.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assessFormReadiness, draftChanges, placeholderIssues, unreachableFields } from '../../frontend/js/forms-readiness.mjs';
-import { definitionProblems, visibleFields } from '../src/shared/forms-logic.mjs';
+import { assessFormReadiness, conditionSentence, draftChanges, placeholderIssues, unreachableFields } from '../../frontend/js/forms-readiness.mjs';
+import { conditionHolds, definitionProblems, visibleFields } from '../src/shared/forms-logic.mjs';
 import { normalizeDefinition } from '../src/forms/service.mjs';
 import { setup, signUp, publishedEventType, START } from './helpers.mjs';
 
@@ -168,4 +168,30 @@ test('real local API: a form with a conditional page break is not "changed" afte
     assert.equal((await env.client().get(`/api/public/forms/${form.slug}`)).status, 200);
     assert.equal(env.app.db.get('SELECT COUNT(*) AS count FROM responses').count, 0, 'checking readiness creates no response');
   } finally { await env.close(); }
+});
+
+test('plain-language conditions say exactly what the shared evaluator does', () => {
+  const fields = [
+    { id: 'site', type: 'single_choice', label: 'Do you have a website?', options: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] },
+    { id: 'kind', type: 'single_choice', label: 'Kind', options: [{ id: 'other', label: 'Other' }, { id: 'another', label: 'Another' }, { id: 'team', label: 'Team' }] },
+    { id: 'tools', type: 'multiple_choice', label: 'Tools', options: [{ id: 'a', label: 'Calendar' }, { id: 'b', label: 'Email' }] },
+    { id: 'note', type: 'short_text', label: 'Note' }
+  ];
+  const cases = [
+    [{ field: 'site', op: 'equals', value: 'yes' }, 'when “Do you have a website?” is “Yes”', [[{ site: 'yes' }, true], [{ site: 'no' }, false], [{}, false]]],
+    [{ field: 'site', op: 'not_equals', value: 'yes' }, 'when “Do you have a website?” is anything other than “Yes”, including unanswered', [[{}, true], [{ site: 'no' }, true], [{ site: 'yes' }, false]]],
+    [{ field: 'kind', op: 'contains', value: 'other' }, 'when “Kind” is “Other” or “Another”', [[{ kind: 'other' }, true], [{ kind: 'another' }, true], [{ kind: 'team' }, false]]],
+    [{ field: 'tools', op: 'equals', value: 'a' }, 'when “Calendar” is the only choice in “Tools”', [[{ tools: ['a'] }, true], [{ tools: ['a', 'b'] }, false]]],
+    [{ field: 'tools', op: 'contains', value: 'a' }, 'when “Calendar” is one of the choices in “Tools”', [[{ tools: ['a', 'b'] }, true], [{ tools: ['b'] }, false]]],
+    [{ field: 'tools', op: 'not_equals', value: 'a' }, 'unless “Calendar” is the only choice in “Tools”', [[{ tools: ['a'] }, false], [{ tools: [] }, true], [{ tools: ['a', 'b'] }, true]]],
+    [{ field: 'note', op: 'contains', value: 'Urgent' }, 'when the answer to “Note” includes “Urgent” (any capitalisation)', [[{ note: 'very urgent' }, true], [{ note: 'later' }, false]]],
+    [{ field: 'note', op: 'not_answered' }, 'when “Note” is left unanswered', [[{ note: ' ' }, true], [{ note: 'x' }, false]]]
+  ];
+  for (const [condition, sentence, examples] of cases) {
+    assert.equal(conditionSentence(condition, fields), sentence);
+    for (const [answers, holds] of examples) assert.equal(conditionHolds(condition, answers), holds, `${sentence} with ${JSON.stringify(answers)}`);
+  }
+  assert.match(conditionSentence({ field: 'gone', op: 'answered' }, fields), /no longer in the form.*cannot match/);
+  assert.equal(conditionSentence({ field: 'note', op: 'equals', value: '' }, fields), 'when “Note” is an empty value (no value entered yet: enter one so the rule means what you intend)');
+  assert.match(conditionSentence({ field: 'site', op: 'equals', value: 'maybe' }, fields), /no longer exists.*cannot match/);
 });

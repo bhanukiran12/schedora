@@ -1,9 +1,11 @@
-import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
+import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FORM_TEMPLATES, questionCount } from './forms-templates.mjs';
 import { buildTrail, responseTrailContext, STATE_LABELS } from './enquiry-trail.mjs';
-import { assessFormReadiness } from './forms-readiness.mjs';
+import { assessFormReadiness, conditionSentence } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
+import { hostInfo, productOrigin } from './context.mjs';
+import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
@@ -15,7 +17,12 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
 import { CONDITION_OPS, FIELD_TYPES, answerText, checkAnswer, definitionProblems, pipe, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 
-const publicUrl = (form, mode) => `${location.origin}/f/${form.slug}${mode ? '?mode=' + mode : ''}`;
+// The respondent link: the Forms host on the product domain, otherwise the address this page uses.
+const formsOrigin = () => hostInfo(location.hostname, boot.productDomain).production ? productOrigin('forms', location, boot.productDomain) : location.origin;
+const publicUrl = (form, mode) => `${formsOrigin()}/f/${form.slug}${mode ? '?mode=' + mode : ''}`;
+// Loopback and private-network addresses only open on this computer or network.
+const LOCAL_HOST = /^(localhost|127(\.\d+){3}|\[::1\]|0\.0\.0\.0|10(\.\d+){3}|192\.168(\.\d+){2}|172\.(1[6-9]|2\d|3[01])(\.\d+){2})$|\.(localhost|local)$/;
+const isLocalLink = url => LOCAL_HOST.test(new URL(url).hostname);
 const SUBMIT_TIMEOUT_MS = 20000;
 
 // ---------------------------------------------------------------------------------------------
@@ -265,24 +272,58 @@ export async function publicForm(ctx) {
 // ---------------------------------------------------------------------------------------------
 // Dashboard
 
+const BLANK_TEMPLATE = { id: 'blank', name: 'Blank form', purpose: 'Start from a short starter with name, email and one choice question to replace with your own.',
+  definition: { presentation: 'classic', fields: [{ label: 'Your name' }, { label: 'Email address' }, { label: 'Your first question' }] } };
+const presentationName = definition => definition.presentation === 'conversational' ? 'one question at a time' : 'classic layout';
+
+// A card shows who the template is for, what it collects and how its logic behaves; a small
+// sketch of its first questions stands in for a thumbnail.
+const templateCard = template => {
+  const blank = template === BLANK_TEMPLATE;
+  const sketch = template.definition.fields.filter(field => field.type !== 'page_break' && !field.show_if).slice(0, 3);
+  return html`<li class="template-card"><div class="template-sketch" aria-hidden="true">${sketch.map(field => html`<span>${field.label}</span>`)}</div>
+    ${template.audience ? html`<p class="template-audience">${template.audience}</p>` : ''}<h3>${template.name}</h3><p>${template.purpose}</p>
+    <p class="template-meta">${blank ? 3 : questionCount(template.definition)} questions · ${presentationName(template.definition)}</p>${template.logic ? html`<p class="template-logic">${template.logic}</p>` : ''}
+    <div class="template-actions">${blank ? '' : html`<button class="btn btn-small" type="button" data-preview-template="${template.id}">Preview<span class="visually-hidden"> ${template.name}</span></button>`}
+      <button class="btn btn-small btn-primary" type="button" data-template="${template.id}">Create draft<span class="visually-hidden"> from ${blank ? 'a blank form' : template.name}</span></button></div></li>`;
+};
+
+// Try a template's questions and logic before creating anything. The preview renderer never calls
+// the server, so nothing is saved, sent or counted.
+function previewTemplate(template, create) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'card template-preview';
+  dialog.setAttribute('aria-labelledby', 'template-preview-title');
+  mount(dialog, html`<div class="row-between"><h2 id="template-preview-title" tabindex="-1">Preview: ${template.name}</h2><button class="btn btn-small" type="button" data-close>Close</button></div>
+    <p class="hint">Try the questions and logic. Nothing is saved or sent, and no draft exists until you create one.</p>
+    <div class="template-preview-form"></div>
+    <div class="actions"><button class="btn btn-primary" type="button" data-use>Create draft from this template</button><button class="btn" type="button" data-close>Close</button></div>`);
+  const opener = document.activeElement;
+  document.body.append(dialog);
+  renderForm($('.template-preview-form', dialog), template.definition, { preview: true });
+  dialog.addEventListener('click', event => {
+    if (event.target.closest('[data-close]')) dialog.close();
+    else if (event.target.closest('[data-use]')) { dialog.returnValue = 'use'; dialog.close(); }
+  });
+  dialog.addEventListener('close', () => { const use = dialog.returnValue === 'use'; dialog.remove(); opener?.focus?.(); if (use) create(template.id); });
+  dialog.showModal();
+  $('#template-preview-title', dialog).focus();
+}
+
 export async function dashboard(ctx) {
   setTitle('Forms by Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Every good conversation starts with a question.', lead: 'Build classic or one-question-at-a-time forms with logic and answer piping. Responses are saved to your workspace and can be exported.' }));
   if (!needsSession(ctx)) return;
-  const presentation = definition => definition.presentation === 'conversational' ? 'one question at a time' : 'classic layout';
   mount(ctx.main, html`<div class="container page"><div class="row-between"><div><span class="tag">Forms · ${workspace().name}</span><h1>Forms</h1></div>
     <div class="row"><a class="btn" href="/enquiries">Enquiries</a><button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
     <section class="form-templates" id="form-templates" aria-labelledby="templates-heading" hidden>
       <h2 id="templates-heading" tabindex="-1">Choose a starting point</h2>
       <p class="muted">Each option creates an unpublished draft in this workspace. Edit any question, preview it, then publish when you are ready. Nothing is public until you publish.</p>
-      <ul class="template-grid">
-        <li class="template-card"><h3>Blank form</h3><p>A short starter with name, email and one choice question to replace with your own.</p><p class="template-meta">3 questions · classic layout</p>
-          <button class="btn" type="button" data-template="blank">Create draft<span class="visually-hidden"> from a blank form</span></button></li>
-        ${FORM_TEMPLATES.map(template => html`<li class="template-card"><p class="template-audience">${template.audience}</p><h3>${template.name}</h3><p>${template.purpose}</p>
-          <p class="template-meta">${questionCount(template.definition)} questions · ${presentation(template.definition)}</p><p class="template-logic">${template.logic}</p>
-          <button class="btn" type="button" data-template="${template.id}">Create draft<span class="visually-hidden"> from ${template.name}</span></button></li>`)}
-      </ul>
+      <h3 class="template-group">For sales and client meetings</h3>
+      <ul class="template-grid">${templateCard(BLANK_TEMPLATE)}${FORM_TEMPLATES.filter(template => template.group === 'meetings').map(templateCard)}</ul>
+      <h3 class="template-group">More starting points</h3>
+      <ul class="template-grid">${FORM_TEMPLATES.filter(template => template.group !== 'meetings').map(templateCard)}</ul>
       <div id="template-status" role="status"></div></section>
     <div id="form-list">${loading()}</div></div>`);
   const picker = $('#form-templates');
@@ -293,10 +334,9 @@ export async function dashboard(ctx) {
   };
   $('#new-form').onclick = () => showPicker(picker.hidden);
   // Creating a draft is the explicit action here; publishing stays a separate step in the builder.
-  picker.addEventListener('click', async event => {
-    const button = event.target.closest('[data-template]');
-    if (!button || picker.dataset.busy) return;
-    const template = FORM_TEMPLATES.find(item => item.id === button.dataset.template);
+  const create = async id => {
+    if (picker.dataset.busy) return;
+    const template = FORM_TEMPLATES.find(item => item.id === id);
     picker.dataset.busy = '1';
     $$('[data-template]', picker).forEach(item => item.setAttribute('aria-disabled', 'true'));
     mount($('#template-status'), html`<p class="muted">Creating draft…</p>`);
@@ -306,7 +346,14 @@ export async function dashboard(ctx) {
     } catch (error) {
       mount($('#template-status'), notice('bad', html`<p>The draft was not created. ${error.message}</p>`));
       $$('[data-template]', picker).forEach(item => item.removeAttribute('aria-disabled'));
+      $('#template-status').scrollIntoView({ block: 'nearest' });
     } finally { delete picker.dataset.busy; }
+  };
+  picker.addEventListener('click', event => {
+    const use = event.target.closest('[data-template]');
+    if (use) return create(use.dataset.template);
+    const preview = event.target.closest('[data-preview-template]');
+    if (preview) previewTemplate(FORM_TEMPLATES.find(item => item.id === preview.dataset.previewTemplate), create);
   });
   try {
     const forms = await api('GET', wsPath('/forms'));
@@ -352,10 +399,16 @@ export async function builder(ctx) {
     <a href="/forms">← All forms</a>
     <div class="row-between"><h1 id="builder-title">${draft.title}</h1><div class="row" id="builder-status"></div></div>
     <div class="actions builder-actions"><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button>
-      <a class="btn" href="/forms/${form.id}/responses">Responses</a><button class="btn btn-danger" id="delete-form">Delete</button></div>
+      <a class="btn" href="/forms/${form.id}/responses" id="responses-link">Responses</a><button class="btn btn-danger" id="delete-form">Delete</button></div>
     <p class="hint" id="save-hint">Changes are kept on this page until you select Save draft. The live form changes only when you publish.</p>
+    <nav class="builder-index" id="builder-index" aria-label="Form builder sections"><ul>
+      <li><a href="#share-panel" data-section="share">Sharing</a></li><li><a href="#readiness" data-section="readiness">Ready to share?</a></li>
+      <li><a href="#routing" data-section="routing">After submitting</a></li><li><a href="#settings" data-section="settings">Form details</a></li>
+      <li><a href="#questions" data-section="questions">Questions</a></li><li><a href="#builder-preview" data-section="preview">Preview</a></li></ul>
+      <span class="builder-index-state" aria-hidden="true"></span></nav>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
+    <section class="card card-plain share-panel" id="share-panel" aria-labelledby="share-heading"></section>
     <section class="card card-plain readiness" id="readiness" aria-labelledby="readiness-heading">
       <div class="row-between"><h2 id="readiness-heading" tabindex="-1">Ready to share?</h2><button class="btn btn-small" type="button" data-recheck>Check again</button></div>
       <p class="hint" id="readiness-checked">What respondents see now and what your saved draft would publish. Unsaved edits are not included.</p>
@@ -363,7 +416,7 @@ export async function builder(ctx) {
     <div id="routing"></div>
     <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit">Edit</button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1">Preview</button></div>
     <div class="builder" data-view="edit">
-      <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="settings"></div><div id="fields"></div>
+      <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="settings"></div><div id="questions"><h2 id="questions-heading" tabindex="-1">Questions</h2><div id="fields"></div></div>
         <div class="card card-plain"><label for="new-type">Add an item</label><div class="row"><select id="new-type">${Object.entries(FIELD_TYPES).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select><button class="btn" id="add-field">Add</button></div></div></section>
       <section class="builder-preview card" id="builder-preview" aria-label="Live preview"><div class="row-between"><h2 id="preview-heading" tabindex="-1">Preview</h2><select id="preview-mode" aria-label="Preview presentation"><option value="classic">Classic</option><option value="conversational">Conversational</option></select></div><div id="preview"></div></section>
     </div></div>`);
@@ -376,20 +429,48 @@ export async function builder(ctx) {
     readiness?.unsaved(value !== 'saved');
   };
   const liveBadge = () => form.published_version ? badge('published', `Live · version ${form.published_version}`) : form.locked_ids?.length ? badge('paused', 'Closed · not collecting') : badge('draft', 'Not published');
-  const renderStatus = () => mount($('#builder-status'), html`${liveBadge()}
+  const renderStatus = () => {
+    mount($('#builder-status'), html`${liveBadge()}
     <span class="badge badge-${saveState === 'saved' ? 'ok' : saveState === 'saving' || saveState === 'dirty' ? 'warn' : 'bad'}" role="status">${SAVE_TEXT[saveState]}</span>
     ${saveState === 'saved' && form.published_version && form.has_unpublished_changes ? badge('pending', 'Saved draft not yet published') : ''}`);
-  // Share controls live in the readiness Sharing area; nothing here publishes.
-  const renderShare = () => $('#share') && mount($('#share'), form.published_version ? html`<div class="share-block">
-    <label for="share-link">Public link</label><div class="share-row"><input id="share-link" readonly value="${publicUrl(form)}"><button class="btn btn-small" type="button" data-copy="${publicUrl(form)}">Copy</button><a class="btn btn-small" href="/f/${form.slug}" target="_blank" rel="noopener">Open<span class="visually-hidden"> the live form in a new tab</span></a></div>
-    <label for="share-conv">Conversational link</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy="${publicUrl(form, 'conversational')}">Copy</button></div>
-    <details class="share-embed"><summary>Embed on your site</summary><label for="embed">Embed code</label><textarea id="embed" class="embed-code" readonly>&lt;iframe src="${publicUrl(form)}${publicUrl(form).includes('?') ? '&amp;' : '?'}embed=1" title="${form.draft.title}" width="100%" height="680" style="border:0"&gt;&lt;/iframe&gt;</textarea>
-      <button class="btn btn-small" type="button" data-copy-embed>Copy embed code</button></details>
-    <div class="actions"><button class="btn btn-danger btn-small" type="button" id="unpublish">Stop collecting responses</button></div></div>`
-    : html`<label for="share-future">Link once published</label><input id="share-future" readonly value="${publicUrl(form)}">`);
+    // Publish is the main action only while there is something to publish.
+    const publish = $('#publish');
+    publish.textContent = form.published_version ? 'Publish changes' : form.locked_ids?.length ? 'Publish again' : 'Publish form';
+    publish.classList.toggle('btn-primary', !form.published_version || form.has_unpublished_changes || saveState !== 'saved');
+    $('#responses-link').textContent = `Responses (${form.response_count ?? 0})`;
+    // Mirrored (hidden from assistive technology) so the save state stays visible beside the sticky index.
+    Object.assign($('.builder-index-state'), { textContent: SAVE_TEXT[saveState] }).dataset.state = saveState;
+  };
+  // The one link to give respondents, kept apart from the editor and preview. Nothing here publishes
+  // or sends anything: copying, sharing and the email draft all stay on the creator's device.
+  const renderShare = () => {
+    const url = publicUrl(form);
+    const closed = !form.published_version && form.locked_ids?.length;
+    const heading = html`<h2 id="share-heading" tabindex="-1">Share with respondents</h2>`;
+    if (!form.published_version) return mount($('#share-panel'), html`${heading}
+      <p><strong>${closed ? 'Closed: not collecting responses.' : 'Not public yet.'}</strong> ${closed ? 'Anyone opening the link is told the form is closed. Responses already received are kept. Publishing again reopens the same link.' : 'Respondents cannot open this form until you publish it. The respondent link appears here once it is live.'}</p>
+      <div class="actions"><button class="btn" type="button" data-share-publish>${closed ? 'Publish again' : 'Publish form'}</button><button class="btn" type="button" data-share-preview>Preview first</button></div>`);
+    const email = `mailto:?subject=${encodeURIComponent(form.draft.title)}&body=${encodeURIComponent(`Please fill in this form: ${url}`)}`;
+    const attribute = value => value.replace(/[&"<>]/g, char => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[char]);
+    const embed = `<iframe src="${url}?embed=1" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0"></iframe>`;
+    mount($('#share-panel'), html`${heading}
+      <p class="hint">Anyone with this link can open the live form and respond without signing in.</p>
+      <label for="share-link">Respondent link</label>
+      <div class="share-row"><input id="share-link" readonly value="${url}"><button class="btn btn-primary btn-small" type="button" data-copy-target="share-link">Copy link</button><a class="btn btn-small" id="open-live" href="${url}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a></div>
+      <p class="copy-status" id="share-status" role="status"></p>
+      ${isLocalLink(url) ? notice('warn', html`<p><strong>This is a local address.</strong> It opens only on this computer or network, so respondents elsewhere cannot use it. Share the link from your deployed Schedora address instead.</p>`) : ''}
+      <div class="share-row"><a class="btn btn-small" id="share-email" href="${email}" data-external>Email the link</a>${navigator.share ? html`<button class="btn btn-small" type="button" id="share-native">Share…</button>` : ''}</div>
+      <p class="hint">Email the link opens a new message in your own email app; Schedora does not send it. Copying or sharing does not show that anyone has responded. Accepted responses appear under <a href="/forms/${form.id}/responses">Responses</a>.</p>
+      <details class="share-embed"><summary>Conversational link and embed code</summary>
+        <label for="share-conv">Conversational link (one question at a time)</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy-target="share-conv">Copy</button></div>
+        <label for="embed">Embed code for your website</label><textarea id="embed" class="embed-code" readonly>${embed}</textarea>
+        <button class="btn btn-small" type="button" data-copy-target="embed">Copy embed code</button></details>
+      <p class="hint">Not for respondents: this editor page needs a workspace sign-in, and Preview runs only in your browser and saves nothing.</p>
+      <div class="actions"><button class="btn btn-danger btn-small" type="button" id="unpublish">Stop collecting responses</button></div>`);
+  };
   const renderPreview = () => renderForm($('#preview'), draft, { mode: $('#preview-mode').value, preview: true });
 
-  const renderSettings = () => mount($('#settings'), html`<div class="card card-plain">
+  const renderSettings = () => mount($('#settings'), html`<div class="card card-plain"><h2 id="settings-heading" tabindex="-1">Form details</h2>
     <label for="f-title">Form title</label><input id="f-title" data-setting="title" maxlength="150" value="${draft.title}">
     <label for="f-description">Description</label><textarea id="f-description" data-setting="description" maxlength="2000">${draft.description || ''}</textarea>
     <fieldset><legend class="label">Presentation</legend>
@@ -406,14 +487,18 @@ export async function builder(ctx) {
       const name = field.type === 'page_break' ? `page break ${index + 1}` : `question ${number}`;
       return html`<div class="field-editor ${field.type === 'page_break' ? 'page-break' : ''}" data-index="${index}">
         <div class="field-editor-head"><strong>${field.type === 'page_break' ? 'Page break' : `${number}. ${FIELD_TYPES[field.type]}`}</strong>
-          <div class="row"><button class="btn btn-small" data-move="-1" ${index === 0 ? raw('disabled') : ''} aria-label="Move ${name} up">↑</button><button class="btn btn-small" data-move="1" ${index === draft.fields.length - 1 ? raw('disabled') : ''} aria-label="Move ${name} down">↓</button><button class="btn btn-small btn-danger" data-remove aria-label="Remove ${name}">Remove</button></div></div>
+          <div class="row"><button class="btn btn-small" data-move="-1" ${index === 0 ? raw('disabled') : ''} aria-label="Move ${name} up">↑</button><button class="btn btn-small" data-move="1" ${index === draft.fields.length - 1 ? raw('disabled') : ''} aria-label="Move ${name} down">↓</button>${field.type === 'page_break' ? '' : html`<button class="btn btn-small" data-duplicate aria-label="Duplicate ${name}">Duplicate</button>`}<button class="btn btn-small btn-danger" data-remove aria-label="Remove ${name}">Remove</button></div></div>
         ${field.type === 'page_break' ? html`<p class="hint">Questions after this start a new page in classic presentation.</p>` : html`
+          <label for="ft-${index}">Question type</label><select id="ft-${index}" data-type aria-describedby="ft-${index}-note">${typeChoices(field).map(type => html`<option value="${type}" ${type === field.type ? raw('selected') : ''}>${FIELD_TYPES[type]}</option>`)}</select>
+          <div id="ft-${index}-note" data-type-note></div>
           <label for="fl-${index}">Question</label><span class="hint" id="fl-${index}-hint">Insert an earlier answer with {{question_key}}${earlier.length ? `, for example {{${earlier[0].id}}}` : ''}.</span>
           <input id="fl-${index}" data-prop="label" maxlength="300" aria-describedby="fl-${index}-hint" value="${field.label}">
           <label for="fh-${index}">Help text <span class="muted">(optional)</span></label><input id="fh-${index}" data-prop="help" maxlength="500" value="${field.help || ''}">
-          <div class="row"><label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required</label>
-            <label class="check">Key <input data-prop="id" value="${field.id}" maxlength="40" pattern="[a-z0-9_]+" aria-label="Question key" class="key-input" ${locked.has(field.id) ? raw('readonly aria-describedby="key-locked-' + index + '"') : ''}></label></div>
-          ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}
+          <label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required: respondents must answer before continuing</label>
+          <details class="field-advanced"><summary>Question key <span class="muted">· ${field.id}</span></summary>
+            <span class="hint" id="key-hint-${index}">Used in exports, logic and {{${field.id}}} insertions. Lowercase letters, numbers and underscores.</span>
+            <input data-prop="id" value="${field.id}" maxlength="40" pattern="[a-z0-9_]+" aria-label="Question key" aria-describedby="key-hint-${index}${locked.has(field.id) ? ' key-locked-' + index : ''}" class="key-input" ${locked.has(field.id) ? raw('readonly') : ''}>
+            ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}</details>
           ${field.type.endsWith('_choice') ? html`<fieldset><legend class="label">Options</legend>${field.options.map((option, optionIndex) => html`<div class="range"><input aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}"><button class="btn btn-small" data-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" ${field.options.length === 1 ? raw('disabled') : ''}>Remove</button></div>`)}
             <button class="btn-link" data-add-option>Add option</button></fieldset>` : ''}`}
         <label class="check"><input type="checkbox" data-logic ${field.show_if ? raw('checked') : ''} ${earlier.length ? '' : raw('disabled')}> ${field.type === 'page_break' ? 'Show this page only when…' : 'Show only when…'}</label>
@@ -423,20 +508,24 @@ export async function builder(ctx) {
           ${['answered', 'not_answered'].includes(field.show_if.op) ? '' : source?.type?.endsWith('_choice')
             ? html`<select data-cond="value" aria-label="Value">${source.options.map(option => html`<option value="${option.id}" ${option.id === field.show_if.value ? raw('selected') : ''}>${option.label}</option>`)}</select>`
             : html`<input data-cond="value" aria-label="Value" value="${field.show_if.value || ''}">`}</div>
-          <p class="hint">Hidden questions are skipped, and any answer to them is discarded when the response is saved.</p>` : ''}
+          <p class="logic-sentence" data-logic-sentence>${logicSentence(field)}</p>
+          <p class="hint">Hidden questions are skipped, and any answer to them is discarded when the response is saved. Preview lets you try each path without saving a response.</p>` : ''}
       </div>`;
     })}`);
   };
 
+  // Plain-language versions of the display rules, kept current as labels and values are typed.
+  const logicSentence = field => `${field.type === 'page_break' ? 'This page is shown' : 'Shown'} only ${conditionSentence(field.show_if, draft.fields)}.`;
+  const updateSentences = () => $$('#fields [data-logic-sentence]').forEach(node => { node.textContent = logicSentence(draft.fields[Number(node.closest('[data-index]').dataset.index)]); });
   const refresh = ({ fields = false, preview = true } = {}) => {
-    if (fields) renderFields();
+    if (fields) renderFields(); else updateSentences();
     if (preview) renderPreview();
     setState('dirty');
   };
 
   const renderAll = () => {
     $('#builder-title').textContent = draft.title || 'Untitled form';
-    renderStatus(); readiness?.check(); renderSettings(); renderFields();
+    renderStatus(); renderShare(); readiness?.check(); renderSettings(); renderFields();
     $('#preview-mode').value = draft.presentation;
     renderPreview();
   };
@@ -476,6 +565,7 @@ export async function builder(ctx) {
     const index = Number(editor.dataset.index);
     const field = draft.fields[index];
     const { prop, cond } = event.target.dataset;
+    if (event.target.dataset.type !== undefined) return changeType(index, event.target);
     if (prop === 'required') { field.required = event.target.checked; return refresh(); }
     if (event.target.dataset.logic !== undefined) {
       if (event.target.checked) {
@@ -513,11 +603,21 @@ export async function builder(ctx) {
       const ends = target === 0 || target === draft.fields.length - 1;
       focus = `[data-index="${target}"] [data-move="${ends ? -Number(button.dataset.move) : button.dataset.move}"]`;
       announce(`Moved to position ${target + 1} of ${draft.fields.length}.${dropped.length ? ` ${dropped.length} display rule${dropped.length > 1 ? 's were' : ' was'} removed because ${dropped.length > 1 ? 'they' : 'it'} referred to a later question.` : ''}`);
+    } else if (button.dataset.duplicate !== undefined) {
+      // A copy gets new question and option keys, so its answers never mix with the original's.
+      const copy = structuredClone(field);
+      copy.id = randomKey('q', draft.fields);
+      copy.label = `${field.label} (copy)`;
+      if (copy.options) { const taken = []; copy.options = copy.options.map(option => { const fresh = { ...option, id: randomKey('opt', taken) }; taken.push(fresh); return fresh; }); }
+      draft.fields.splice(index + 1, 0, copy);
+      focus = `[data-index="${index + 1}"] [data-prop="label"]`;
+      announce(`Question duplicated as question ${index + 2}. Save the draft to keep this change.`);
     } else if (button.dataset.remove !== undefined) {
       draft.fields.splice(index, 1);
-      draft.fields.forEach(item => { if (item.show_if?.field === field.id) delete item.show_if; });
+      const dependent = draft.fields.filter(item => item.show_if?.field === field.id);
+      dependent.forEach(item => delete item.show_if);
       focus = draft.fields.length ? `[data-index="${Math.min(index, draft.fields.length - 1)}"] [data-remove]` : '#new-type';
-      announce('Item removed. Save the draft to keep this change.');
+      announce(`Item removed.${dependent.length ? ` ${dependent.length} display rule${dependent.length > 1 ? 's that depended on it were' : ' that depended on it was'} removed too.` : ''} Save the draft to keep this change.`);
     } else if (button.dataset.addOption !== undefined) {
       field.options.push({ id: randomKey('opt', field.options), label: 'Option ' + (field.options.length + 1) });
       focus = `[data-index="${index}"] [data-option="${field.options.length - 1}"]`;
@@ -528,6 +628,40 @@ export async function builder(ctx) {
     refresh({ fields: true });
     if (focus) $(focus)?.focus();
   });
+  // Type changes follow forms-type-change.mjs: safe ones apply at once, changed settings or rule
+  // meanings are confirmed first, incompatible rules block, and a published key is replaced rather
+  // than retyped. The select shows the current type again until a change is actually applied.
+  const changeType = async (index, select) => {
+    const field = draft.fields[index];
+    const to = select.value;
+    select.value = field.type;
+    const note = $(`[data-index="${index}"] [data-type-note]`);
+    mount(note, '');
+    const made = [];
+    const newKey = prefix => { const key = randomKey(prefix, [...draft.fields, ...(field.options || []), ...made]); made.push({ id: key }); return key; };
+    const plan = planTypeChange({ field, to, fields: draft.fields, routing: form.routing, locked: new Set(form.locked_ids || []), newKey });
+    const label = `“${field.label || 'Untitled question'}”`;
+    const type = FIELD_TYPES[to].toLowerCase();
+    const list = items => html`<ul>${items.map(item => html`<li>${item}</li>`)}</ul>`;
+    const apply = (next, message) => {
+      draft.fields[index] = next;
+      refresh({ fields: true });
+      $(`[data-index="${index}"] [data-type]`)?.focus();
+      announce(`${message} Save the draft to keep this change.`);
+    };
+    if (plan.kind === 'none') return;
+    if (plan.kind === 'apply') return apply(plan.next, `${label} is now ${type}.${plan.effects.length ? ' ' + plan.effects.join(' ') : ''}`);
+    if (plan.kind === 'blocked' || !plan.canReplace && plan.kind === 'replace') {
+      return mount(note, notice('warn', html`<p><strong>Type not changed.</strong> ${plan.reason}${plan.kind === 'replace' ? ' These rules depend on it, so change or remove them first:' : ''}</p>${list(plan.rules)}`));
+    }
+    if (plan.kind === 'confirm') {
+      if (!(await ask({ title: `Change ${label} to ${type}?`, body: 'Nothing is saved until you select Save draft, and the live form changes only when you publish.', fields: list(plan.effects), confirm: 'Change type' }))) return announce('Type not changed.');
+      return apply(plan.next, `${label} is now ${type}.`);
+    }
+    const effects = ['The new question keeps the wording, help text, required setting and display rule, with a new question key.', 'The old question is removed from this draft only. Earlier versions, their responses and exports keep it with its answers.', 'Nothing is saved until you select Save draft; the live form changes only when you publish.'];
+    if (!(await ask({ title: `Replace ${label} with a new ${type} question?`, body: plan.reason, fields: list(effects), confirm: 'Replace question' }))) return announce('Question not replaced.');
+    apply(replacementQuestion(field, to, newKey), `${label} was replaced by a new ${type} question.`);
+  };
   $('#add-field').onclick = () => {
     const type = $('#new-type').value;
     const field = { id: randomKey(type === 'page_break' ? 'page' : 'q', draft.fields), type, label: type === 'page_break' ? '' : 'New question', required: false };
@@ -598,27 +732,41 @@ export async function builder(ctx) {
     if (form.published_version && !(await ask({ title: `Publish version ${form.published_version + 1}?`, body: 'New visitors see the updated questions and routing right away. Responses already received stay linked to the version they answered. People who opened the current version can still submit it for 24 hours.', confirm: 'Publish' }))) return;
     try {
       form = await api('POST', wsPath(`/forms/${form.id}/publish`), { base_revision: form.revision });
-      renderStatus(); readiness.check(); renderFields();
-      mount($('#builder-notice'), notice('ok', html`<p>Version ${form.published_version} is live. New responses use this version.</p>`));
-      $('#builder-notice').focus();
+      renderStatus(); renderShare(); readiness.check(); renderFields();
+      mount($('#builder-notice'), notice('ok', html`<p>Version ${form.published_version} is live. New responses use this version. Share the respondent link below.</p>`));
+      $('#share-panel').scrollIntoView({ block: 'nearest' });
+      $('#share-heading').focus({ preventScroll: true });
     } catch (error) {
       if (error.code === 'draft_conflict') { setState('conflict'); return showConflict(error.details.current); }
       reportError(error, 'Not published. ');
     }
   };
-  function bindShare() {
-    $$('#share [data-copy]').forEach(button => button.onclick = () => copy(button.dataset.copy));
-    $('#share [data-copy-embed]')?.addEventListener('click', () => copy($('#embed').value, 'Embed code'));
-    $('#unpublish')?.addEventListener('click', async () => {
+  // Copy reports what actually happened; when the clipboard is unavailable the text is selected instead.
+  $('#share-panel').addEventListener('click', async event => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    const status = $('#share-status');
+    if (button.dataset.copyTarget) {
+      const field = $('#' + button.dataset.copyTarget);
+      const what = { 'share-link': 'Respondent link', 'share-conv': 'Conversational link', embed: 'Embed code' }[field.id];
+      try { await navigator.clipboard.writeText(field.value); status.textContent = `${what} copied. Paste it wherever you share it; nothing has been sent.`; }
+      catch { field.focus(); field.select(); status.textContent = `Copy failed. The ${what.toLowerCase()} is selected: press Ctrl+C (⌘C on a Mac) to copy it.`; }
+    } else if (button.id === 'share-native') {
+      try { await navigator.share({ title: form.draft.title, url: publicUrl(form) }); status.textContent = 'Passed to your device’s share menu. Schedora cannot see whether it was sent.'; }
+      catch (error) { status.textContent = error.name === 'AbortError' ? 'Sharing cancelled. Nothing was sent.' : 'Your device could not open its share menu. Copy the link instead.'; }
+    } else if (button.dataset.sharePublish !== undefined) $('#publish').click();
+    else if (button.dataset.sharePreview !== undefined) goTo('preview-' + draft.presentation);
+    else if (button.id === 'unpublish') {
       if (!(await ask({ title: 'Stop collecting responses?', body: 'The public link will say the form is closed. Existing responses are kept. You can publish again later.', confirm: 'Stop collecting', danger: true }))) return;
-      try { form = await api('POST', wsPath(`/forms/${form.id}/unpublish`)); renderStatus(); readiness.check(); toast('The form is closed to new responses.'); }
+      try { form = await api('POST', wsPath(`/forms/${form.id}/unpublish`)); renderStatus(); renderShare(); readiness.check(); toast('The form is closed to new responses.'); $('#share-heading').focus(); }
       catch (error) { reportError(error); }
-    });
-  }
+    }
+  });
   // "Ready to share?": the saved form and the live public form, assessed with the shared validator.
   // Re-checked after every save, publish, unpublish and routing save. It never publishes.
-  readiness = formReadiness(ctx, () => form, { renderShare, bindShare, goTo: section => {
+  function goTo(section) {
     if (section === 'publish') return $('#publish').focus();
+    if (section === 'share') { $('#share-panel').scrollIntoView({ block: 'start' }); return $('#share-heading').focus({ preventScroll: true }); }
     if (section === 'routing') { const routing = $('#routing details'); if (routing) { routing.open = true; routing.scrollIntoView({ block: 'start' }); routing.querySelector('summary').focus({ preventScroll: true }); } return; }
     if (section.startsWith('preview-')) {
       $('#preview-mode').value = section.slice(8);
@@ -630,7 +778,41 @@ export async function builder(ctx) {
     selectView(tabs.find(tab => tab.dataset.view === 'edit'));
     $('#fields').scrollIntoView({ block: 'start' });
     ($('#fields [data-prop="label"]') || $('#new-type')).focus({ preventScroll: true });
-  } });
+  }
+  readiness = formReadiness(ctx, () => form, { goTo });
+  // Section index: moves focus to the section's heading without changing the address, so the
+  // router never re-renders the builder and unsaved edits stay on the page.
+  const sections = { share: ['#share-panel', '#share-heading'], readiness: ['#readiness', '#readiness-heading'], routing: ['#routing', '#routing summary'], settings: ['#settings', '#settings-heading'], questions: ['#questions', '#questions-heading'], preview: ['#builder-preview', '#preview-heading'] };
+  const index = $('#builder-index');
+  index.addEventListener('click', event => {
+    const link = event.target.closest('[data-section]');
+    if (!link) return;
+    event.preventDefault();
+    const [section, heading] = sections[link.dataset.section];
+    if (['settings', 'questions', 'preview'].includes(link.dataset.section)) selectView(tabs.find(tab => tab.dataset.view === (link.dataset.section === 'preview' ? 'preview' : 'edit')));
+    $(section).scrollIntoView({ block: 'start' });
+    $(heading)?.focus({ preventScroll: true });
+    markCurrent(link.dataset.section);
+  });
+  // The current section is the last one whose top has scrolled past the index; preview sits beside
+  // the editor on wide screens, so it is current only when chosen or when it is the panel shown.
+  const markCurrent = key => $$('[data-section]', index).forEach(link => { if (link.dataset.section === key) link.setAttribute('aria-current', 'location'); else link.removeAttribute('aria-current'); });
+  let ticking = false;
+  const onScroll = () => {
+    if (!index.isConnected) return window.removeEventListener('scroll', onScroll);
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const edge = index.getBoundingClientRect().bottom + 24;
+      const keys = Object.keys(sections).filter(key => key !== 'preview' || view === 'preview');
+      const visible = keys.filter(key => $(sections[key][0])?.offsetParent);
+      const current = visible.filter(key => $(sections[key][0]).getBoundingClientRect().top <= edge).pop() || visible[0];
+      markCurrent(current);
+    });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
   renderAll();
   renderRouting();
   // Arriving from the template picker: say plainly what exists and what does not yet.
@@ -658,13 +840,21 @@ export async function builder(ctx) {
         : html`<input data-rvalue="${index}" aria-label="Rule ${index + 1}: value" value="${rule.condition.value || ''}">`;
     };
     const live = form.published_version ? 'Routing is published with the form: saved changes apply after you publish.' : 'Routing goes live when you publish the form.';
+    const actionText = action => action?.type === 'event' ? `offer the booking page “${eventTypes.find(type => type.id === action.event_type_id)?.title || 'not chosen'}” (nothing is booked until they pick a time)`
+      : action?.type === 'url' ? `show a Continue link to ${action.url || '(no link yet)'}` : `show the message “${action?.message || '(empty)'}”`;
+    const ruleSentence = index => `Rule ${index + 1}: ${conditionSentence(rules[index].condition, questions())}, ${actionText(rules[index].action)}.${index ? ' Checked only if no earlier rule matched.' : ''}`;
+    const fallbackSentence = () => `If no rule matches: ${fallback ? actionText(fallback) : 'show the receipt only'}.`;
+    const sentences = () => { $$('#routing [data-rule-sentence]').forEach(node => { node.textContent = ruleSentence(Number(node.dataset.ruleSentence)); }); const last = $('#routing [data-fallback-sentence]'); if (last) last.textContent = fallbackSentence(); };
     const draw = () => mount($('#routing'), html`<details class="card card-plain" ${form.routing ? raw('open') : ''}><summary><strong>Next step after submitting</strong> <span class="muted">(optional)</span></summary>
       <p class="hint">Rules are checked in order and the first match decides. The response is always saved first; a booking page is offered as a next step, and booking is optional for the respondent.${meetActive ? '' : ' Booking pages need an active Meet or Suite plan.'}</p>
       <ol class="rule-list">${rules.map((rule, index) => html`<li class="range"><span>If</span> <select data-rfield="${index}" aria-label="Rule ${index + 1}: question">${questions().map(field => html`<option value="${field.id}" ${field.id === rule.condition.field ? raw('selected') : ''}>${field.label.slice(0, 40)}</option>`)}</select>
         <select data-rop="${index}" aria-label="Rule ${index + 1}: condition">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${rule.condition.op === op ? raw('selected') : ''}>${label}</option>`)}</select>
         ${valueEditor(rule, index)} <span>then</span> ${actionEditor(rule.action, index)}
-        <span class="row"><button class="btn btn-small" type="button" data-rmove="${index}:-1" aria-label="Move rule ${index + 1} up" ${index === 0 ? raw('disabled') : ''}>↑</button><button class="btn btn-small" type="button" data-rmove="${index}:1" aria-label="Move rule ${index + 1} down" ${index === rules.length - 1 ? raw('disabled') : ''}>↓</button><button class="btn btn-small" type="button" data-rremove="${index}" aria-label="Remove rule ${index + 1}">Remove</button></span></li>`)}</ol>
+        <span class="row"><button class="btn btn-small" type="button" data-rmove="${index}:-1" aria-label="Move rule ${index + 1} up" ${index === 0 ? raw('disabled') : ''}>↑</button><button class="btn btn-small" type="button" data-rmove="${index}:1" aria-label="Move rule ${index + 1} down" ${index === rules.length - 1 ? raw('disabled') : ''}>↓</button><button class="btn btn-small" type="button" data-rremove="${index}" aria-label="Remove rule ${index + 1}">Remove</button></span>
+        <p class="logic-sentence" data-rule-sentence="${index}">${ruleSentence(index)}</p></li>`)}</ol>
       <div class="range"><span>If no rule matches:</span> ${fallback ? actionEditor(fallback, 'fallback') : html`<span class="muted">show the receipt only</span>`} <button class="btn-link" type="button" id="toggle-fallback">${fallback ? 'Remove' : 'Set a next step'}</button></div>
+      ${rules.length ? html`<p class="logic-sentence" data-fallback-sentence>${fallbackSentence()}</p>` : ''}
+      ${rules.length ? html`<p class="hint">First match wins: each respondent gets the step of the first rule their answers match, and later rules are not checked. Answers to questions that were hidden from them count as unanswered. Test a path in Preview; it stores nothing and does not show the step.</p>` : ''}
       <p class="hint">${live} If a booking page is unavailable when someone submits, they see their receipt and the “If no rule matches” message or link instead.</p>
       <div class="actions"><button class="btn btn-small" type="button" id="add-rule" ${questions().length ? '' : raw('disabled')}>Add rule</button><button class="btn btn-small btn-primary" type="button" id="save-routing">Save routing</button>${form.routing ? html`<button class="btn btn-small" type="button" id="clear-routing">Remove all rules</button>` : ''}</div></details>`);
     const actionAt = key => key === 'fallback' ? fallback : rules[Number(key)].action;
@@ -680,11 +870,13 @@ export async function builder(ctx) {
       if (rvalue !== undefined && event.target.tagName === 'SELECT') rules[Number(rvalue)].condition.value = event.target.value;
       if (akind !== undefined) { setAction(akind, event.target.value === 'event' ? { type: 'event', event_type_id: eventTypes[0]?.id } : { type: event.target.value }); return redraw(`[data-akind="${akind}"]`); }
       if (aevent !== undefined) actionAt(aevent).event_type_id = event.target.value;
+      sentences();
     };
     root.oninput = event => {
       const { rvalue, avalue } = event.target.dataset;
       if (rvalue !== undefined && event.target.tagName === 'INPUT') rules[Number(rvalue)].condition.value = event.target.value;
       if (avalue !== undefined) { const action = actionAt(avalue); if (action.type === 'url') action.url = event.target.value; else action.message = event.target.value; }
+      sentences();
     };
     root.onclick = async event => {
       const target = event.target.closest('button');
@@ -722,7 +914,7 @@ export async function builder(ctx) {
   };
 }
 
-function formReadiness(ctx, currentForm, { renderShare, bindShare, goTo }) {
+function formReadiness(ctx, currentForm, { goTo }) {
   const root = $('#readiness');
   const body = $('#readiness-body', root);
   let announce = false;
@@ -747,13 +939,12 @@ function formReadiness(ctx, currentForm, { renderShare, bindShare, goTo }) {
     const form = saved.value;
     const settle = result => result.status === 'fulfilled' ? (result.value === null ? null : { ok: true, value: result.value }) : { ok: false, error: result.reason };
     const result = assessFormReadiness({
-      form, live: settle(live), eventTypes: settle(eventTypes), publishCheck: settle(publishCheck), viewer: { admin: isAdmin() }, baseUrl: location.origin,
+      form, live: settle(live), eventTypes: settle(eventTypes), publishCheck: settle(publishCheck), viewer: { admin: isAdmin() }, baseUrl: formsOrigin(),
       flags: { formsActive: Boolean(workspace().entitlements?.forms?.active), meetActive: Boolean(workspace().entitlements?.meet?.active) },
       logic: { definitionProblems, visibleFields }
     });
     $('#readiness-checked', root).textContent = `Based on the draft saved ${fmtDateTime(form.updated_at)}${form.published_version ? ` and live version ${form.published_version}` : ''}. Unsaved edits are not included.`;
-    mount(body, readinessAreas(result, { extra: area => area.key === 'sharing' ? html`<div id="share"></div>` : '' }));
-    renderShare(); bindShare();
+    mount(body, readinessAreas(result));
     if (announce) $('#readiness-status', root).textContent = result.headline;
   };
   root.addEventListener('click', event => {
@@ -827,7 +1018,10 @@ export async function responses(ctx) {
       `
       : html`<div class="empty"><h2>Nothing needs attention</h2><p>None of the loaded responses has a booking problem, a failed follow-up or an open follow-up task.</p></div>`}
       ${more ? html`<div class="actions"><button class="btn" id="more">Load older responses</button></div>` : ''}`
-    : html`<div class="empty"><h2>No responses yet</h2><p>${form.published_version ? 'Share the form link to start collecting responses.' : 'Publish the form to start collecting responses.'}</p></div>`);
+    : html`<div class="empty"><h2>No responses yet</h2>${form.published_version
+      ? html`<p>The form is live. Responses appear here once the server accepts them. Share this respondent link:</p>
+        <div class="share-row"><input id="empty-link" readonly aria-label="Respondent link" value="${publicUrl(form)}"><button class="btn btn-small" type="button" id="copy-empty-link">Copy link</button></div><p class="copy-status" id="empty-copy-status" role="status"></p>`
+      : html`<p>${form.locked_ids?.length ? 'The form is closed, so it is not collecting responses.' : 'The form is not published yet, so nobody can respond.'}</p><p><a class="btn" href="/forms/${form.id}">Open the form to publish it</a></p>`}</div>`);
   };
 
   let openRow = null;
@@ -847,7 +1041,7 @@ export async function responses(ctx) {
 
   mount(ctx.main, html`<div class="container page" id="responses-page"><a href="/forms/${form.id}">← Back to form</a>
     <div class="row-between"><h1>Responses</h1><button class="btn btn-primary" id="export">Export CSV</button></div>
-    <p class="muted">${form.draft.title} · ${form.response_count} total · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
+    <p class="muted">${form.draft.title} · ${form.response_count} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
     <div id="export-status" tabindex="-1"></div>
     <div id="response-detail"></div>
     <p id="responses-status" class="hint" role="status"></p>
@@ -902,6 +1096,11 @@ export async function responses(ctx) {
       filter = target.dataset.filter;
       draw();
       return $(`[data-filter="${filter}"]`)?.focus();
+    }
+    if (target.id === 'copy-empty-link') {
+      try { await navigator.clipboard.writeText(publicUrl(form)); $('#empty-copy-status').textContent = 'Respondent link copied. Nothing has been sent.'; }
+      catch { $('#empty-link').select(); $('#empty-copy-status').textContent = 'Copy failed. The link is selected: press Ctrl+C (⌘C on a Mac) to copy it.'; }
+      return;
     }
     if (target.id === 'close-detail') { $('#response-detail').innerHTML = ''; return $(`[data-view-response="${openRow}"]`)?.focus(); }
     if (target.dataset.viewResponse) return showDetail(rows.find(row => row.id === target.dataset.viewResponse));

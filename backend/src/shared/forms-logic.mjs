@@ -11,6 +11,13 @@ export const FIELD_TYPES = {
   date: 'Date',
   page_break: 'Page break'
 };
+// A question key that a published version used keeps its meaning. Its type may change only when
+// every answer already collected under that key still means the same thing in the new type:
+// a narrower text becomes wider text, or one choice becomes one of several. Anything else needs a
+// new question with a new key (docs/FORMS.md, "Changing a question's type").
+const WIDER_TYPES = { short_text: ['long_text'], email: ['short_text', 'long_text'], phone: ['short_text', 'long_text'], date: ['short_text', 'long_text'], single_choice: ['multiple_choice'] };
+export const publishedTypeChangeAllowed = (from, to) => from === to || Boolean(WIDER_TYPES[from]?.includes(to));
+
 export const CONDITION_OPS = { equals: 'is', not_equals: 'is not', contains: 'includes', answered: 'is answered', not_answered: 'is not answered' };
 const LIMITS = { short_text: 300, long_text: 5000, email: 254, phone: 30 };
 const EMAIL = /^[^\s@<>()[\]\\,;:"]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;

@@ -241,7 +241,13 @@ tr:last-child td { border-bottom: 0; }
 .template-card { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .template-card h3 { margin: 0; font-size: 17px; }
 .template-card p { margin: 0; }
-.template-card .btn { margin-top: auto; align-self: flex-start; }
+.template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.template-group { margin: 20px 0 0; font-size: 16px; }
+.template-sketch { display: grid; gap: 6px; padding: 12px; margin-bottom: 6px; border-radius: var(--radius-sm); background: var(--accent-tint); }
+.template-sketch span { display: block; padding: 6px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+dialog.template-preview { max-width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+dialog.template-preview h2 { margin: 0; font-size: 20px; }
+@media (max-width: 480px) { dialog.template-preview { padding: 16px; } }
 .template-audience { font-size: 13px; font-weight: 650; color: var(--accent); }
 .template-meta { font-size: 14px; color: var(--muted); }
 .template-logic { font-size: 14px; color: var(--muted); padding-bottom: 8px; }
@@ -689,8 +695,38 @@ body[data-in-meeting] #site-header, body[data-in-meeting] #site-footer, body[dat
 .copy-status:empty { display: none; }
 .copy-status { font-weight: 600; margin: 4px 0 0; }
 @media (max-width: 760px) { .readiness-areas { grid-template-columns: 1fr; } .readiness-area { padding: 12px; } }
-/* Forms: share controls inside the readiness Sharing area */
-.share-block label, .readiness-area > label { margin-top: 8px; }
+/* Forms builder: section index. Sticky beside the save state on wide screens; a compact scrolling row on narrow ones. */
+.builder-index { display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 6px 0; background: var(--canvas); border-bottom: 1px solid var(--line); }
+.builder-index ul { display: flex; gap: 4px; list-style: none; margin: 0; padding: 2px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.builder-index a { display: inline-flex; align-items: center; min-height: 40px; padding: 6px 12px; border-radius: 99px; white-space: nowrap; color: var(--ink); font-size: 14px; font-weight: 600; text-decoration: none; }
+.builder-index a:hover { background: var(--surface-2); }
+.builder-index a:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.builder-index a[aria-current] { background: var(--accent-tint); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.builder-index-state { flex: none; font-size: 13px; font-weight: 650; color: var(--muted); white-space: nowrap; }
+.builder-index-state[data-state="dirty"], .builder-index-state[data-state="saving"] { color: var(--warn); }
+.builder-index-state[data-state="failed"], .builder-index-state[data-state="conflict"] { color: var(--bad); }
+#share-panel, #readiness, #routing, #settings, #questions, #builder-preview { scroll-margin-top: 16px; }
+@media (min-width: 901px) {
+  .builder-index { position: sticky; top: 0; z-index: 5; }
+  .builder-preview { top: 76px; }
+  #share-panel, #readiness, #routing, #settings, #questions, #builder-preview { scroll-margin-top: 76px; }
+}
+@media (max-width: 900px) { .builder-index-state { display: none; } }
+#questions-heading { margin: 20px 0 0; font-size: 20px; }
+#settings-heading { margin-top: 0; font-size: 20px; }
+/* Forms: plain-language logic and the per-question advanced settings */
+.logic-sentence { margin: 8px 0 4px; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--accent-tint); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 14px; overflow-wrap: anywhere; }
+.rule-list .logic-sentence { flex-basis: 100%; }
+.field-advanced { margin: 8px 0; }
+.field-advanced > summary { cursor: pointer; min-height: 32px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.field-advanced .key-input { max-width: 22em; }
+/* Forms: the respondent link, kept apart from the editor, preview and readiness summary */
+.share-panel { margin: 16px 0; border-color: var(--accent); }
+.share-panel h2 { margin-top: 0; }
+.share-panel #share-link { font-weight: 600; }
+.share-panel .share-row + .copy-status + .share-row, .share-panel .copy-status + .notice + .share-row { margin-top: 8px; }
+.share-panel .share-embed label, .readiness-area > label { margin-top: 8px; }
+.empty .share-row { max-width: 560px; margin: 8px auto 0; }
 .share-embed { margin: 12px 0 0; }
 .share-embed > summary { cursor: pointer; font-weight: 650; min-height: 32px; }
 .share-embed .embed-code { margin-top: 4px; }

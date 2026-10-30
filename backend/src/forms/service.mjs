@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail, HttpError } from '../http.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
-import { answerText, conditionHolds, definitionProblems, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
+import { answerText, conditionHolds, definitionProblems, FIELD_TYPES, publishedTypeChangeAllowed, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { invalid, text } from '../validate.mjs';
 
@@ -116,6 +116,12 @@ function validatePublish(app, workspaceId, form) {
   requireEntitlement(app, workspaceId, 'forms');
   const definition = normalizeDefinition(form.draft);
   if (!definition.fields.some(field => field.type !== 'page_break')) fail(400, 'validation_failed', 'Add at least one question before publishing.', { field: 'definition' });
+  // A published key never comes back as an incompatible type, so earlier answers keep their meaning.
+  const published = new Map();
+  for (const version of app.db.all('SELECT definition FROM form_versions WHERE form_id = ? ORDER BY version', form.id)) for (const field of JSON.parse(version.definition).fields) published.set(field.id, field.type);
+  const retyped = definition.fields.filter(field => published.has(field.id) && !publishedTypeChangeAllowed(published.get(field.id), field.type))
+    .map(field => `“${field.label || field.id}” was published as ${FIELD_TYPES[published.get(field.id)].toLowerCase()} and cannot become ${FIELD_TYPES[field.type].toLowerCase()} under the same key, because earlier answers would change meaning. Replace it with a new question instead.`);
+  if (retyped.length) fail(400, 'validation_failed', retyped[0], { field: 'definition', problems: retyped });
   const problems = form.routing ? routingProblems(app, workspaceId, definition, form.routing) : [];
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'routing', problems });
   return definition;

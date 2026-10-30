@@ -95,6 +95,106 @@ export const FORM_TEMPLATES = [
         { id: 'email', type: 'email', label: 'Where should we reply?', required: true, show_if: { field: 'follow_up', op: 'equals', value: 'yes' } }
       ]
     }
+  },
+  // Sales and client meetings (docs/MVS_SALES_CLIENT_MEETINGS.md). Shown first in the gallery;
+  // appended here so existing ids and the onboarding default keep their place.
+  {
+    id: 'sales-discovery',
+    group: 'meetings',
+    name: 'Sales discovery',
+    audience: 'Sales and account teams',
+    purpose: 'Understand goals, the current approach and timing before or during a first conversation.',
+    logic: 'Asks what else matters only when “Something else” is ticked.',
+    definition: {
+      title: 'Before we talk',
+      description: 'A few questions so our conversation focuses on what matters to you. It takes about three minutes.',
+      presentation: 'classic', submit_label: 'Send answers',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'email', type: 'email', label: 'Work email', required: true },
+        { id: 'company', type: 'short_text', label: 'Company or organisation', required: false },
+        { id: 'goal', type: 'long_text', label: 'What are you hoping to achieve?', required: true },
+        { id: 'current', type: 'long_text', label: 'How do you handle this today?', help: 'Tools, people or workarounds. A sentence or two is enough.', required: false },
+        { id: 'priorities', type: 'multiple_choice', label: 'What matters most in a solution?', required: false,
+          options: [option('ease', 'Easy for the team to use'), option('integrations', 'Works with tools we already use'), option('cost', 'Cost'), option('support', 'Support and onboarding'), option('other', 'Something else')] },
+        { id: 'priorities_other', type: 'short_text', label: 'What else matters to you?', required: false, show_if: { field: 'priorities', op: 'contains', value: 'other' } },
+        { id: 'timing', type: 'single_choice', label: 'When do you need something in place?', required: true,
+          options: [option('month', 'Within a month'), option('quarter', 'Within three months'), option('exploring', 'Later, or just exploring')] }
+      ]
+    }
+  },
+  {
+    id: 'demo-request',
+    group: 'meetings',
+    name: 'Demo request',
+    audience: 'Teams that run product demos',
+    purpose: 'Learn what someone wants to see so the demo covers it.',
+    logic: 'Asks for detail only when “Something else” is chosen.',
+    definition: {
+      title: 'Request a demo',
+      description: 'Tell us what you would like to see. We will reply to arrange a time; nothing is booked by sending this form.',
+      presentation: 'classic', submit_label: 'Request demo',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'email', type: 'email', label: 'Work email', required: true },
+        { id: 'company', type: 'short_text', label: 'Company or organisation', required: false },
+        { id: 'team_size', type: 'single_choice', label: 'How many people would use it?', required: false,
+          options: [option('solo', 'Just me'), option('small', '2–10'), option('medium', '11–50'), option('large', 'More than 50')] },
+        { id: 'reason', type: 'single_choice', label: 'What best describes your situation?', required: true,
+          options: [option('replace', 'Replacing a current tool'), option('new', 'Starting something new'), option('compare', 'Comparing options'), option('other', 'Something else')] },
+        { id: 'reason_other', type: 'short_text', label: 'Tell us a little more', required: true, show_if: { field: 'reason', op: 'equals', value: 'other' } },
+        { id: 'focus', type: 'long_text', label: 'What would you most like to see in the demo?', required: true }
+      ]
+    }
+  },
+  {
+    id: 'client-onboarding',
+    group: 'meetings',
+    name: 'Client onboarding',
+    audience: 'Agencies, consultants and service teams',
+    purpose: 'Collect the project brief, contacts and preferences before a kickoff meeting.',
+    logic: 'Asks for a phone number only when someone prefers phone calls.',
+    definition: {
+      title: 'Project kickoff brief',
+      description: 'Help us prepare for kickoff. Share what you can now; we will go through the rest together.',
+      presentation: 'classic', submit_label: 'Send brief',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'email', type: 'email', label: 'Email address', required: true },
+        { id: 'company', type: 'short_text', label: 'Company or organisation', required: false },
+        { id: 'contact_pref', type: 'single_choice', label: 'How should we keep in touch?', required: true,
+          options: [option('email', 'Email'), option('phone', 'Phone calls'), option('video', 'Video calls')] },
+        { id: 'phone', type: 'phone', label: 'Phone number', required: true, show_if: { field: 'contact_pref', op: 'equals', value: 'phone' } },
+        { id: 'project', type: 'page_break', label: '' },
+        { id: 'goals', type: 'long_text', label: 'What are the main goals for this project?', required: true },
+        { id: 'stakeholders', type: 'long_text', label: 'Who else should we involve?', help: 'Names and roles are enough.', required: false },
+        { id: 'materials', type: 'long_text', label: 'What should we have before we start?', help: 'For example brand files, documents or access we need to request. Please do not paste passwords here.', required: false },
+        { id: 'start', type: 'date', label: 'Preferred start date', required: false }
+      ]
+    }
+  },
+  {
+    id: 'client-review',
+    group: 'meetings',
+    name: 'Client review',
+    audience: 'Account and delivery teams',
+    purpose: 'Check progress, blockers and satisfaction before a review or renewal conversation.',
+    logic: 'Asks what to improve unless someone is very satisfied, and asks for an email only when they want a call.',
+    definition: {
+      title: 'How are we doing?',
+      description: 'Your answers help us prepare for our next review. It takes about two minutes.',
+      presentation: 'conversational', submit_label: 'Send feedback',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'satisfaction', type: 'single_choice', label: 'Overall, how satisfied are you with our work so far?', required: true,
+          options: [option('very', 'Very satisfied'), option('satisfied', 'Satisfied'), option('neutral', 'Neither satisfied nor dissatisfied'), option('dissatisfied', 'Dissatisfied')] },
+        { id: 'going_well', type: 'long_text', label: 'What is going well?', required: false },
+        { id: 'improve', type: 'long_text', label: 'What should we do differently?', required: false, show_if: { field: 'satisfaction', op: 'not_equals', value: 'very' } },
+        { id: 'blockers', type: 'long_text', label: 'Is anything blocking progress, on your side or ours?', required: false },
+        { id: 'call', type: 'single_choice', label: 'Would you like a call to talk this through?', required: true, options: [option('yes', 'Yes, please'), option('no', 'No, thanks')] },
+        { id: 'email', type: 'email', label: 'Where should we contact you?', required: true, show_if: { field: 'call', op: 'equals', value: 'yes' } }
+      ]
+    }
   }
 ];
 

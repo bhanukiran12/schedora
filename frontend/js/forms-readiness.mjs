@@ -7,6 +7,31 @@ import { summarize } from './readiness.mjs';
 
 const count = (n, one, many = one + 's') => `${n.toLocaleString('en-IN')} ${n === 1 ? one : many}`;
 const quote = text => `“${text.length > 60 ? text.slice(0, 59) + '…' : text}”`;
+
+/**
+ * A rule's condition in plain words, using the question and option labels the creator sees, for
+ * example: when “Do you have a website?” is “Yes”. Describes only the supported operators that the
+ * shared evaluator enforces; a reference to a missing question or option is named as such.
+ */
+export function conditionSentence(condition, fields) {
+  const field = fields.find(candidate => candidate.id === condition.field);
+  if (!field) return 'when a question that is no longer in the form is answered (this rule cannot match)';
+  const question = quote(field.label || 'Untitled question');
+  if (condition.op === 'answered') return `when ${question} is answered`;
+  if (condition.op === 'not_answered') return `when ${question} is left unanswered`;
+  const option = field.type?.endsWith('_choice') ? field.options?.find(item => item.id === condition.value) : null;
+  if (field.type?.endsWith('_choice') && !option) return `when ${question} has an option that no longer exists (this rule cannot match)`;
+  if (!option && String(condition.value ?? '') === '') return `when ${question} ${({ contains: 'includes', not_equals: 'is not' })[condition.op] || 'is'} an empty value (no value entered yet: enter one so the rule means what you intend)`;
+  const value = option ? quote(option.label) : quote(String(condition.value));
+  if (condition.op === 'contains' && field.type === 'single_choice') {
+    // The evaluator compares option keys as text, so an option whose key contains this one matches too.
+    const also = field.options.filter(item => item.id !== condition.value && item.id.toLowerCase().includes(String(condition.value).toLowerCase()));
+    return `when ${question} is ${[value, ...also.map(item => quote(item.label))].join(' or ')}`;
+  }
+  if (condition.op === 'contains') return field.type === 'multiple_choice' ? `when ${value} is one of the choices in ${question}` : `when the answer to ${question} includes ${value} (any capitalisation)`;
+  if (condition.op === 'not_equals') return field.type === 'multiple_choice' ? `unless ${value} is the only choice in ${question}` : `when ${question} is anything other than ${value}, including unanswered`;
+  return field.type === 'multiple_choice' ? `when ${value} is the only choice in ${question}` : `when ${question} is ${value}`;
+}
 const questionsOf = definition => definition.fields.filter(field => field.type !== 'page_break');
 // More answer combinations than this are not explored; the result is then "Not verified".
 export const MAX_COMBINATIONS = 4096;
@@ -175,6 +200,7 @@ export function assessFormReadiness({ form, live, eventTypes, publishCheck, view
           after.push({ status: 'attention', kind: 'blocker', text: `${name} refers to an option that is no longer in ${quote(field.label)}, so publishing is refused.`, action: { label: 'Edit routing', section: 'routing' } });
         }
       }
+      if (rule.condition && fields.has(rule.condition.field)) after.push({ text: `${name} applies ${conditionSentence(rule.condition, asked)}${name === 'Rule 1' ? '' : ', if no earlier rule matched'}.` });
       const action = rule.action;
       if (action?.type === 'event') {
         const type = known?.get(action.event_type_id);
@@ -196,8 +222,8 @@ export function assessFormReadiness({ form, live, eventTypes, publishCheck, view
 
   // ---- Sharing ----
   const sharing = [];
-  if (form.published_version == null) sharing.push({ status: 'attention', kind: 'blocker', text: `${closed ? 'Closed' : 'Not published'}: the link below does not accept responses. Copy and embed appear once the form is published.`, action: { label: 'Go to Publish', section: 'publish' } });
-  else sharing.push({ status: live?.ok && live.value.accepting ? 'ready' : 'unverified', ...(live?.ok && live.value.accepting ? {} : { kind: 'unknown' }), text: live?.ok && live.value.accepting ? 'Published: anyone with the link can respond. The embed code shows the same live form.' : 'Published, but whether the link is accepting responses was not confirmed.' });
+  if (form.published_version == null) sharing.push({ status: 'attention', kind: 'blocker', text: `${closed ? 'Closed' : 'Not published'}: respondents cannot submit this form. The respondent link, copy and embed appear under “Share with respondents” once the form is published.`, action: { label: 'Go to Publish', section: 'publish' } });
+  else sharing.push({ status: live?.ok && live.value.accepting ? 'ready' : 'unverified', ...(live?.ok && live.value.accepting ? {} : { kind: 'unknown' }), text: live?.ok && live.value.accepting ? 'Published: anyone with the respondent link can respond. The embed code shows the same live form.' : 'Published, but whether the link is accepting responses was not confirmed.', action: { label: 'Go to Share with respondents', section: 'share' } });
   sharing.push({ text: 'Copying a link does not show that responses are received or that follow-ups work.' });
 
   const result = summarize([

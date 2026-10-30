@@ -281,7 +281,20 @@ try {
   await step('Forms templates: goal starting points create unpublished drafts', async () => {
     // With no forms yet, the starting points are shown directly; nothing is created by viewing them.
     await open('/forms', "document.querySelector('#form-templates:not([hidden]) [data-template]')");
-    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 5) throw new Error('expected blank plus four goal templates');
+    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 9) throw new Error('expected blank plus eight goal templates');
+    const featured = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[0].querySelectorAll('h3')].map(h => h.textContent)");
+    if (featured.join('|') !== 'Blank form|Sales discovery|Demo request|Client onboarding|Client review') throw new Error('unexpected featured templates: ' + featured.join('|'));
+    // Preview runs the template's questions without creating a draft; Escape returns focus to its card.
+    await evaluate("document.querySelector('[data-preview-template=\"client-review\"]').focus()");
+    await click('[data-preview-template="client-review"]');
+    await waitFor("document.querySelector('dialog.template-preview[open] .template-preview-form form')", 'template preview');
+    if (!(await focused('#template-preview-title'))) throw new Error('template preview does not take focus');
+    await layoutCheck('Forms template preview', 'dialog.template-preview');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await waitFor("!document.querySelector('dialog.template-preview')", 'preview closed');
+    if (!(await focused('[data-preview-template="client-review"]'))) throw new Error('closing the preview loses focus');
+    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 0) throw new Error('previewing a template created a form');
     await layoutCheck('Forms starting points');
     await click('#new-form');
     if (!(await evaluate("document.querySelector('#form-templates').hidden && document.querySelector('#new-form').getAttribute('aria-expanded') === 'false'"))) throw new Error('Create form does not toggle the picker');
@@ -300,15 +313,42 @@ try {
     await click('#new-form');
     await click('[data-template="blank"]');
     await waitFor("document.querySelector('#publish') && document.querySelector('#preview form')", 'builder');
+    const emailsBeforeShare = app.db.get('SELECT COUNT(*) AS count FROM emails').count;
     formId = await evaluate("location.pathname.split('/')[2]");
     await layoutCheck('form builder');
     if (!(await text()).includes('All changes saved')) throw new Error('initial save state missing');
     await fill('#f-title', 'Project intake');
     if (!(await text()).includes('Unsaved changes')) throw new Error('unsaved state missing');
+    if (await evaluate("Boolean(document.querySelector('#share-link, #share-future, #share-panel input'))")) throw new Error('a draft offers a respondent link');
     await click('#publish');
-    await waitFor("document.querySelector('#share-link')", 'published share link');
+    await waitFor("document.querySelector('#share-panel #share-link')", 'published share link');
     await waitFor("document.querySelector('#builder-status').innerText.includes('Live · version 1') && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'live and saved status');
     formSlug = (await evaluate("document.querySelector('#share-link').value")).split('/f/')[1];
+    // The respondent link is the first thing after publishing: focused heading, link in view at phone and desktop widths.
+    if (!(await focused('#share-heading'))) throw new Error('publishing does not move focus to the respondent link');
+    if (!(await evaluate("document.querySelector('#publish').textContent === 'Publish changes' && !document.querySelector('#publish').classList.contains('btn-primary')"))) throw new Error('Publish stays the main action with nothing to publish');
+    for (const width of [320, 375, 768, 1280]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 768 });
+      await evaluate("document.querySelector('#share-heading').scrollIntoView({ block: 'start' })");
+      if (!(await evaluate("(() => { const r = document.querySelector('#share-link').getBoundingClientRect(); return r.height > 0 && r.top >= 0 && r.bottom <= innerHeight && !document.querySelector('#share-link').closest('details:not([open])'); })()"))) throw new Error(`respondent link not visible with its heading at ${width}px`);
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    // Copy says what happened: success only when the clipboard accepted it; otherwise the link is selected.
+    await send('Browser.grantPermissions', { permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'], origin: base }).catch(() => {});
+    await evaluate("window.focus()");
+    await click('[data-copy-target="share-link"]');
+    await waitFor("document.querySelector('#share-status').textContent", 'copy feedback');
+    const copied = await evaluate("document.querySelector('#share-status').textContent");
+    if (!/^Respondent link copied\..*nothing has been sent/.test(copied) && !/^Copy failed\. The respondent link is selected/.test(copied)) throw new Error('unexpected copy feedback: ' + copied);
+    await evaluate("window.realClipboard = navigator.clipboard.writeText; navigator.clipboard.writeText = () => Promise.reject(new Error('denied'))");
+    await click('[data-copy-target="share-link"]');
+    await waitFor("document.querySelector('#share-status').textContent.startsWith('Copy failed')", 'copy failure feedback');
+    if (!(await evaluate("document.activeElement.id === 'share-link' && document.activeElement.selectionEnd - document.activeElement.selectionStart === document.activeElement.value.length"))) throw new Error('failed copy does not select the link');
+    await evaluate("navigator.clipboard.writeText = window.realClipboard");
+    const email = await evaluate("[document.querySelector('#share-email').getAttribute('href'), document.querySelector('#share-panel').innerText]");
+    if (!email[0].startsWith('mailto:?') || !decodeURIComponent(email[0]).includes('/f/' + formSlug) || !email[1].includes('Schedora does not send it')) throw new Error('email option is not an honest mail draft: ' + email[0]);
+    if (app.db.get('SELECT COUNT(*) AS count FROM emails').count !== emailsBeforeShare) throw new Error('sharing sent an email');
+    await layoutCheck('form builder share panel', '#share-panel');
   });
   await step('form builder: preview stores nothing, keyboard reorder keeps focus', async () => {
     const before = responseCount();
@@ -343,6 +383,101 @@ try {
     if ((await evaluate("document.querySelector('#f-title').value")) !== 'My local title') throw new Error('local edits lost');
     await click('#conflict-load');
     await waitFor("document.querySelector('#f-title').value === 'Edited elsewhere' && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'latest loaded');
+  });
+  await step('form builder: logic in plain words, keyed duplicate, first-match routing explained', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('#fields [data-logic-sentence]')");
+    const sentence = await evaluate("document.querySelector('#fields [data-logic-sentence]').textContent");
+    if (sentence !== 'Shown only when “What can we help with?” is “Something else”.') throw new Error('unexpected logic sentence: ' + sentence);
+    await fill('[data-index="2"] [data-prop="label"]', 'What brings you here?');
+    if (!(await evaluate("document.querySelector('#fields [data-logic-sentence]').textContent.includes('What brings you here?')"))) throw new Error('logic sentence does not follow the edited label');
+    const before = await evaluate("document.querySelectorAll('#fields .field-editor').length");
+    await click('[data-index="2"] [data-duplicate]');
+    if (!(await focused('[data-index="3"] [data-prop="label"]'))) throw new Error('duplicate does not focus the copy');
+    const keys = await evaluate("[...document.querySelectorAll('#fields [data-prop=\"id\"]')].map(input => input.value)");
+    if (keys.length !== before + 1 || new Set(keys).size !== keys.length) throw new Error('duplicate did not create a uniquely keyed copy: ' + keys.join(','));
+    await click('[data-index="3"] [data-remove]');
+    await evaluate("document.querySelector('#routing details').open = true");
+    await click('#add-rule');
+    const rule = await evaluate("[document.querySelector('[data-rule-sentence=\"0\"]').textContent, document.querySelector('[data-fallback-sentence]').textContent, document.querySelector('#routing').innerText]");
+    if (!rule[0].startsWith('Rule 1: when “') || rule[1] !== 'If no rule matches: show the receipt only.' || !rule[2].includes('First match wins')) throw new Error('routing is not explained in plain words: ' + rule.slice(0, 2).join(' | '));
+    await layoutCheck('form builder plain-language logic', '#routing');
+    await click('#save');
+    await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'saved after logic checks');
+  });
+  await step('form builder: section index keeps edits, moves focus, marks the current section and never overlaps', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('#builder-index [data-section]') && document.querySelector('#fields [data-prop=label]')");
+    await fill('#f-title', 'Unsaved index title');
+    const path = await evaluate('location.pathname + location.search + location.hash');
+    const key = async (name, code) => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: name, code: name, windowsVirtualKeyCode: code }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: name, code: name, windowsVirtualKeyCode: code }); };
+    const enter = () => key('Enter', 13);
+    try {
+    // Real Tab presses: the index follows the builder actions and every link shows a focus ring.
+    await evaluate("document.querySelector('#delete-form').focus()");
+    for (const section of ['share', 'readiness', 'routing', 'settings', 'questions', 'preview']) {
+      await key('Tab', 9);
+      if (!(await evaluate(`document.activeElement.dataset.section === '${section}' && getComputedStyle(document.activeElement).outlineStyle !== 'none'`))) throw new Error(`Tab does not reach the ${section} index link with visible focus`);
+    }
+    for (const [section, heading] of [['share', '#share-heading'], ['readiness', '#readiness-heading'], ['routing', '#routing summary'], ['settings', '#settings-heading'], ['questions', '#questions-heading'], ['preview', '#preview-heading']]) {
+      await evaluate(`document.querySelector('#builder-index [data-section="${section}"]').focus()`);
+      await enter();
+      if (!(await focused(heading))) throw new Error(`index link ${section} does not move focus to ${heading}`);
+      if (!(await evaluate(`document.querySelector('#builder-index [data-section="${section}"]').getAttribute('aria-current') === 'location'`))) throw new Error(`${section} not marked current`);
+    }
+    if ((await evaluate('location.pathname + location.search + location.hash')) !== path || (await evaluate("document.querySelector('#f-title').value")) !== 'Unsaved index title' || !(await text()).includes('Unsaved changes')) throw new Error('the index changed the address or lost unsaved edits');
+    if (!(await evaluate("document.querySelector('.builder-index-state').textContent === 'Unsaved changes'"))) throw new Error('save state not mirrored beside the index');
+    // Desktop: the index stays at the top and the sticky preview starts below it.
+    await click('#builder-index [data-section="questions"]');
+    await evaluate('window.scrollBy(0, 400)');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const desk = await evaluate("(() => { const i = document.querySelector('#builder-index').getBoundingClientRect(); const p = document.querySelector('#builder-preview').getBoundingClientRect(); return { top: Math.round(i.top), clear: p.top >= i.bottom - 1, current: document.querySelector('#builder-index [aria-current]')?.dataset.section }; })()");
+    if (desk.top !== 0 || !desk.clear || desk.current !== 'questions') throw new Error('sticky index overlaps or mis-marks: ' + JSON.stringify(desk));
+    await layoutCheck('form builder section index', '#questions');
+    // Phone: the index scrolls with the page, and Preview switches to the preview panel.
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+    await click('#builder-index [data-section="preview"]');
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display === 'none' && getComputedStyle(document.querySelector('.builder-preview')).display !== 'none'")) || !(await focused('#preview-heading'))) throw new Error('phone Preview link does not show the preview');
+    await click('#builder-index [data-section="questions"]');
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display !== 'none'")) || !(await focused('#questions-heading'))) throw new Error('phone Questions link does not return to the editor');
+    if (await evaluate("getComputedStyle(document.querySelector('#builder-index')).position === 'sticky'")) throw new Error('index should not be sticky on phones');
+    } finally {
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      await evaluate('delete document.body.dataset.dirty');
+    }
+  });
+  await step('form builder: question type changes are safe, explained, cancellable and never retype a published key', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('#fields [data-type]')");
+    try {
+    const indexOf = key => evaluate(`[...document.querySelectorAll('#fields [data-prop="id"]')].findIndex(input => input.value === '${key}')`);
+    const types = () => evaluate("JSON.stringify([...document.querySelectorAll('#fields [data-type]')].map(select => select.value))");
+    const choose = async (key, type) => { const i = await indexOf(key); await evaluate(`(() => { const select = document.querySelector('[data-index="${i}"] [data-type]'); select.focus(); select.value = '${type}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`); return i; };
+    const before = await types();
+    // Published long text cannot become short text in place: a replacement is offered; cancelling changes nothing.
+    let i = await choose('details', 'short_text');
+    await waitFor("document.querySelector('dialog[open]')", 'replacement dialog');
+    const dialogText = await evaluate("document.querySelector('dialog[open]').innerText");
+    if (!dialogText.includes('Replace') || !dialogText.includes('cannot change type in place') || !dialogText.includes('Earlier versions, their responses and exports keep it')) throw new Error('replacement not explained: ' + dialogText);
+    await layoutCheck('form builder type replacement dialog', 'dialog[open]');
+    await click('dialog[open] [value="cancel"]');
+    await waitFor("!document.querySelector('dialog[open]')", 'dialog closed');
+    if ((await types()) !== before || !(await text()).includes('All changes saved')) throw new Error('cancelling a replacement changed the draft');
+    if (!(await focused(`[data-index="${i}"] [data-type]`))) throw new Error('focus not returned to the type select');
+    // A published choice question that a display rule depends on cannot be replaced until the rule changes.
+    i = await choose('topic', 'short_text');
+    await waitFor(`document.querySelector('[data-index="${i}"] [data-type-note]').innerText.includes('Type not changed')`, 'blocked note');
+    if (!(await evaluate(`document.querySelector('[data-index="${i}"] [data-type-note]').innerText.includes('shown when')`)) || (await evaluate(`document.querySelector('[data-index="${i}"] [data-type]').value`)) !== 'single_choice') throw new Error('blocked change does not list the rule, or changed the type');
+    // Single to multiple choice is allowed for a published key, after showing how the rule would read.
+    await choose('topic', 'multiple_choice');
+    await waitFor("document.querySelector('dialog[open]')", 'confirm dialog');
+    if (!(await evaluate("document.querySelector('dialog[open]').innerText.includes('after the change')"))) throw new Error('rule meaning change not shown');
+    await click('dialog[open] [value="ok"]');
+    await waitFor("[...document.querySelectorAll('#fields [data-prop=\"id\"]')].some(input => input.value === 'topic' && input.closest('[data-index]').querySelector('[data-type]').value === 'multiple_choice')", 'multiple choice applied under the same key');
+    if (!(await text()).includes('Unsaved changes')) throw new Error('confirmed change did not mark the draft unsaved');
+    // Widening a published short text applies at once.
+    i = await choose('name', 'long_text');
+    await waitFor(`document.querySelector('[data-index="${i}"] [data-type]').value === 'long_text'`, 'widening applied');
+    if (await evaluate('Boolean(document.querySelector("dialog[open]"))')) throw new Error('a safe widening asked for confirmation');
+    if (app.db.get('SELECT COUNT(*) AS count FROM form_versions WHERE form_id = ?', formId).count !== 1) throw new Error('type editing published something');
+    } finally { await evaluate('delete document.body.dataset.dirty'); }
   });
   for (const mode of ['classic', 'conversational']) {
     await step(`submit form (${mode})`, async () => {
@@ -454,7 +589,7 @@ try {
     const after = await areaText('after');
     if (!after.includes("only Meet's confirmation means an appointment exists") || !after.includes('The receipt means the response was received, nothing more')) throw new Error('booking offer wording: ' + after);
     if (!(await evaluate("Boolean(document.querySelector('#ready-after').closest('details').querySelector('a[href^=\"/meet/event-types/\"]'))"))) throw new Error('no link to the booking page readiness');
-    if (!(await evaluate("Boolean(document.querySelector('#readiness #share-link') && document.querySelector('#readiness #embed'))"))) throw new Error('share link and embed not in the Sharing area');
+    if (!(await evaluate("Boolean(document.querySelector('#share-panel #share-link') && document.querySelector('#share-panel #embed') && !document.querySelector('#readiness #share-link') && document.querySelector('#readiness [data-goto=share]'))"))) throw new Error('share link and embed not in the share panel, or readiness does not point to it');
     await layoutCheck('forms readiness (live)');
     // Real Tab key presses reach every control in the card with a visible focus indicator.
     await evaluate("document.querySelector('#delete-form').focus()");
@@ -488,7 +623,7 @@ try {
     if (!logicText.includes('“Team size” can never be shown with these display rules, so it is never asked even though it is required')) throw new Error('unreachable required question not reported: ' + logicText);
     if (!logicText.includes('inserts {{budget}}, which is not a question in this form')) throw new Error('unknown insertion not reported');
     if (!(await areaText('versions')).includes('Needs attention · Required: Not published')) throw new Error('draft not shown as a required blocker');
-    if (await evaluate("Boolean(document.querySelector('#readiness #share-link'))") || !(await evaluate("Boolean(document.querySelector('#readiness #share-future'))"))) throw new Error('an unpublished form offers a share link');
+    if (await evaluate("Boolean(document.querySelector('#share-link, #share-future, #share-panel input'))") || !(await evaluate("document.querySelector('#share-panel').innerText.includes('Not public yet')"))) throw new Error('an unpublished form offers a share link');
     await evaluate("document.querySelector('#readiness [data-goto=\"publish\"]').click()");
     if (!(await focused('#publish'))) throw new Error('Go to Publish did not focus the Publish button');
     if (app.db.get('SELECT published_version FROM forms WHERE id = ?', tricky.id).published_version !== null) throw new Error('readiness published the form');
