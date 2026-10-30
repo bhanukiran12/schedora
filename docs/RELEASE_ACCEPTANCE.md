@@ -1,6 +1,6 @@
 # Schedora first-release acceptance
 
-Evidence checkpoint: 28 October 2026. Latest verified application release: `ec3ccdc01f9f2d093f0ddeab810620720ee6402d`; earlier evidence below retains its recorded scope. This is a requirement-by-requirement tracker, not a production-ready badge. The full researched, differentiated and validated product objective remains incomplete.
+Evidence reconciled: 30 October 2026. Latest deployed application observed: `ba76f3fc64393a8da933e94aecae00447e4a5e96`; branch CI 40834683936 and main CI 40835311738 passed both jobs. Earlier evidence below retains its recorded scope. This is a requirement-by-requirement tracker, not a production-ready badge. The full researched, differentiated and validated product objective remains incomplete. A later callback-only configuration deployment is live; the final deployment restoring the normal build command still needs an authenticated status check.
 
 ## Evidence rules
 
@@ -18,14 +18,15 @@ Implemented code, automated tests, deployment health, real-provider results and 
 | Accessible navigation, control labels, errors and responsive layouts | Browser keyboard/drawer/focus, contrast and zoom/reflow checks; reviewed screenshots | Automated/visual evidence | Real screen-reader check and consenting human task study; do not claim a complete WCAG audit |
 | Real email operations | Production config previously read as outbox; code separates outbox/acceptance/delivery | Open operational gate | Configure selected real provider privately, signed delivery webhook, own-inbox receipt and controlled failure evidence |
 | Monitoring reaches the operator | Real operator-test Inbox receipt; UptimeRobot API/database and worker monitors Up; controlled incident 373837337120738356 recovered, owner confirmed actual DOWN/UP email receipt; Render monitoring flag read back true on 29 October | Verified within the recorded five-minute-monitor scope | Maintain monitor/recipient configuration and quota capacity; this is not provider media, commercial readiness or an uptime guarantee. See EXTERNAL_MONITORING.md |
-| Built-in video production acceptance | LiveKit credentials/permanent signed callback configured; staging evidence and user audio retest | Open; video/recharge disabled | Production smoke, measured two-way media, physical-device/recovery/accessibility checks, verified monitoring and zero-spend guardrails |
+| Built-in video production acceptance | LiveKit credentials/permanent signed callback configured; staging evidence and user audio retest; ba76f3f adds an owner-workspace instant-only pilot, two people/15 minutes/one room and 60 evaluation participant-minutes per UTC month; production empty-room control-plane creation/list/cleanup passed | Limited pilot active; general video and recharge purchases disabled | Production media/lifecycle/credit-settlement acceptance, physical-device/recovery/accessibility checks and ongoing shared-quota capacity verification. Control-plane success does not prove media quality. See VIDEO_VALIDATION_PILOT.md |
+| Recharge callback security and commercial activation | Razorpay platform webhook TthBMZ8qoOl3NO enabled with five approved events and a saved secret; backend provider razorpay; 30 October controlled unknown-event check accepted a valid HMAC (200/ignored) and rejected an invalid signature (400) | Receiver verified within that scope; checkout and recharge purchases closed | Actual Razorpay delivery (including matching signing secrets), capture/exact-once credits/refunds, measured fully loaded pack costs/reserve and owner-approved amounts. No live transaction has been tested; see VIDEO_RECHARGE_PRICING.md |
 | Pricing/allowances/tax/positioning match actual offer | PRICING_PROPOSAL.md labelled interview material; live purchase paths unchanged | Proposal only | Measured costs, owner commercial/tax approval, enforced budgets and comprehension research |
 | Differentiation and customer value validated | Dated official competitor research and UX_RESEARCH_PLAN.md hypotheses | Hypothesis only | Consenting operator interviews/tasks using last real enquiry; compare current workflow, record failures and willingness-to-pay evidence |
 | Release reproducible and healthy | Branch CI 40680867402 and main CI 40681407234 both success for 328ed25; Vercel and Render provider status success; DB/worker health OK | Verified increment | Does not close provider/human/commercial gates above; retain rollback to 83a0dec |
 
 ## Next work, ordered by evidence need
 
-1. Close operator monitoring and real-email configuration gaps using the existing implementations, chosen provider and private configuration. Do not simulate delivery or flip confirmation flags. No paid plan or live-customer messages are authorized by this document.
+1. Operator monitoring acceptance is recorded above. Close the separate customer-email configuration gap using the existing implementation, chosen provider and private configuration. Operator alert receipt does not prove customer delivery. Do not simulate delivery or flip confirmation flags. No paid plan or live-customer messages are authorized by this document.
 2. Independently improve backend evidence for Meet readiness (separate successful calendar-sync timestamp and team-host scope). Per-form complete history and tied-arrival paging now have passing local and PostgreSQL/Linux CI evidence in a6d0fc8; see the release checkpoint for deployment status. Agree API/data semantics before expanding UI claims.
 3. Run the owner's existing manual validation checklist against the released login/setup/Forms/Meet/Flow journeys. Record environment, dates and actual outcomes; unrun steps remain open.
 4. Conduct the scoped consenting-operator research in UX_RESEARCH_PLAN.md before prioritising major feature expansion or approving prices. Research scripts are ready; no interviews or conversions are fabricated.
@@ -40,6 +41,10 @@ Implemented code, automated tests, deployment health, real-provider results and 
 - External evidence log: C:/Users/Nxtwave/Documents/ChatGPT/schedora/reports/Schedora-recurring-progress.md.
 
 The original reconciliation added no feature or provider evidence; subsequent dated increments and the current monitoring row record later verified work. They do not establish customer validation or complete production readiness.
+
+## 30 October readiness evidence correction (local increment)
+
+An active Google/Zoom/Microsoft connection does not prove that a meeting link can be created for a new booking. The saved-event readiness assessment now labels that outcome Not verified and states when creation is requested. It does not create a test meeting, alter permissions, disable sharing or call a provider. Focused tests cover all three integrations and retain existing disconnected/team-host behavior. Deployment of this later increment is separate from ba76f3f and must be recorded before claiming it is live.
 
 
 ## Forms history increment — 28 October 2026

@@ -105,7 +105,7 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
       else if (!isHost || others.length) {
         details.push({ status: 'unverified', kind: 'unknown', text: `${label}: each host needs ${providerName} connected for a link to be created. You can see only your own connection${isHost ? ` (${row?.status === 'active' ? 'connected' : 'not connected'})` : ''}.` });
       } else if (row?.status === 'active') {
-        details.push({ status: 'ready', text: `${label}: ${providerName} is connected, so a link is created for each booking.` });
+        details.push({ status: 'unverified', kind: 'unknown', text: `${label}: ${providerName} is connected. Meeting-link creation is not verified here; a link is requested when an invitee books.` });
       } else {
         const why = row?.status === 'revoked' ? 'access was revoked or has expired' : row?.status === 'error' ? 'the connection last failed' : 'it is not connected';
         details.push({ status: 'attention', kind: 'blocker', text: `${label} is selected, but ${providerName} ${row ? 'needs reconnecting: ' + why : 'is not connected'}. Bookings would have no meeting link.`, action: { label: `${row ? 'Reconnect' : 'Connect'} ${providerName}`, href: '/meet?tab=integrations' } });

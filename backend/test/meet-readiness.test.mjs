@@ -27,6 +27,20 @@ const verified = (overrides = {}) => ({
 const area = (result, key) => result.areas.find(item => item.key === key);
 const issues = (result, kind) => result.areas.flatMap(item => item.items).filter(item => item.kind === kind).map(item => item.text);
 
+test('an active video integration proves connection status, not meeting-link creation', () => {
+  for (const [location, provider] of [['google_meet', 'google'], ['zoom', 'zoom'], ['teams', 'microsoft']]) {
+    const result = assessReadiness(verified({
+      type: savedType({ locations: [{ type: location }] }),
+      integrations: ok([{ provider, user_id: HOST, status: 'active' }])
+    }));
+    assert.equal(area(result, 'details').status, 'unverified');
+    assert.equal(result.counts.blocker, 0, 'an untested link is not a known booking failure');
+    assert.ok(issues(result, 'unknown').some(text => /is connected\. Meeting-link creation is not verified here/.test(text)));
+    assert.ok(!area(result, 'details').items.some(item => item.status === 'ready' && /link is created/.test(item.text)));
+    assert.equal(result.shareable, true, 'the assessment does not silently disable a published event');
+  }
+});
+
 test('1. a valid published event with verified configuration has no blockers, but email is still not verified', () => {
   const result = assessReadiness(verified());
   assert.deepEqual(result.areas.map(item => [item.key, item.status]), [['details', 'ready'], ['availability', 'ready'], ['calendar', 'ready'], ['sharing', 'unverified']]);
