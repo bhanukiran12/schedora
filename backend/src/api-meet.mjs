@@ -14,6 +14,7 @@ import { connectStripe } from './meet/payments.mjs';
 import { connectRazorpay } from './meet/razorpay.mjs';
 import { addFollowUp, addNote, createContact, deleteContact, deleteNote, getContact, listContacts, updateContact } from './platform/contacts.mjs';
 import { queueEmail, deliverEmail } from './platform/email.mjs';
+import { hostReadiness } from './meet/host-readiness.mjs';
 
 // Meet routes: host management (workspace members) and public booking (invitees).
 export function registerMeetRoutes(app, router, { member, limit }) {
@@ -24,6 +25,11 @@ export function registerMeetRoutes(app, router, { member, limit }) {
   get(ws('/event-types'), ctx => { const actor = member(ctx, 'meet.manage_own'); return listEventTypes(app, actor.workspace.id, actor); });
   post(ws('/event-types'), async ctx => { const actor = member(ctx, 'meet.manage_own'); return { status: 201, body: createEventType(app, actor.workspace.id, actor, await ctx.json(128 * 1024)) }; });
   get(ws('/event-types/:id'), ctx => { const actor = member(ctx, 'meet.manage_own'); return getEventType(app, actor.workspace.id, ctx.params.id, actor); });
+  get(ws('/event-types/:id/host-readiness'), ctx => {
+    member(ctx, 'meet.manage_own');
+    if (ctx.apiKey) fail(403, 'forbidden', 'View host setup from the web app.');
+    return hostReadiness(app, ctx.params.ws, ctx.params.id, ctx.user);
+  });
   patch(ws('/event-types/:id'), async ctx => { const actor = member(ctx, 'meet.manage_own'); return updateEventType(app, actor.workspace.id, actor, ctx.params.id, await ctx.json(128 * 1024)); });
   del(ws('/event-types/:id'), ctx => { const actor = member(ctx, 'meet.manage_own'); deleteEventType(app, actor.workspace.id, actor, ctx.params.id); return { status: 204 }; });
   post(ws('/event-types/:id/assign'), async ctx => { const actor = member(ctx, 'meet.manage_all'); return assignTemplate(app, actor.workspace.id, actor, ctx.params.id, await ctx.json()); });

@@ -45,7 +45,7 @@ Tally's free logic and Fillout's native scheduling/workflows make basic feature 
 
 ## Team readiness: next implementation contract
 
-[Team setup evidence contract](TEAM_READINESS_CONTRACT.md), researched 30 October: specifies owner/admin coarse host summaries, self-only evidence for ordinary co-hosts, no calendar contents or settings control, successful-sync freshness distinct from connection status, and actual personal-schedule fallback. This is a proposed API/UI contract with explicit authorization, privacy, database, browser and human acceptance cases. The endpoint is not implemented; other-host setup remains Not verified in the released product. Competitor admin-status visibility is documented capability, not customer validation or a proven conversion benefit.
+[Team setup evidence contract](TEAM_READINESS_CONTRACT.md), researched 30 October: owner/admin coarse host summaries, self-only evidence for ordinary co-hosts, no calendar contents or settings control, successful-sync freshness distinct from connection status, and actual personal-schedule fallback. The read-only endpoint and collapsed editor breakdown are implemented locally with permission/privacy tests; exact-commit CI and release remain gates. Until that release, other-host setup remains Not verified in production. Actual link creation and future conflict coverage are not guaranteed by setup summaries. Competitor admin-status visibility is documented capability, not customer validation or a proven conversion benefit.
 
 ## Acceptance for each frontend slice
 

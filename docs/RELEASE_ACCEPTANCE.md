@@ -46,6 +46,12 @@ The original reconciliation added no feature or provider evidence; subsequent da
 
 An active Google/Zoom/Microsoft connection does not prove that a meeting link can be created for a new booking. The saved-event readiness assessment now labels that outcome Not verified and states when creation is requested. It does not create a test meeting, alter permissions, disable sharing or call a provider. Focused tests cover all three integrations and retain existing disconnected/team-host behavior. Deployment of this later increment is separate from ba76f3f and must be recorded before claiming it is live.
 
+## 30 October team setup increment (local, release pending)
+
+The [team readiness contract](TEAM_READINESS_CONTRACT.md) is implemented with a browser-session-only, event-authorized read-only endpoint, explicit coarse projections and a collapsed editor breakdown. Owners/admins see assigned current-host setup summaries, co-hosts see only themselves, and former-host setup is hidden. Calendar contents/accounts/credentials/errors are excluded. Stored connection/sync evidence is separate from provider creation or future availability. Shared policy and actual booking schedule fallback avoid divergent definitions. A saved-settings signature plus request ordering guard rejects stale UI results.
+
+Membership regression: new slot assignment and overrides now exclude former workspace members, including group-seat reuse; round robin retains active hosts. Existing appointments are not silently canceled. Local full suite227 tests:222 pass,5 optional PostgreSQL skips; focused readiness18 passed before the later membership test addition; dedicated host suite4 pass. Browser fixture passed784 layout checks with keyboard disclosure, role downgrade, unavailable summary and no side effects;375/1280 screenshots reviewed. Final exact-commit CI, provider deployment and health must be recorded before treating this increment as released. Real-provider/human gates remain open.
+
 
 ## Forms history increment — 28 October 2026
 

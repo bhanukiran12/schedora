@@ -9,7 +9,7 @@ import { upsertContact } from '../platform/contacts.mjs';
 import { consumeQuota, requireEntitlement } from '../billing/entitlements.mjs';
 import { validateSubmission, answerText } from '../shared/forms-logic.mjs';
 import { bufferedBlock, conflicts, generateSlots } from './availability.mjs';
-import { AUTO_VIDEO, hostsFor, hydrate, locationDisplay, scheduleFor } from './event-types.mjs';
+import { AUTO_VIDEO, hostsFor, hostSchedule, hydrate, locationDisplay } from './event-types.mjs';
 import { bookingIcs } from './ics.mjs';
 import { cancelScheduledWorkflows, runWorkflows } from './workflows.mjs';
 import { bookingJoinUrl, bookingJoinWindow, ensureBookingVideo, isNativeVideo, meetingHostUrl, revokeBookingVideo } from '../video/rooms.mjs';
@@ -35,15 +35,6 @@ export function loadEventType(app, id) {
 
 // ---- Availability ----------------------------------------------------------------------------
 
-function hostSchedule(app, eventType, hostId) {
-  if (eventType.use_host_schedules) {
-    const personal = app.db.get('SELECT timezone, rules, overrides FROM user_schedules WHERE workspace_id = ? AND user_id = ?', eventType.workspace_id, hostId);
-    if (personal) return { timezone: personal.timezone, rules: JSON.parse(personal.rules), overrides: JSON.parse(personal.overrides).map(o => o.unavailable ? { date: o.date, start_min: null, end_min: null } : o) };
-  }
-  const { rules, overrides } = scheduleFor(app, eventType.id);
-  return { timezone: eventType.timezone, rules, overrides: overrides.map(o => o.unavailable ? { date: o.date, start_min: null, end_min: null } : o) };
-}
-
 const weekKey = date => addDays(date, -((weekday(date) + 6) % 7));
 
 function applyLimits(app, eventType, hostId, slots, timeZone, exempt) {
@@ -63,12 +54,19 @@ function applyLimits(app, eventType, hostId, slots, timeZone, exempt) {
 
 // Returns Map<start ms, host ids available at that start>, honoring the meeting kind:
 // one-on-one and group use the single host; collective needs every host; round robin needs any.
+function currentEventHosts(app, eventType) {
+  const members = new Set(app.db.all('SELECT user_id FROM memberships WHERE workspace_id = ?', eventType.workspace_id).map(row => row.user_id));
+  return eventType.hosts.filter(host => members.has(host.user_id));
+}
+
 export function computeAvailability(app, eventType, { fromDate, toDate, excludeMeetingId } = {}) {
   if (eventType.price_cents && app.payments.feePolicy(eventType.workspace_id)?.provider === 'razorpay') {
     eventType = { ...eventType, min_notice_min: Math.max(eventType.min_notice_min, app.payments.holdMinutes(eventType.workspace_id)) };
   }
   const now = app.now();
   const result = new Map();
+  const activeHosts = currentEventHosts(app, eventType);
+  if (!activeHosts.length || (eventType.kind !== 'round_robin' && activeHosts.length !== eventType.hosts.length)) return { slots: result, joinable: new Map() };
   if (eventType.expires_at && eventType.expires_at < now) return { slots: result, joinable: new Map() };
   if (eventType.start_date && (!fromDate || fromDate < eventType.start_date)) fromDate = eventType.start_date;
   if (eventType.end_date && (!toDate || toDate > eventType.end_date)) toDate = eventType.end_date;
@@ -79,16 +77,19 @@ export function computeAvailability(app, eventType, { fromDate, toDate, excludeM
 
   // Group events: meetings with free seats can be joined at their exact start time.
   const joinable = new Map();
+  const unavailableGroupStarts = new Set();
   if (eventType.kind === 'group') {
     for (const meeting of app.db.all(`SELECT m.id, m.starts_at, m.ends_at, m.seats, (SELECT COUNT(*) FROM bookings b WHERE b.meeting_id = m.id AND b.status <> 'canceled') AS taken
       FROM meetings m WHERE m.event_type_id = ? AND m.status = 'active' AND m.starts_at > ?`, eventType.id, now)) {
-      if (meeting.taken < meeting.seats && meeting.id !== excludeMeetingId) joinable.set(meeting.starts_at, meeting);
+      const removedHost = app.db.get('SELECT 1 FROM meeting_hosts h WHERE h.meeting_id = ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = ? AND m.user_id = h.host_id)', meeting.id, eventType.workspace_id);
+      if (removedHost) unavailableGroupStarts.add(meeting.starts_at);
+      else if (meeting.taken < meeting.seats && meeting.id !== excludeMeetingId) joinable.set(meeting.starts_at, meeting);
     }
   }
   const joinIds = new Set([...joinable.values()].map(meeting => meeting.id));
 
   const perHost = new Map();
-  for (const host of eventType.hosts) {
+  for (const host of activeHosts) {
     const schedule = hostSchedule(app, eventType, host.user_id);
     const blocks = app.db.all(`SELECT meeting_id, starts_at, ends_at, block_start, block_end FROM meeting_hosts WHERE host_id = ? AND active = 1 AND block_end > ? AND block_start < ?`,
       host.user_id, windowStart, windowEnd).filter(block => !joinIds.has(block.meeting_id) && block.meeting_id !== excludeMeetingId);
@@ -104,7 +105,7 @@ export function computeAvailability(app, eventType, { fromDate, toDate, excludeM
       slots = generateSlots({ eventType: scoped, rules: schedule.rules, overrides: schedule.overrides, bookings: blocks, busy, now, fromDate, toDate });
     }
     // Joinable meetings occupy the host: other starts overlapping them are not offered.
-    slots = slots.filter(start => [...joinable.values()].every(meeting => meeting.starts_at === start || !(start < meeting.ends_at && start + duration > meeting.starts_at)));
+    slots = slots.filter(start => !unavailableGroupStarts.has(start) && [...joinable.values()].every(meeting => meeting.starts_at === start || !(start < meeting.ends_at && start + duration > meeting.starts_at)));
     perHost.set(host.user_id, applyLimits(app, eventType, host.user_id, slots, schedule.timezone, new Set(joinable.keys())));
   }
 
@@ -276,9 +277,12 @@ function claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, 
   let candidates;
   let joinable = new Map();
   if (override) {
+    const activeHosts = currentEventHosts(app, eventType);
+    if (!activeHosts.length || (eventType.kind !== 'round_robin' && activeHosts.length !== eventType.hosts.length)) unavailable();
+    if (preferredHost && eventType.hosts.some(host => host.user_id === preferredHost) && !activeHosts.some(host => host.user_id === preferredHost)) unavailable();
     if (start < now) invalid('start', 'Choose a time in the future.');
-    candidates = eventType.kind === 'collective' ? eventType.hosts.map(host => host.user_id)
-      : [preferredHost && eventType.hosts.some(host => host.user_id === preferredHost) ? preferredHost : eventType.hosts[0].user_id];
+    candidates = eventType.kind === 'collective' ? activeHosts.map(host => host.user_id)
+      : [preferredHost && activeHosts.some(host => host.user_id === preferredHost) ? preferredHost : activeHosts[0].user_id];
     if (eventType.kind === 'group') {
       const meeting = app.db.get(`SELECT m.id, m.starts_at, m.seats, (SELECT COUNT(*) FROM bookings b WHERE b.meeting_id = m.id AND b.status <> 'canceled') AS taken
         FROM meetings m WHERE m.event_type_id = ? AND m.status = 'active' AND m.starts_at = ?`, eventType.id, start);
@@ -295,6 +299,7 @@ function claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, 
 
   let meetingId;
   const existing = eventType.kind === 'group' ? joinable.get(start) : null;
+  if (existing && app.db.get('SELECT 1 FROM meeting_hosts h WHERE h.meeting_id = ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.workspace_id = ? AND m.user_id = h.host_id)', existing.id, eventType.workspace_id)) unavailable();
   if (existing) {
     meetingId = existing.id;
   } else {

@@ -29,6 +29,7 @@ Every private API route resolves the caller's membership of the workspace in the
 | Polls, transcripts, recaps, AI chat and meeting prep | ✓ | ✓ | ✓ | Members see their own polls and meetings |
 | Connect Stripe, webhooks, audit log | ✓ | ✓ | | |
 | Connect own calendars and video apps, create own API keys | ✓ | ✓ | ✓ | API keys act with the creator's role in one workspace |
+| View event host setup summaries | ✓ | ✓ | Own setup only | Must already be allowed to view the event. Other co-hosts are restricted for ordinary members; former-member setup is hidden for everyone. No calendar contents, accounts, tokens or private errors. API keys cannot use this browser-only endpoint |
 | Single sign-on settings | ✓ | | | |
 | Start instant video meetings; join instant meetings of the workspace | ✓ | ✓ | ✓ | Video needs an active Meet or Suite entitlement; API keys cannot mint browser tokens |
 | Host a scheduled video meeting (end for everyone, remove people, guest links) | ✓ | ✓ | ✓ | Members: only meetings they are an active booking host of, or instant rooms they created. Owners/admins: all |

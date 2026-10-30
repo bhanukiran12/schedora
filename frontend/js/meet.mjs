@@ -10,6 +10,7 @@ import { deliveryEvidence } from './email-evidence.mjs';
 import { videoTab } from './meet-video.mjs';
 import { assessReadiness } from './meet-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
+import { hostReadinessView, matchingHostEvidence } from './host-readiness-view.mjs';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const KINDS = {
@@ -529,6 +530,7 @@ function readinessPanel(ctx, savedType) {
   const body = $('#readiness-body', root);
   let type = savedType;
   let announce = false;
+  let checkSequence = 0;
   const settle = result => result.status === 'fulfilled' ? { ok: true, value: result.value } : { ok: false, error: result.reason };
   const share = () => {
     const url = bookingUrl(type);
@@ -538,33 +540,37 @@ function readinessPanel(ctx, savedType) {
       <p class="hint">Preview opens the booking page in a new tab. It does not publish, book or send anything. ${type.published ? 'Copying the link does not show that booking, email or video works.' : 'Copy link appears once the event type is published.'}</p>
       <p class="copy-status" id="copy-status" role="status"></p>`;
   };
-  const draw = result => {
-    mount(body, readinessAreas(result, { extra: area => area.key === 'sharing' && !type.managed_template ? share() : '' }));
+  const draw = (result, hosts) => {
+    mount(body, html`${readinessAreas(result, { extra: area => area.key === 'sharing' && !type.managed_template ? share() : '' })}${hostReadinessView(hosts, type, session.user.id)}`);
     if (announce) $('#readiness-status', root).textContent = result.headline;
   };
   const check = async refetch => {
+    const sequence = ++checkSequence;
     body.setAttribute('aria-busy', 'true');
     mount(body, loading('Checking saved settings…'));
     const sources = await Promise.allSettled([
       refetch ? api('GET', wsPath('/event-types/' + type.id)) : type,
       api('GET', wsPath(`/event-types/${type.id}/slots`)),
       api('GET', wsPath('/calendar')),
-      api('GET', wsPath('/integrations'))
+      api('GET', wsPath('/integrations')),
+      api('GET', wsPath(`/event-types/${type.id}/host-readiness`))
     ]);
-    if (!ctx.alive() || !root.isConnected) return;
+    if (!ctx.alive() || !root.isConnected || sequence !== checkSequence) return;
     body.removeAttribute('aria-busy');
     if (sources[0].status === 'rejected') {
       $('#readiness-status', root).textContent = 'Readiness could not be checked.';
       return mount(body, html`${notice('bad', html`<p>Readiness could not be checked: ${sources[0].reason.message} Nothing is marked ready.</p>`)}<button class="btn btn-small" type="button" data-recheck>Check again</button>`);
     }
     type = sources[0].value;
-    const [, slots, calendar, integrations] = sources.map(settle);
+    const [, slots, calendar, integrations, hosts] = sources.map(settle);
     $('#readiness-checked', root).textContent = `Based on the settings saved ${fmtDateTime(type.updated_at)}, checked at ${fmtTime(Date.now())}. Unsaved edits are not included.`;
-    draw(assessReadiness({
+    const assessment = assessReadiness({
       type, viewer: { id: session.user.id, admin: isAdmin() }, slots, calendar, integrations,
+      hostSummaryAvailable: type.hosts.length > 1 && matchingHostEvidence(hosts, type) && hosts.value.scope === 'all_hosts',
       flags: { videoEnabled: Boolean(boot.video?.enabled), emailProvider: boot.providers?.email, testPayments: Boolean(boot.integrations?.testPayments), meetActive: Boolean(workspace().entitlements?.meet?.active) },
       format: { dateTime: fmtDateTime, date: fmtDate, zone: zoneLabel, money }
-    }));
+    });
+    draw(assessment, hosts);
   };
   root.addEventListener('click', async event => {
     const goto = event.target.closest('[data-goto]');

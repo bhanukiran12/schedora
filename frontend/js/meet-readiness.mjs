@@ -4,6 +4,8 @@
 // unsaved form values. Anything the viewer's API access cannot confirm is "Not verified".
 
 import { summarize } from './readiness.mjs';
+import { CALENDAR_STALE_MS } from '../shared/meet-readiness-policy.mjs';
+export { CALENDAR_STALE_MS } from '../shared/meet-readiness-policy.mjs';
 
 export { KIND_LABELS, STATUS_LABELS } from './readiness.mjs';
 
@@ -19,7 +21,6 @@ const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 // Calendars sync every 15 minutes; a successful check older than this is treated as stale.
-export const CALENDAR_STALE_MS = HOUR;
 
 const clock = minutes => minutes >= 1440 ? '24:00' : `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 const plural = (count, one, many = one + 's') => `${count.toLocaleString('en-IN')} ${count === 1 ? one : many}`;
@@ -76,7 +77,7 @@ const errorText = source => source?.error?.message ? ` (${source.error.message})
  *   now, format?
  * }
  */
-export function assessReadiness({ type, viewer, flags, slots, calendar, integrations, now = Date.now(), format = {} }) {
+export function assessReadiness({ type, viewer, flags, slots, calendar, integrations, hostSummaryAvailable = false, now = Date.now(), format = {} }) {
   const f = { ...defaultFormat, ...format };
   const hostIds = type.hosts.map(host => host.user_id);
   const isHost = hostIds.includes(viewer.id);
@@ -103,7 +104,9 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
       const row = isHost && settled(integrations) ? providerRow(provider) : null;
       if (!settled(integrations)) details.push({ status: 'unverified', kind: 'unknown', text: `${label}: your app connections could not be checked${errorText(integrations)}.`, action: { retry: true, label: 'Check again' } });
       else if (!isHost || others.length) {
-        details.push({ status: 'unverified', kind: 'unknown', text: `${label}: each host needs ${providerName} connected for a link to be created. You can see only your own connection${isHost ? ` (${row?.status === 'active' ? 'connected' : 'not connected'})` : ''}.` });
+        details.push({ status: 'unverified', kind: 'unknown', text: hostSummaryAvailable
+          ? `${label}: each host needs ${providerName} connected. See Host setup below for saved connection status; meeting-link creation remains unverified.`
+          : `${label}: each host needs ${providerName} connected for a link to be created. You can see only your own connection${isHost ? ` (${row?.status === 'active' ? 'connected' : 'not connected'})` : ''}.` });
       } else if (row?.status === 'active') {
         details.push({ status: 'unverified', kind: 'unknown', text: `${label}: ${providerName} is connected. Meeting-link creation is not verified here; a link is requested when an invitee books.` });
       } else {
@@ -175,7 +178,9 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
   // ---- Calendar and conflict checking ----
   const calendars = [];
   if (!isHost) {
-    calendars.push({ status: 'unverified', kind: 'unknown', text: `Calendars belong to each host and you can see only your own, so ${names(type.hosts)}'s calendar status is not shown here.` });
+    calendars.push({ status: 'unverified', kind: 'unknown', text: hostSummaryAvailable
+      ? 'See Host setup below for saved calendar evidence for each host. Calendar contents are private; future conflicts are not guaranteed.'
+      : `Calendars belong to each host and you can see only your own, so ${names(type.hosts)}'s calendar status is not shown here.` });
   } else if (!settled(calendar)) {
     calendars.push({ status: 'unverified', kind: 'unknown', text: `Your calendar connections could not be checked${errorText(calendar)}.`, action: { retry: true, label: 'Check again' } });
   } else {
@@ -200,7 +205,9 @@ export function assessReadiness({ type, viewer, flags, slots, calendar, integrat
     }
     calendars.push({ text: `Conflicts are checked against your Schedora meetings across all event types${connections.length ? ` and ${plural(connections.length, 'connected calendar')}` : ''}. Calendars you have not connected are not checked.` });
   }
-  if (isHost && others.length) calendars.push({ status: 'unverified', kind: 'unknown', text: `Calendars of ${names(others)} are not visible to you. Their busy times are applied only if they connected them.` });
+  if (isHost && others.length) calendars.push({ status: 'unverified', kind: 'unknown', text: hostSummaryAvailable
+    ? 'See Host setup below for saved calendar evidence for the other hosts. Calendar contents are private; future conflicts are not guaranteed.'
+    : `Calendars of ${names(others)} are not visible to you. Their busy times are applied only if they connected them.` });
 
   // ---- Sharing ----
   const sharing = [];

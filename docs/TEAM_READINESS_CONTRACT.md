@@ -1,6 +1,6 @@
 # Team-event setup evidence
 
-Design contract, 30 October 2026. **Proposed; endpoint and team UI are not implemented.** Existing readiness still shows other hosts as Not verified. This contract closes a specification gap, not a release or customer-validation gate.
+Design contract, 30 October 2026. **Endpoint and editor integration implemented locally; CI and release pending.** The shared summaries expose coarse setup evidence to owners/admins; ordinary co-hosts still see only their own setup. This does not close real-provider or customer-validation gates.
 
 ## Job and evidence
 
@@ -19,20 +19,20 @@ Schedora design hypothesis: per-host setup evidence, including successful-check 
 - OAuth integration status is active/revoked/error. It is not a completed test of meeting-link creation. The released assessor already preserves this distinction.
 - Existing calendar endpoints remain self-only. This feature must not let an administrator connect, disconnect or resync another host's calendar.
 
-## Proposed read-only API
+## Read-only API
 
 `GET /api/workspaces/:ws/event-types/:id/host-readiness`
 
 Initial implementation: browser session only; API-key access returns 403 rather than silently adding a new integration-status export. Apply normal authentication, `meet.manage_own`, workspace membership and `getEventType` resource authorization before reading any host setup. Use a read transaction so host assignment, role and setup are evaluated consistently. No provider calls, sync jobs, emails, bookings, grant changes or writes occur on this GET.
 
-Return `event_type_id`, `event_updated_at`, `checked_at`, `scope` (`all_hosts` or `self_only`) and `hosts`. Times are integer Unix milliseconds from the server clock. `checked_at` means the stored evidence was read; it must never become a successful sync timestamp.
+Return `event_type_id`, `event_updated_at`, `event_signature`, `checked_at`, `scope` (`all_hosts` or `self_only`) and `hosts`. Times are integer Unix milliseconds from the server clock. `checked_at` means the stored evidence was read; it must never become a successful sync timestamp. `event_signature` is a shared deterministic serialization of event ID, saved timestamp, kind, schedule selection, host IDs and location types. It contains no credentials and grants no access. The browser compares it to the saved event so two setting changes in the same millisecond cannot mix their host evidence.
 
 Each host entry contains:
 
 | Field | Contract |
 | --- | --- |
 | `user_id`, `name` | Assigned host identity already available in the authorized event response; no new email/account address field |
-| `visibility` | `summary` for self and owner/admin; otherwise `restricted` |
+| `visibility` | `summary` for self and owner/admin; otherwise `restricted`. An assigned former member is `unavailable` and their setup is hidden even from admins |
 | `calendar` | Summary below, or null when restricted |
 | `meeting_links` | One entry for each distinct configured automatic location: provider, connection state, creation evidence; null when restricted |
 | `schedule_source` | `personal` or `event_fallback` for summary viewers; null when restricted. Derived using the same selection as the booking engine, never a second independent fallback algorithm |
@@ -97,4 +97,10 @@ No personal schedule is not automatically a blocker because the actual engine ma
 | SQLite and throwaway PostgreSQL over TLS | Same response/state/authorization results; no migration expected |
 | Browser keyboard/mobile/error paths and consenting operator task | Automated/visual results recorded separately from human task outcome |
 
-Implementation order: shared pure policy and permission tests → read-only endpoint → editor integration and browser checks → exact-commit CI → verified release. Do not announce this as supported until implemented and deployed. Remaining research question: can an operator identify the host who needs action without mistaking “checked recently” for a guarantee of no conflicts? Record actual task results, not an assumed psychological benefit.
+Implementation: shared pure policy and permission tests, read-only endpoint and editor integration are present. The browser fixture covers disclosure keyboard focus, owner/co-host summaries, role changes, failed refresh, no side effects and responsive layouts. Exact-commit PostgreSQL/Linux CI and verified release remain gates. Do not announce this as live until deployed. Remaining research question: can an operator identify the host who needs action without mistaking “checked recently” for a guarantee of no conflicts? Record actual task results, not an assumed psychological benefit.
+
+## Membership removal regression found during implementation
+
+A disposable local collective-event check found 678 offered starts both before and after a host was removed, with that former member still assigned. The booking engine now checks current workspace membership when computing slots and again on the override path inside slot claiming. One-on-one/group/collective events with a missing required host offer no new starts; round robin retains active hosts. A group meeting with a former host cannot accept new attendees through ordinary availability or override, even after the event is assigned to someone else. Existing bookings are retained; removal does not silently cancel or rewrite past commitments. The event's old host assignment remains visible to authorized editors so it can be reviewed rather than silently substituted.
+
+The API regression covers all four kinds, public booking refusal, override refusal, round-robin continuity, group reassignment/seat reuse and preservation of existing confirmed bookings. These are local fixtures until the exact-commit PostgreSQL CI passes. This change does not revoke old provider invitations, cancel existing meetings or constitute a real-provider offboarding test.

@@ -95,7 +95,7 @@ const text = () => evaluate('document.querySelector("#main").innerText');
 
 const WIDTHS = [320, 375, 768, 1280];
 let checks = 0;
-async function layoutCheck(name) {
+async function layoutCheck(name, screenshotAnchor) {
   for (const theme of ['light', 'dark']) {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
     for (const width of WIDTHS) {
@@ -110,6 +110,7 @@ async function layoutCheck(name) {
       const images = await evaluate('[...document.querySelectorAll("img")].filter(img => img.getBoundingClientRect().width > 64 && img.closest(".lockup")).length');
       if (images) problems.push(`${name}: oversized logo at ${width}px`);
       if (shotsDir && (width === 375 || width === 1280)) {
+        if (screenshotAnchor) await evaluate(`document.querySelector(${JSON.stringify(screenshotAnchor)})?.scrollIntoView({block:'start'})`);
         const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         writeFileSync(join(shotsDir, `${name.replace(/[^a-z0-9]+/gi, '_')}-${width}-${theme}.png`), Buffer.from(data, 'base64'));
       }
@@ -1278,6 +1279,51 @@ try {
       if (zoomOverflow > 0) throw new Error('200% zoom / text-spacing overflow at ' + width + 'px: ' + zoomOverflow);
     }
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  });
+
+  await step('Team host setup: private summaries, keyboard disclosure, role changes and failed refresh', async () => {
+    const me = await evaluate("fetch('/api/me').then(r=>r.json())");
+    const ws = me.workspaces[0].id;
+    const host = me.user.id;
+    const peer = crypto.randomUUID();
+    app.db.run('INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)', peer, peer + '@example.com', 'Ravi — training and consultation team', 'test-only-unused-password', app.now());
+    app.db.run("INSERT INTO memberships (workspace_id, user_id, role, created_at) VALUES (?, ?, 'member', ?)", ws, peer, app.now());
+    const request = (method, path, body) => evaluate(`(async()=>{const me=await(await fetch('/api/me')).json();const r=await fetch(${JSON.stringify('/api/workspaces/' + ws + path)},{method:${JSON.stringify(method)},headers:{'Content-Type':'application/json','X-CSRF-Token':me.csrf_token},body:${JSON.stringify(body ? JSON.stringify(body) : undefined)}});return r.json()})()`);
+    const type = await request('POST', '/event-types', { title: 'Team readiness verification', kind: 'collective', timezone: 'Asia/Kolkata', published: false, hosts: [{ user_id: host }, { user_id: peer }], use_host_schedules: true, locations: [{ type: 'zoom' }] });
+    if (!type.id) throw new Error('team fixture was not created: ' + JSON.stringify(type));
+    const sentinel = 'DO_NOT_SHOW_PRIVATE_CALENDAR';
+    app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now());
+    const effects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM busy_blocks) AS blocks, (SELECT COUNT(*) FROM outbox) AS outbox'));
+    const before = effects();
+    const ready = "document.querySelector('[data-host-readiness]')";
+    await open('/meet/event-types/' + type.id, ready);
+    if (await evaluate("document.querySelector('[data-host-readiness]').open")) throw new Error('host breakdown should start collapsed');
+    await evaluate("document.querySelector('[data-host-readiness] summary').focus()");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+    if (!(await evaluate("document.querySelector('[data-host-readiness]').open && document.activeElement.matches('[data-host-readiness] summary') && getComputedStyle(document.activeElement).outlineStyle !== 'none'"))) throw new Error('keyboard disclosure/focus failed');
+    const text = await evaluate("document.querySelector('[data-host-readiness]').innerText");
+    if (!text.includes('latest calendar check failed') || !text.includes('Needs setup: not connected') || !text.includes('event schedule as a fallback') || text.includes(sentinel)) throw new Error('wrong or private host evidence: ' + text);
+    await evaluate("document.querySelector('[data-host-readiness]').scrollIntoView({block:'start'})");
+    await layoutCheck('team host setup owner', '[data-host-readiness]');
+    // A stale client role must not defeat the server's fresh scope decision.
+    app.db.run("UPDATE memberships SET role = 'member' WHERE workspace_id = ? AND user_id = ?", ws, host);
+    try {
+      await click('[data-recheck]');
+      await waitFor("document.querySelector('[data-host-readiness]')?.textContent.includes('only this host and workspace admins')", 'restricted cohost evidence');
+      await click('[data-host-readiness] summary');
+      const restricted = await evaluate("document.querySelector('[data-host-readiness]').innerText");
+      if (restricted.includes('latest calendar check failed') || restricted.includes(sentinel)) throw new Error('another host setup leaked after role change');
+      await evaluate("document.querySelector('[data-host-readiness]').scrollIntoView({block:'start'})");
+      await layoutCheck('team host setup cohost', '[data-host-readiness]');
+    } finally { app.db.run("UPDATE memberships SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", ws, host); }
+    await evaluate("window.originalReadinessFetch=window.fetch;window.fetch=(url,...args)=>String(url).endsWith('/host-readiness')?Promise.resolve(new Response(JSON.stringify({error:{code:'unavailable',message:'Private provider error'}}),{status:503,headers:{'Content-Type':'application/json'}})):window.originalReadinessFetch(url,...args)");
+    try {
+      await click('[data-recheck]');
+      await waitFor("document.querySelector('[data-host-evidence-error]')", 'host evidence failure');
+      if (await evaluate("Boolean(document.querySelector('[data-host-readiness]')) || document.querySelector('[data-host-evidence-error]').innerText.includes('Private provider error')")) throw new Error('failed refresh retained success or leaked raw error');
+    } finally { await evaluate("window.fetch=window.originalReadinessFetch;delete window.originalReadinessFetch"); }
+    if (effects() !== before) throw new Error('readiness reads changed bookings, email, busy times or outbox');
   });
 
 } finally {

@@ -215,6 +215,16 @@ export function hostsFor(app, eventTypeId) {
     WHERE h.event_type_id = ? ORDER BY h.priority DESC, u.name`, eventTypeId);
 }
 
+// Shared with readiness: absence of personal hours uses the event's actual fallback.
+export function hostSchedule(app, eventType, hostId) {
+  if (eventType.use_host_schedules) {
+    const personal = app.db.get('SELECT timezone, rules, overrides FROM user_schedules WHERE workspace_id = ? AND user_id = ?', eventType.workspace_id, hostId);
+    if (personal) return { source: 'personal', timezone: personal.timezone, rules: JSON.parse(personal.rules), overrides: JSON.parse(personal.overrides).map(o => o.unavailable ? { date: o.date, start_min: null, end_min: null } : o) };
+  }
+  const { rules, overrides } = scheduleFor(app, eventType.id);
+  return { source: 'event_fallback', timezone: eventType.timezone, rules, overrides: overrides.map(o => o.unavailable ? { date: o.date, start_min: null, end_min: null } : o) };
+}
+
 // Parses JSON columns; used by the booking engine and API.
 export function hydrate(row) {
   if (!row) return row;
