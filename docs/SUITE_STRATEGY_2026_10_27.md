@@ -6,6 +6,8 @@ This proposal updates positioning and prioritisation. It does not certify deploy
 
 ## Product decision
 
+**30 October scope update:** the [sales and client meetings MVS](MVS_SALES_CLIENT_MEETINGS.md) focuses the next proposed product slice on discovery, demos, client kickoff and review: persistent session forms/instructions for current and late-joining attendees, followed by supported traceable actions. Start with discovery and kickoff; broader use cases are candidate coverage, not implemented workflows. Recording, cloud storage and transcripts are later separately costed additions. The existing enquiry/booking foundation remains; no large-room or external Zoom/Meet embedded-panel capability is implied.
+
 **Help a small service team move an enquiry to an appointment and a useful follow-up, with a clear record of what happened.** Start by comparing consultants/coaches, small agencies and training consultation teams; do not assume one is the winning segment. The initial team-size hypothesis is 1–10 operators, not a researched market boundary.
 
 Meet, Forms and Flow retain standalone value. One account and optional native handoffs reduce context switching; they must not force a bundle. An integrated suite is not a new market category: Fillout already lists scheduling/workflows, Paperform combines forms/signatures/workflows, and Jotform has broad form-led operations. The hypothesis to test is *a clearer, more dependable narrow workflow*, not unique integration. ([Fillout](https://www.fillout.com/pricing), [Paperform](https://paperform.com/pricing/), [Jotform](https://www.jotform.com/pricing/))

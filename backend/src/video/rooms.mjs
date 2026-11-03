@@ -36,7 +36,7 @@ const inviteKey = app => {
 export const inviteToken = (app, invite) => createHmac('sha256', inviteKey(app)).update(`${invite.id}:${invite.nonce}`).digest('base64url');
 export const joinUrl = (app, token) => `${app.config.baseUrl}/meet/join/${token}`;
 export const hostUrl = (app, room) => `${app.config.baseUrl}/meet/room/${room.public_id}`;
-const memberIdentity = (roomId, userId) => 'm-' + createHash('sha256').update(roomId + ':' + userId).digest('hex').slice(0, 24);
+export const memberIdentity = (roomId, userId) => 'm-' + createHash('sha256').update(roomId + ':' + userId).digest('hex').slice(0, 24);
 const guestIdentity = () => 'g-' + randomUUID().replace(/-/g, '').slice(0, 24);
 const videoFail = (status, code, message, details) => fail(status, code, message, details);
 
@@ -192,7 +192,7 @@ export function inviteByToken(app, token) {
   return { invite, room: app.db.get('SELECT * FROM video_rooms WHERE id = ?', invite.room_id) };
 }
 
-function guestState(app, invite, room) {
+export function guestState(app, invite, room) {
   const now = app.now();
   if (invite.booking_id) {
     const booking = app.db.get('SELECT status, rescheduled_to FROM bookings WHERE id = ?', invite.booking_id);

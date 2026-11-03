@@ -594,6 +594,37 @@ body[data-in-meeting] #site-header, body[data-in-meeting] #site-footer, body[dat
 .video-room [hidden] { display: none !important; }
 .room-panel h2 { margin: 0; font-size: 18px; }
 .room-panel .list { margin: 12px 0; }
+/* Session card, in-room form panel and host session panel (docs/MEET_SESSION_OFFERS.md) */
+.session-card { display: grid; gap: 8px; padding: 10px 16px; background: #13221b; border-top: 1px solid #2a3d33; color: #eef4ef; font-size: 0.9375rem; max-height: 34dvh; overflow: auto; }
+.session-card p { margin: 0; }
+.session-card a { color: #b9e8c6; }
+.session-label { display: inline-block; font-size: 0.75rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: #b9d8c0; margin-right: 6px; }
+.session-note-body { white-space: pre-line; overflow-wrap: anywhere; }
+.session-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; justify-content: space-between; }
+.session-offer strong { overflow-wrap: anywhere; }
+.session-state { color: #ffd38a; }
+.session-done { color: #8fe3a5; }
+.session-prompt { flex: 1 1 100%; display: grid; gap: 6px; padding: 8px 10px; border: 1px solid #8fe3a5; border-radius: var(--radius-sm); background: #1a3328; }
+.video-room .session-card .btn { background: #1d2e25; color: #eef4ef; border-color: #3d5649; }
+.video-room .session-card .btn-primary { background: #eef4ef; color: #0f1a15; border-color: #eef4ef; }
+.session-form-panel { width: min(520px, calc(100vw - 24px)); top: 64px; bottom: calc(var(--room-bottom, 76px) + 8px); max-height: none; display: flex; flex-direction: column; gap: 8px; }
+.session-form-head { position: sticky; top: 0; background: var(--surface); z-index: 1; padding-bottom: 4px; }
+.session-form-head h2 { overflow-wrap: anywhere; }
+.session-form-hint { margin: 0; }
+.session-form-body .public-form { padding: 0; }
+.session-panel { width: min(400px, calc(100vw - 24px)); bottom: calc(var(--room-bottom, 76px) + 8px); max-height: calc(100dvh - var(--room-bottom, 76px) - 80px); }
+.session-section { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; display: grid; gap: 6px; }
+.session-section h3 { margin: 0; font-size: 1rem; }
+.session-subhead { margin: 8px 0 0; font-size: 0.9375rem; }
+.session-section textarea, .session-section input, .session-section select { width: 100%; }
+.session-modes { border: 0; padding: 0; margin: 4px 0; display: grid; gap: 4px; }
+.session-modes legend { font-weight: 600; padding: 0; margin-bottom: 2px; }
+.session-evidence li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; overflow-wrap: anywhere; }
+.session-status[data-status="submitted"] { color: var(--ok); font-weight: 600; }
+@media (max-width: 640px) {
+  .session-card { padding: 8px 10px; }
+  .session-form-panel { top: 52px; left: 8px; right: 8px; width: auto; }
+}
 .video-state { text-align: left; }
 .credit-figure { font-size: 32px; font-weight: 700; margin: 4px 0; }
 .list > li.highlight { background: var(--accent-tint); }
@@ -714,6 +745,31 @@ body[data-in-meeting] #site-header, body[data-in-meeting] #site-footer, body[dat
 @media (max-width: 900px) { .builder-index-state { display: none; } }
 #questions-heading { margin: 20px 0 0; font-size: 20px; }
 #settings-heading { margin-top: 0; font-size: 20px; }
+/* Forms: question media, picture choices and click-to-load video. Fixed frames, so loading never shifts the page. */
+.q-media { margin: 0 0 12px; aspect-ratio: 16 / 9; display: grid; place-items: center; overflow: hidden; background: var(--surface-2); border-radius: var(--radius-sm); }
+.q-media img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.q-media-failed { padding: 12px; color: var(--muted); font-size: 0.875rem; text-align: center; overflow-wrap: anywhere; }
+.q-video { margin: 0 0 12px; }
+.q-video-placeholder, .q-video-frame { width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-sm); }
+/* The ratio is a minimum: on narrow screens the explanation grows the box instead of being clipped. */
+.q-video-placeholder { display: grid; align-content: center; justify-items: start; gap: 6px; padding: 16px; background: var(--surface-2); border: 1px dashed var(--line-strong); overflow-wrap: anywhere; }
+.q-video-placeholder p { margin: 0; }
+.q-video-placeholder:has(iframe) { display: block; padding: 0; border: 0; }
+.q-video-frame { display: block; height: auto; border: 0; }
+.q-video-placeholder .q-video-frame { height: 100%; }
+.picture-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr)); gap: 10px; }
+.choice-list .picture-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px; }
+.picture-choice img { grid-column: 1 / -1; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: var(--surface-2); border-radius: 6px; }
+.picture-choice .choice-text { overflow-wrap: anywhere; }
+.picture-choice:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
+.field-media { display: grid; gap: 6px; margin: 12px 0; padding: 12px; border: 1px dashed var(--line); border-radius: var(--radius-sm); }
+.field-media > .label { margin: 0; }
+.media-edit { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 12px; align-items: start; }
+.media-thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: var(--surface-2); border-radius: 6px; }
+.option-thumb { width: 44px; height: 33px; object-fit: contain; background: var(--surface-2); border-radius: 4px; }
+.file-button { position: relative; cursor: pointer; }
+.file-button:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 480px) { .media-edit { grid-template-columns: 1fr; } .media-thumb { max-width: 12rem; } }
 /* Forms: plain-language logic and the per-question advanced settings */
 .logic-sentence { margin: 8px 0 4px; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--accent-tint); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 14px; overflow-wrap: anywhere; }
 .rule-list .logic-sentence { flex-basis: 100%; }

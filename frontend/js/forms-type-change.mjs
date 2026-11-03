@@ -63,7 +63,7 @@ export function planTypeChange({ field, to, fields, routing = null, locked = new
     };
     if (from.endsWith('_choice')) {
       delete next.options;
-      effects.push(`Its options are removed from the draft: ${field.options.map(option => `“${option.label}”`).join(', ')}. Change the type back before saving to restore them.`);
+      effects.push(`Its options${field.options.some(option => option.image) ? ' and their pictures' : ''} are removed from the draft: ${field.options.map(option => `“${option.label}”`).join(', ')}. Change the type back before saving to restore them.`);
     } else {
       next.options = [{ id: newKey('opt'), label: 'Option 1' }, { id: newKey('opt'), label: 'Option 2' }];
       effects.push('Two placeholder options are added for you to rename.');
@@ -86,12 +86,14 @@ export function planTypeChange({ field, to, fields, routing = null, locked = new
 
 /**
  * A new question replacing a published one: same wording and settings, a new key and the new type.
- * Choice options keep their labels with new keys; text-to-choice starts with two placeholders.
+ * Choice options keep their labels and pictures with new keys; text-to-choice starts with two placeholders.
+ * Question media (image or video) is kept: it describes the question, not its answers.
  */
 export function replacementQuestion(field, to, newKey) {
   const next = { id: newKey('q'), type: to, label: field.label, required: Boolean(field.required) };
   if (field.help) next.help = field.help;
   if (field.show_if) next.show_if = structuredClone(field.show_if);
-  if (to.endsWith('_choice')) next.options = field.options?.length ? field.options.map(option => ({ id: newKey('opt'), label: option.label })) : [{ id: newKey('opt'), label: 'Option 1' }, { id: newKey('opt'), label: 'Option 2' }];
+  if (field.media) next.media = structuredClone(field.media);
+  if (to.endsWith('_choice')) next.options = field.options?.length ? field.options.map(option => ({ id: newKey('opt'), label: option.label, ...(option.image ? { image: { ...option.image } } : {}) })) : [{ id: newKey('opt'), label: 'Option 1' }, { id: newKey('opt'), label: 'Option 2' }];
   return next;
 }

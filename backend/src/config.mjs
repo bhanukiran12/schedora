@@ -30,6 +30,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     trustProxy: env.TRUST_PROXY === 'true',
     // Requests per minute per client address, across the whole site.
     rateLimitPerMinute: Number(env.RATE_LIMIT_PER_MINUTE || 600),
+    // Database space form images may take across the service (docs/FORMS.md, "Media").
+    formImageStorageBytes: Number(env.FORM_IMAGE_STORAGE_MB || 60) * 1024 * 1024,
     // Proxies in front of the app that append to X-Forwarded-For (Render = 1; Vercel rewrite + Render = 2).
     trustProxyHops: Math.max(1, Number(env.TRUST_PROXY_HOPS || 1)),
     // Local development serves the static frontend from ../frontend; on Render the API runs alone.
@@ -89,6 +91,7 @@ export function loadConfig(env = process.env, overrides = {}) {
   if (!['none', 'test', 'razorpay'].includes(config.billingProvider)) throw new Error('Unsupported BILLING_PROVIDER.');
   if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
   if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
+  if (!Number.isSafeInteger(config.formImageStorageBytes) || config.formImageStorageBytes < 0) throw new Error('FORM_IMAGE_STORAGE_MB must specify a finite non-negative storage budget.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
   if (config.emailWebhookSecret && !validWebhookSecret(config.emailWebhookSecret)) throw new Error('EMAIL_WEBHOOK_SECRET must be the provider\'s whsec_ signing secret.');
   if (config.alerts.webhookUrl) {

@@ -24,6 +24,8 @@ Sources for implementation scope: [README](../README.md), [Forms contract](FORMS
 
 ## Adopt, adapt and avoid
 
+**30 October MVS direction:** [sales and client meetings scope](MVS_SALES_CLIENT_MEETINGS.md). Next proposed discovery/kickoff slice: attach a published form to a Schedora meeting, offer it to current/late joiners, retain a persistent resource card, and show private submission evidence with supported follow-up. Requires a session-offer/guest-identity/versioning/permissions contract and acceptance checks before implementation; it is not released. Local/cloud recording, storage and transcripts remain later costed work. Existing operational/release gates take precedence over expansion.
+
 | Priority | Decision | Change | Frontend deliverable | Backend/operation dependency |
 | --- | --- | --- | --- | --- |
 | P0 now | Adopt | Truthful system state | Saved vs published; preview vs live; queued/outbox vs delivered; current provider status | Use actual API states; no invented delivery |

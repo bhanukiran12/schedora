@@ -52,12 +52,19 @@ let nextId = 0;
 const pending = new Map();
 const problems = [];
 let currentLabel = '';
+let expectedOfflineSubmitUrl = null;
 socket.addEventListener('message', ({ data }) => {
   const message = JSON.parse(data);
   if (message.id && pending.has(message.id)) { const { resolve, reject } = pending.get(message.id); pending.delete(message.id); message.error ? reject(new Error(message.error.message)) : resolve(message.result); }
   if (message.method === 'Runtime.exceptionThrown') problems.push(`${currentLabel}: exception ${message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text}`);
   if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') problems.push(`${currentLabel}: console.error ${message.params.args.map(arg => arg.value ?? arg.description).join(' ')}`);
-  if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error' && !/status of 4\d\d/.test(message.params.entry.text)) problems.push(`${currentLabel}: ${message.params.entry.text} ${message.params.entry.url || ''}`);
+  if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error' && !/status of 4\d\d/.test(message.params.entry.text)) {
+    const entry = message.params.entry;
+    // Only the deliberately offline submission in the recovery journey is expected to fail.
+    if (!(expectedOfflineSubmitUrl && entry.url === expectedOfflineSubmitUrl && /net::ERR_INTERNET_DISCONNECTED/.test(entry.text))) {
+      problems.push(`${currentLabel}: ${entry.text} ${entry.url || ''}`);
+    }
+  }
 });
 // Browser-check fixture: when enabled, the SDK module request is answered with a stand-in Room.
 const fakeRoomModule = Buffer.from(readFileSync(new URL('./browser-fixtures/livekit-fake-room.mjs', import.meta.url), 'utf8')).toString('base64');
@@ -281,9 +288,12 @@ try {
   await step('Forms templates: goal starting points create unpublished drafts', async () => {
     // With no forms yet, the starting points are shown directly; nothing is created by viewing them.
     await open('/forms', "document.querySelector('#form-templates:not([hidden]) [data-template]')");
-    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 9) throw new Error('expected blank plus eight goal templates');
+    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 11) throw new Error('expected blank plus ten goal templates');
+    for (const id of ['proposal-questions', 'renewal-feedback']) {
+      if (!(await evaluate(`Boolean(document.querySelector('#form-templates [data-template="${id}"]'))`))) throw new Error('missing sales/client template: ' + id);
+    }
     const featured = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[0].querySelectorAll('h3')].map(h => h.textContent)");
-    if (featured.join('|') !== 'Blank form|Sales discovery|Demo request|Client onboarding|Client review') throw new Error('unexpected featured templates: ' + featured.join('|'));
+    if (featured.join('|') !== 'Blank form|Sales discovery|Demo request|Client onboarding|Client review|Proposal questions|Support and renewal feedback') throw new Error('unexpected featured templates: ' + featured.join('|'));
     // Preview runs the template's questions without creating a draft; Escape returns focus to its card.
     await evaluate("document.querySelector('[data-preview-template=\"client-review\"]').focus()");
     await click('[data-preview-template="client-review"]');
@@ -479,6 +489,96 @@ try {
     if (app.db.get('SELECT COUNT(*) AS count FROM form_versions WHERE form_id = ?', formId).count !== 1) throw new Error('type editing published something');
     } finally { await evaluate('delete document.body.dataset.dirty'); }
   });
+  await step('form media: upload an image with alt text, picture choices, click-to-load video, failure fallbacks, published delivery', async () => {
+    // A real PNG on disk for the file inputs (64 × 48, gradient), written with the standard library.
+    const { deflateSync, crc32 } = await import('node:zlib');
+    const pngChunk = (type, data) => { const body = Buffer.concat([Buffer.from(type), data]); const out = Buffer.alloc(12 + data.length); out.writeUInt32BE(data.length, 0); body.copy(out, 4); out.writeUInt32BE(crc32(body), 8 + data.length); return out; };
+    const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(64, 0); ihdr.writeUInt32BE(48, 4); ihdr[8] = 8; ihdr[9] = 2;
+    const rows = Buffer.alloc((64 * 3 + 1) * 48); for (let y = 0; y < 48; y++) for (let x = 0; x < 64; x++) { const at = y * 193 + 1 + x * 3; rows[at] = x * 4; rows[at + 1] = 120; rows[at + 2] = y * 5; }
+    const pngPath = join(workDir, 'room.png');
+    writeFileSync(pngPath, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), pngChunk('IDAT', deflateSync(rows)), pngChunk('tEXt', Buffer.from('Comment\0private camera note')), pngChunk('IEND', Buffer.alloc(0))]));
+    const setFile = async selector => {
+      const { root } = await send('DOM.getDocument', { depth: -1 });
+      const { nodeId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector });
+      if (!nodeId) throw new Error('missing file input ' + selector);
+      await send('DOM.setFileInputFiles', { nodeId, files: [pngPath] });
+    };
+    const providerRequests = [];
+    const watch = ({ data }) => { const message = JSON.parse(data); if (message.method === 'Network.requestWillBeSent' && /youtube|vimeo|ytimg/.test(message.params.request.url)) providerRequests.push(message.params.request.url); };
+    socket.addEventListener('message', watch);
+    await send('Network.enable');
+    try {
+      // A form of its own, so later steps keep their version numbers.
+      await open('/forms', "document.querySelector('#new-form')");
+      await click('#new-form');
+      await click('[data-template="blank"]');
+      await waitFor("document.querySelector('#fields [data-media-file]')", 'media form builder');
+      const mediaFormId = await evaluate("location.pathname.split('/')[2]");
+      const mediaSlug = app.db.get('SELECT slug FROM forms WHERE id = ?', mediaFormId).slug;
+      const row = key => evaluate(`[...document.querySelectorAll('#fields [data-prop="id"]')].findIndex(input => input.value === '${key}')`);
+      // Image on the first question: real upload, metadata stripped on the server, alt text required.
+      let i = await row('name');
+      await setFile(`[data-index="${i}"] [data-media-file]`);
+      await waitFor(`document.querySelector('[data-index="${i}"] [data-media-status]')?.innerText.includes('Image uploaded')`, 'image uploaded', 15000);
+      if (!(await focused(`[data-index="${i}"] [data-media-alt]`))) throw new Error('alt text field not focused after upload');
+      const stored = app.db.get('SELECT mime, data FROM form_assets ORDER BY created_at DESC LIMIT 1');
+      if (!stored || Buffer.from(stored.data, 'base64').includes('private camera note')) throw new Error('uploaded image kept its metadata or was not stored');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-notice').innerText.includes('description')", 'missing alt text refused');
+      await fill(`[data-index="${i}"] [data-media-alt]`, 'A floor plan with two rooms');
+      if (!(await evaluate("[...document.querySelectorAll('#preview [data-media-image] img')].some(img => img.alt === 'A floor plan with two rooms')"))) throw new Error('preview does not show the image with its alt text');
+      // Picture on a choice option.
+      i = await row('topic');
+      await setFile(`[data-index="${i}"] [data-option-file="0"]`);
+      await waitFor(`document.querySelector('[data-index="${i}"] .option-thumb')`, 'option picture', 15000);
+      // Video on the email question: an unsupported address is refused, a YouTube link becomes a placeholder.
+      i = await row('email');
+      await click(`[data-index="${i}"] [data-media-video]`);
+      if (!(await focused(`[data-index="${i}"] [data-video-url]`))) throw new Error('video address field not focused');
+      await fill(`[data-index="${i}"] [data-video-url]`, '<iframe src="https://evil.example/embed"></iframe>');
+      await click(`[data-index="${i}"] [data-video-add]`);
+      if (!(await evaluate(`document.querySelector('[data-index="${i}"] [data-media-status]').innerText.includes('not a YouTube or Vimeo')`))) throw new Error('unsupported video address not refused');
+      await fill(`[data-index="${i}"] [data-video-url]`, 'https://youtu.be/dQw4w9WgXcQ');
+      await click(`[data-index="${i}"] [data-video-add]`);
+      await waitFor(`document.querySelector('[data-index="${i}"] [data-media-title]')`, 'video added');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'media saved');
+      await evaluate("document.querySelector('#fields [data-media-alt]').scrollIntoView({ block: 'center' })");
+      await layoutCheck('form builder media editor', '#questions');
+      // Image failure in the preview falls back to text.
+      await evaluate("document.querySelector('#preview [data-media-image] img').src = '/api/public/form-assets/' + 'f'.repeat(32)");
+      await waitFor("!document.querySelector('#preview .q-media-failed').hidden", 'image fallback');
+      await click('#publish');
+      await waitFor("document.querySelector('#share-link') && document.querySelector('#builder-status').innerText.includes('Live · version 1')", 'published with media');
+      // The question image and the option picture are the same file, so the server stores and records it once.
+      if (app.db.get('SELECT COUNT(*) AS count FROM form_version_assets WHERE form_id = ?', mediaFormId).count !== 1 || app.db.get('SELECT COUNT(*) AS count FROM form_assets').count !== 1) throw new Error('published version does not record its deduplicated image');
+      // Public form: images from this service only, no provider request until the respondent loads the video.
+      providerRequests.length = 0;
+      await open(`/f/${mediaSlug}`, "document.querySelector('#form-root [data-media-image] img')");
+      await waitFor("[...document.querySelectorAll('#form-root img')].every(img => img.complete && img.naturalWidth > 0)", 'public images loaded');
+      const publicImage = await evaluate("fetch(document.querySelector('#form-root [data-media-image] img').src, { credentials: 'omit' }).then(r => [r.status, r.headers.get('content-type')])");
+      if (publicImage[0] !== 200 || publicImage[1] !== 'image/png') throw new Error('public image not served without sign-in: ' + publicImage);
+      if (!(await evaluate("document.querySelector('#form-root .picture-choices .picture-choice img').alt === '' && document.querySelector('#form-root .picture-choice .choice-text').textContent.length > 0"))) throw new Error('picture choice lacks its text label');
+      await evaluate("document.querySelector('#form-root [name=topic]').focus()");
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
+      if (!(await evaluate("document.querySelector('#form-root [name=topic]').checked && getComputedStyle(document.querySelector('#form-root .picture-choice')).outlineStyle !== 'none'"))) throw new Error('picture choice not selectable by keyboard with visible focus');
+      if (!(await evaluate("Boolean(document.querySelector('#form-root [data-load-video]')) && !document.querySelector('#form-root iframe') && document.querySelector('#form-root .q-video').innerText.includes('connects to YouTube')"))) throw new Error('video placeholder missing or loaded early');
+      if (await evaluate("document.querySelector('#form-root .q-video').innerText.includes('{{')")) throw new Error('video title shows an unpiped insertion');
+      await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 800, deviceScaleFactor: 1, mobile: true });
+      if (!(await evaluate("(() => { const box = document.querySelector('#form-root .q-video-placeholder'); return box.scrollHeight <= box.clientHeight + 1; })()"))) throw new Error('video placeholder clips its text at 320 px');
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      await layoutCheck('public form with media', '#form-root');
+      if (providerRequests.length) throw new Error('provider contacted before the respondent chose to load the video: ' + providerRequests.join(', '));
+      await click('#form-root [data-load-video]');
+      const frame = await evaluate("[document.querySelector('#form-root iframe')?.getAttribute('src'), document.querySelector('#form-root iframe')?.title, document.activeElement?.tagName]");
+      if (frame[0] !== 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0' || !frame[1].startsWith('YouTube video:') || frame[2] !== 'IFRAME') throw new Error('video did not load the controlled embed with a title: ' + frame);
+    } finally {
+      socket.removeEventListener('message', watch);
+      await send('Network.disable').catch(() => {});
+      await evaluate('delete document.body.dataset.dirty').catch(() => {});
+    }
+  });
   for (const mode of ['classic', 'conversational']) {
     await step(`submit form (${mode})`, async () => {
       await open(`/f/${formSlug}?mode=${mode}`, "document.querySelector('#form-root form')");
@@ -516,7 +616,7 @@ try {
   }
   await step('responses inbox, detail and CSV', async () => {
     await open('/forms', "document.querySelector('.list')");
-    await evaluate("[...document.querySelectorAll('a')].find(a => a.textContent === 'Responses').click()");
+    await click(`a[href="/forms/${formId}/responses"]`);
     await waitFor("document.querySelector('table')", 'responses table');
     await layoutCheck('responses');
     await click('[data-view-response]');
@@ -909,9 +1009,9 @@ try {
     await open('/meet?tab=polls', "document.querySelector('#new-poll')");
     await click('#new-poll');
     await fill('#poll-title', 'Planning');
-    await evaluate("{ const input = document.querySelector('[data-option]'); input.value = '2026-11-03T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await evaluate("{ const input = document.querySelector('[data-option]'); input.value = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10) + 'T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
     await click('#add-option');
-    await evaluate("{ const input = document.querySelectorAll('[data-option]')[1]; input.value = '2026-11-04T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await evaluate("{ const input = document.querySelectorAll('[data-option]')[1]; input.value = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10) + 'T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
     await click('#create-poll [type="submit"]');
     await waitFor("document.querySelector('[data-open]')", 'poll listed');
     const pollPath = await evaluate("new URL(document.querySelector('[data-copy]').dataset.copy).pathname");
@@ -1191,6 +1291,77 @@ try {
       await evaluate("window.__fakeRoom.drop('PARTICIPANT_REMOVED')");
       await waitFor("document.querySelector('#main h1')?.textContent === 'The meeting has ended'", 'ended status takes precedence over participant removal');
       if (await evaluate("Boolean(document.querySelector('#rejoin'))")) throw new Error('rejoin offered after server end');
+    });
+  });
+  await step('meeting session form (fake-connected fixture): host attaches from the Session panel; guest gets one prompt, answers beside the call, uncertain submit keeps answers, receipt, no repeat', async () => {
+    await withFakeRoom(async () => {
+      await viewport(1280, 900);
+      const form = await pageApi('/api/workspaces/:ws/forms', { definition: { title: 'Kickoff brief', presentation: 'classic', fields: [{ id: 'goal', type: 'short_text', label: 'What should this project achieve?', required: true }] } });
+      await pageApi(`/api/workspaces/:ws/forms/${form.id}/publish`);
+      const room = await pageApi('/api/workspaces/:ws/meet-video/rooms', { title: 'Client kickoff' });
+      const invite = await pageApi(`/api/meet-video/rooms/${room.public_id}/invites`, { seats: 3 });
+      const goal = '#session-form-panel [name="goal"]';
+      // Host: attach the form and pin a note from the Session panel.
+      await open(new URL(room.host_url).pathname, "document.querySelector('#join-form')");
+      await enterRoom();
+      await click('#session-toggle');
+      await waitFor("document.querySelector('#session-panel:not([hidden]) #session-form-choice')", 'session panel with form picker');
+      if (!(await evaluate("[...document.querySelectorAll('#session-form-choice option')].some(option => option.textContent === 'Kickoff brief')"))) throw new Error('published form not offered in the picker');
+      await click('#session-panel [data-attach]');
+      await waitFor("document.querySelector('#session-card:not([hidden])')?.innerText.includes('Kickoff brief')", 'card shows the attached form');
+      await fill('#session-note-body', 'Agenda: goals, scope, next steps');
+      await fill('#session-note-url', 'javascript:alert(1)');
+      await click('#session-panel [data-save-note]');
+      await waitFor("document.querySelector('#session-note-status')?.innerText.includes('https')", 'unsafe link refused inline');
+      await fill('#session-note-url', 'https://example.com/agenda');
+      await click('#session-panel [data-save-note]');
+      await waitFor("document.querySelector('#session-card .session-note a')?.getAttribute('rel') === 'noopener noreferrer'", 'note pinned with a safe link');
+      if (await evaluate("Boolean(document.querySelector('#session-note-status').textContent.trim()) || !document.querySelector('#session-panel [data-remove-note]')")) throw new Error('host panel kept the old error or did not switch to Replace/Remove after saving');
+      await layoutCheck('meeting room session panel (host)', '#video-room');
+      await click('#session-panel [data-close-panel]');
+      // A guest joins after the offer exists (a late joiner) and is prompted once.
+      app.db.run('UPDATE video_rooms SET host_joined_at = ? WHERE public_id = ?', Date.now(), room.public_id);
+      await open(new URL(invite.url).pathname, "document.querySelector('#join-form')");
+      await fill('#display-name', 'Late client');
+      await enterRoom();
+      await waitFor("document.querySelector('#session-card .session-prompt')", 'one automatic prompt for the late joiner');
+      if (!(await evaluate("document.querySelector('#session-card .session-note-body').textContent === 'Agenda: goals, scope, next steps'"))) throw new Error('pinned note missing for the late joiner');
+      await layoutCheck('meeting room session card with prompt (guest)', '#video-room');
+      await click('#session-card [data-open-form]');
+      await waitFor(`document.querySelector('#session-form-panel:not([hidden])') && document.querySelector('${goal}')`, 'form opens beside the call');
+      if (!(await focused('#session-form-heading'))) throw new Error('focus did not move to the form panel heading');
+      if (!(await evaluate("document.querySelector('#connection').dataset.state === 'connected' && Boolean(document.querySelector('#grid'))"))) throw new Error('call not kept while the form is open');
+      await fill(goal, 'Launch the client portal by March');
+      // Minimise and reopen: answers stay on the page.
+      await click('#session-form-panel [data-minimise]');
+      if (!(await focused('#session-card [data-open-form]'))) throw new Error('minimise did not return focus to the card');
+      if (!(await evaluate("document.querySelector('#session-card [data-open-form]').textContent.startsWith('Continue form')"))) throw new Error('card does not offer to continue');
+      await click('#session-card [data-open-form]');
+      if ((await evaluate(`document.querySelector('${goal}').value`)) !== 'Launch the client portal by March') throw new Error('answers lost on minimise');
+      await layoutCheck('meeting room form panel open (guest)', '#video-room');
+      // Uncertain submission: offline, answers kept, safe retry.
+      expectedOfflineSubmitUrl = `${base}/api/public/forms/${form.slug}/responses`;
+      try {
+        await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+        await click('#session-form-panel [type="submit"]');
+        await waitFor("document.querySelector('#session-form-panel').innerText.includes('could not confirm')", 'uncertain result explained', 20000);
+      } finally {
+        await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+        expectedOfflineSubmitUrl = null;
+      }
+      if ((await evaluate(`document.querySelector('${goal}').value`)) !== 'Launch the client portal by March') throw new Error('answers not kept after an uncertain submit');
+      await click('#session-form-panel [type="submit"]');
+      await waitFor("document.querySelector('#session-form-panel .receipt') && document.querySelector('#session-card').innerText.includes('Completed · Receipt')", 'receipt and completed status', 15000);
+      if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', form.id).count !== 1) throw new Error('expected exactly one response');
+      if (!app.db.get('SELECT response_id FROM video_session_receipts WHERE response_id IS NOT NULL')) throw new Error('response not linked to the offer and seat');
+      if (await evaluate("document.title.startsWith('Response received')")) throw new Error('meeting page title replaced by the form receipt');
+      // Reconnect in the same tab: same seat, completed, no prompt, no second response.
+      await open(new URL(invite.url).pathname, "document.querySelector('#join-form')");
+      await fill('#display-name', 'Late client');
+      await enterRoom();
+      await waitFor("document.querySelector('#session-card')?.innerText.includes('Completed')", 'completed after reconnect');
+      if (await evaluate("Boolean(document.querySelector('#session-card .session-prompt'))")) throw new Error('prompt repeated after reconnect');
+      await layoutCheck('meeting room session card completed (guest)', '#video-room');
     });
   });
   await step('video prejoin: denied camera and microphone give guidance and still allow joining', async () => {

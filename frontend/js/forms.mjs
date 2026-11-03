@@ -15,7 +15,7 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
     ${step.key === 'run' ? html`<p class="trail-links"><a href="/flow/runs">Run history</a>${step.taskId ? html` · <a href="/flow/tasks">Tasks</a>` : ''}</p>`
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
-import { CONDITION_OPS, FIELD_TYPES, answerText, checkAnswer, definitionProblems, pipe, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CONDITION_OPS, FIELD_TYPES, VIDEO_PROVIDERS, answerText, checkAnswer, definitionProblems, parseVideoUrl, pipe, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 
 // The respondent link: the Forms host on the product domain, otherwise the address this page uses.
 const formsOrigin = () => hostInfo(location.hostname, boot.productDomain).production ? productOrigin('forms', location, boot.productDomain) : location.origin;
@@ -28,7 +28,43 @@ const SUBMIT_TIMEOUT_MS = 20000;
 // ---------------------------------------------------------------------------------------------
 // Renderer shared by the builder preview and the public page.
 
-function inputFor(field, value, labelText) {
+// ---------------------------------------------------------------------------------------------
+// Media shown with a question. Images come from this service only; a video is a click-to-load
+// placeholder until the respondent chooses to load it, so nothing contacts the provider before then.
+
+const publicAssetUrl = id => `/api/public/form-assets/${id}`;
+
+function mediaFor(field, assetUrl, loadedVideos, labelText = field.label, embedVideo = true) {
+  const media = field.media;
+  if (media?.type === 'image') return html`<figure class="q-media" data-media-image><img src="${assetUrl(media.asset)}" alt="${media.decorative ? '' : media.alt}" loading="lazy" decoding="async">
+    <figcaption class="q-media-failed" hidden>${media.decorative ? 'This image could not be loaded.' : `Image could not be loaded: ${media.alt}`}</figcaption></figure>`;
+  if (media?.type !== 'video') return '';
+  const provider = VIDEO_PROVIDERS[media.provider];
+  const title = media.title || labelText;
+  // Meeting pages keep a stricter content policy without third-party frames: link only.
+  if (!embedVideo) return html`<div class="q-video" data-video="${field.id}"><p><strong>${provider} video</strong>: ${title}</p>
+    <p class="hint"><a href="${videoWatchUrl(media)}" target="_blank" rel="noopener noreferrer" data-external>Open the video on ${provider}<span class="visually-hidden"> (opens in a new tab)</span></a>. During a meeting, videos open in a new tab. You can answer without watching it.</p></div>`;
+  return html`<div class="q-video" data-video="${field.id}">${loadedVideos.has(field.id) ? videoFrame(media, title)
+    : html`<div class="q-video-placeholder"><p><strong>${provider} video</strong>: ${title}</p><p class="hint">Loading it connects to ${provider}, which may set cookies and collect data under its own terms. Nothing is loaded until you choose.</p>
+      <button class="btn btn-small" type="button" data-load-video="${field.id}">Load video from ${provider}<span class="visually-hidden">: ${title}</span></button></div>`}
+    <p class="hint"><a href="${videoWatchUrl(media)}" target="_blank" rel="noopener noreferrer" data-external>Open the video on ${provider}<span class="visually-hidden"> (opens in a new tab)</span></a>. You can answer without watching it.</p></div>`;
+}
+const videoFrame = (media, title) => html`<iframe class="q-video-frame" src="${videoEmbedUrl(media)}" title="${VIDEO_PROVIDERS[media.provider]} video: ${title}" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"></iframe>`;
+
+// Swaps a failed image for its text fallback. Runs after every render, including images that
+// failed before the listener was attached.
+function watchImages(root) {
+  for (const image of $$('img[data-option-image], [data-media-image] img', root)) {
+    const fail = () => {
+      image.hidden = true;
+      image.closest('[data-media-image]')?.querySelector('.q-media-failed')?.removeAttribute('hidden');
+      image.closest('label')?.classList.add('picture-failed');
+    };
+    if (image.complete && image.naturalWidth === 0 && image.getAttribute('src')) fail(); else image.addEventListener('error', fail, { once: true });
+  }
+}
+
+function inputFor(field, value, labelText, assetUrl = publicAssetUrl) {
   const id = `q-${field.id}`;
   const describedBy = field.help ? `${id}-help` : '';
   const common = raw(`id="${id}" name="${field.id}" ${field.required ? 'aria-required="true"' : ''} ${describedBy ? `aria-describedby="${describedBy}"` : ''}`);
@@ -44,7 +80,8 @@ function inputFor(field, value, labelText) {
       const type = field.type === 'single_choice' ? 'radio' : 'checkbox';
       const selected = Array.isArray(value) ? value : value ? [value] : [];
       return html`<fieldset ${raw(describedBy ? `aria-describedby="${describedBy}"` : '')}><legend class="q-label">${labelText}${field.required ? html` <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden">(required)</span>` : ''}</legend>${help}
-        <div class="choice-list">${field.options.map((option, index) => html`<label class="check"><input type="${type}" name="${field.id}" value="${option.id}" id="${id}-${index}" ${selected.includes(option.id) ? raw('checked') : ''}> ${option.label}</label>`)}</div></fieldset>`;
+        <div class="choice-list${field.options.some(option => option.image) ? ' picture-choices' : ''}">${field.options.map((option, index) => html`<label class="check${option.image ? ' picture-choice' : ''}"><input type="${type}" name="${field.id}" value="${option.id}" id="${id}-${index}" ${selected.includes(option.id) ? raw('checked') : ''}>
+          ${option.image ? html`<img src="${assetUrl(option.image.asset)}" alt="" loading="lazy" decoding="async" data-option-image>` : ''}<span class="choice-text">${option.label}</span></label>`)}</div></fieldset>`;
     }
     default: return html`${label}${help}<input ${common} type="text" maxlength="300" value="${value || ''}">`;
   }
@@ -60,7 +97,8 @@ function readAnswer(form, field) {
 // when the caller has shown the outcome; when it throws, describeError(error) returns the message
 // to show (field errors from error.details.errors are placed next to their questions instead).
 export { inputFor, readAnswer };
-export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit, describeError, answers: initial = {}, banner = '' } = {}) {
+export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit, describeError, answers: initial = {}, banner = '', assetUrl = publicAssetUrl, embedVideo = true } = {}) {
+  const loadedVideos = new Set(); // videos the respondent chose to load stay loaded across redraws
   const answers = { ...initial };
   let position = 0; // page index (classic) or question index (conversational)
   let errors = {};
@@ -90,7 +128,7 @@ export function renderForm(container, definition, { mode = definition.presentati
         <ul>${pageErrors.map(field => html`<li><a href="#q-${field.id}" data-jump="${field.id}">${pipe(field.label, definition, answers) || 'Question'}: ${errors[field.id]}</a></li>`)}</ul></div>` : ''}
       ${!conversational && fields.some(field => field.required) ? html`<p class="muted"><span class="required-mark" aria-hidden="true">*</span> Required</p>` : ''}
       ${fields.length ? fields.map(field => html`<div class="question" data-field="${field.id}">${conversational ? html`<span class="question-number">${position + 1} →</span>` : ''}
-        ${inputFor(field, answers[field.id], pipe(field.label, definition, answers))}
+        ${mediaFor(field, assetUrl, loadedVideos, pipe(field.label, definition, answers), embedVideo)}${inputFor(field, answers[field.id], pipe(field.label, definition, answers), assetUrl)}
         ${errors[field.id] ? html`<div class="field-error" id="q-${field.id}-error">${errors[field.id]}</div>` : ''}</div>`) : html`<p class="muted">This form has no questions yet.</p>`}
       <div data-form-status tabindex="-1">${failure ? notice('bad', failure.message) : ''}</div>
       <div class="actions">
@@ -102,6 +140,7 @@ export function renderForm(container, definition, { mode = definition.presentati
     </form>`);
     // Width set through the CSSOM: the page's style policy disallows inline style attributes.
     $$('[style-width]', container).forEach(bar => { bar.style.width = bar.getAttribute('style-width') + '%'; bar.removeAttribute('style-width'); });
+    watchImages(container);
     const form = $('form', container);
     for (const field of fields) {
       if (errors[field.id]) $$(`[name="${field.id}"]`, form).forEach(input => { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), `q-${field.id}-error`].filter(Boolean).join(' ')); });
@@ -113,6 +152,15 @@ export function renderForm(container, definition, { mode = definition.presentati
     else if (focusId !== null && (conversational || pageErrors.length)) (form.querySelector('[aria-invalid="true"]') || form.querySelector('input, textarea'))?.focus();
 
     form.addEventListener('click', event => {
+      const load = event.target.closest('[data-load-video]');
+      if (load) {
+        const field = definition.fields.find(item => item.id === load.dataset.loadVideo);
+        loadedVideos.add(field.id);
+        const slot = load.closest('[data-video]');
+        mount(slot.firstElementChild, videoFrame(field.media, field.media.title || pipe(field.label, definition, answers)));
+        slot.querySelector('iframe').focus();
+        return;
+      }
       const jump = event.target.closest('[data-jump]');
       if (!jump) return;
       event.preventDefault();
@@ -201,10 +249,20 @@ export async function publicForm(ctx) {
   if (form.availability === 'capacity_reached') return mount(root, html`<div class="public-form"><h1>${form.definition.title}</h1>${notice('warn', html`<p>This form has reached its response limit for now and is not accepting new responses. Please try again later or contact ${form.workspace_name}.</p>`)}</div>`);
   if (!form.accepting) return mount(root, html`<div class="public-form"><h1>${form.definition.title}</h1>${notice('warn', html`<p>This form is not accepting responses right now.</p>`)}</div>`);
 
-  let submissionId = submissionStore.get(slug);
+  respondTo(root, form, { mode });
+}
+
+/**
+ * Shows a published form and submits it with retry-safe idempotency. Used by the public form page
+ * and by meeting rooms (docs/MEET_SESSION_OFFERS.md), which pass a session ticket in `extra`, their
+ * own storage key, link-only videos and `onAccepted`, called only after the server confirms.
+ */
+export function respondTo(root, form, { mode = form.definition.presentation, storeKey = form.slug, extra = {}, embedVideo = true, onAccepted, pageTitle = true } = {}) {
+  const slug = form.slug;
+  let submissionId = submissionStore.get(storeKey);
   // An id kept from before a reload may belong to an attempt that reached the server.
   let uncertain = Boolean(submissionId);
-  if (!submissionId) { submissionId = uid() + uid(); submissionStore.set(slug, submissionId); }
+  if (!submissionId) { submissionId = uid() + uid(); submissionStore.set(storeKey, submissionId); }
   const embedded = document.body.dataset.embed === '1';
 
   // Every message states only what is known about whether the response was saved.
@@ -215,7 +273,8 @@ export async function publicForm(ctx) {
     }
     if (error.code === 'form_version_changed') { reloadVersion(); return { replaced: true }; }
     if (error.code === 'rate_limited') return { retry: true, message: html`<p>Too many attempts from this connection. Wait a minute, then submit again. ${uncertain ? 'We still cannot confirm whether an earlier attempt was received; submitting again will not create a duplicate.' : 'Nothing has been saved yet.'}</p>` };
-    const known = { form_closed: 'This form stopped accepting responses before your answers arrived.', quota_exceeded: 'This form has reached its response limit for now.', entitlement_required: 'This form is not accepting responses right now.' }[error.code];
+    const known = { form_closed: 'This form stopped accepting responses before your answers arrived.', quota_exceeded: 'This form has reached its response limit for now.', entitlement_required: 'This form is not accepting responses right now.',
+      session_already_submitted: 'You already answered this form in this meeting.', not_in_meeting: 'You are no longer in this meeting.', session_invalid: 'This meeting form is no longer valid. Close it and open it again from the meeting card.' }[error.code];
     if (known) return { message: html`<p><strong>${known}</strong> Your response was not saved. Your answers are still on this page if you want to copy them.</p>` };
     return { message: html`<p>${error.message} Your response was not saved.</p>` };
   };
@@ -223,7 +282,10 @@ export async function publicForm(ctx) {
   async function reloadVersion() {
     let next;
     try { next = await api('GET', `/api/public/forms/${slug}`); }
-    catch (error) { return mount(root, html`<div class="public-form">${notice('bad', html`<p>This form changed or closed while you were answering, and the new version could not be loaded. Your response was not saved.</p>`)}<a class="btn" data-external href="${location.pathname + location.search}">Reload the form</a></div>`); }
+    catch (error) {
+      mount(root, html`<div class="public-form">${notice('bad', html`<p>This form changed or closed while you were answering, and the new version could not be loaded. Your response was not saved.</p>`)}<button class="btn" type="button" data-reload-form>Load the form again</button></div>`);
+      return $('[data-reload-form]', root).addEventListener('click', reloadVersion);
+    }
     const kept = {};
     const current = start.answers();
     for (const field of next.definition.fields) if (current[field.id] !== undefined) kept[field.id] = current[field.id];
@@ -234,11 +296,11 @@ export async function publicForm(ctx) {
   function begin(initial = {}, banner = '') {
     let latest = { ...initial };
     renderForm(root, form.definition, {
-      mode, answers: initial, banner, describeError,
+      mode, answers: initial, banner, describeError, embedVideo,
       onSubmit: async answers => {
         latest = answers;
-        const result = await api('POST', `/api/public/forms/${form.slug}/responses`, { answers, submission_id: submissionId, version: form.version }, {}, { timeout: SUBMIT_TIMEOUT_MS });
-        submissionStore.clear(slug);
+        const result = await api('POST', `/api/public/forms/${form.slug}/responses`, { answers, submission_id: submissionId, version: form.version, ...extra }, {}, { timeout: SUBMIT_TIMEOUT_MS });
+        submissionStore.clear(storeKey);
         showReceipt(result);
       }
     });
@@ -260,12 +322,13 @@ export async function publicForm(ctx) {
           <p class="hint">This booking link works until ${fmtDateTime(next.expires_at)}. Your response is saved whether or not you book.</p>`
       : next.status === 'booked' ? html`<p>A time was already booked from this response. Your confirmation email has the details and links to change it.</p>`
       : html`<p>Booking a time is not available right now.</p>${fallback}`;
-    setTitle('Response received · Forms by Schedora');
+    if (pageTitle) setTitle('Response received · Forms by Schedora');
     mount(root, html`<div role="status" class="public-form receipt"><h1 tabindex="-1">${booking && next.status === 'offered' ? 'Response received — choose a time' : 'Response received'}</h1>
       <p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
       <dl class="confirm-facts"><dt>Receipt</dt><dd>${result.reference}</dd><dt>Received</dt><dd>${fmtDateTime(result.created_at)}</dd></dl>
       ${step}</div>`);
     $('h1', root).focus();
+    onAccepted?.(result);
   }
 }
 
@@ -381,6 +444,32 @@ const randomKey = (prefix, taken) => {
 
 const SAVE_TEXT = { saved: 'All changes saved', dirty: 'Unsaved changes', saving: 'Saving…', failed: 'Not saved', conflict: 'Not saved: changed elsewhere' };
 
+// Images are re-encoded in the browser before upload: this applies the photo's orientation, drops
+// camera and location metadata and keeps files small. The server still checks every byte.
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_UPLOAD = 2 * 1024 * 1024;
+async function prepareImage(file) {
+  if (!IMAGE_TYPES.includes(file.type)) throw new Error('Choose a JPEG, PNG or WebP image. SVG, GIF and other files are not accepted.');
+  if (file.size > 15 * 1024 * 1024) throw new Error('That file is over 15 MB. Choose a smaller image.');
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch { throw new Error('That file could not be read as an image.'); }
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = Object.assign(document.createElement('canvas'), { width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale)) });
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const encode = type => new Promise(resolve => canvas.toBlob(resolve, type, 0.86));
+  let blob = file.type === 'image/png' ? await encode('image/png') : null;
+  if (!blob || blob.size > MAX_UPLOAD) { blob = await encode('image/webp'); if (!blob || blob.type !== 'image/webp') blob = await encode('image/jpeg'); }
+  if (!blob || blob.size > MAX_UPLOAD) throw new Error('Even after resizing, the image is over 2 MB. Try a simpler image.');
+  return blob;
+}
+async function blobBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 export async function builder(ctx) {
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Sign in to edit this form', lead: 'Forms belong to your workspace.' }));
   if (!needsSession(ctx)) return;
@@ -468,7 +557,8 @@ export async function builder(ctx) {
       <p class="hint">Not for respondents: this editor page needs a workspace sign-in, and Preview runs only in your browser and saves nothing.</p>
       <div class="actions"><button class="btn btn-danger btn-small" type="button" id="unpublish">Stop collecting responses</button></div>`);
   };
-  const renderPreview = () => renderForm($('#preview'), draft, { mode: $('#preview-mode').value, preview: true });
+  const workspaceAssetUrl = id => wsPath(`/form-assets/${id}`);
+  const renderPreview = () => renderForm($('#preview'), draft, { mode: $('#preview-mode').value, preview: true, assetUrl: workspaceAssetUrl });
 
   const renderSettings = () => mount($('#settings'), html`<div class="card card-plain"><h2 id="settings-heading" tabindex="-1">Form details</h2>
     <label for="f-title">Form title</label><input id="f-title" data-setting="title" maxlength="150" value="${draft.title}">
@@ -477,6 +567,106 @@ export async function builder(ctx) {
       <label class="check"><input type="radio" name="presentation" value="classic" data-setting="presentation" ${draft.presentation === 'classic' ? raw('checked') : ''}> Classic: questions grouped into pages</label>
       <label class="check"><input type="radio" name="presentation" value="conversational" data-setting="presentation" ${draft.presentation === 'conversational' ? raw('checked') : ''}> Conversational: one question at a time</label></fieldset>
     <label for="f-submit">Submit button text</label><input id="f-submit" data-setting="submit_label" maxlength="40" value="${draft.submit_label || 'Submit'}"></div>`);
+
+  // ---- Media editor: one image or one video per question, and pictures on choice options ----
+  const mediaEditor = (field, index) => {
+    const media = field.media;
+    const status = html`<p class="copy-status" data-media-status role="status"></p>`;
+    if (!media) return html`<div class="field-media" role="group" aria-labelledby="fm-${index}"><span class="label" id="fm-${index}">Media <span class="muted">(optional)</span></span>
+      <div class="row"><label class="btn btn-small file-button">Add image<input type="file" accept="${IMAGE_TYPES.join(',')}" data-media-file class="visually-hidden"></label><button class="btn btn-small" type="button" data-media-video>Add video</button></div>
+      <div data-video-entry hidden><label for="fvu-${index}">YouTube or Vimeo link</label><span class="hint" id="fvu-${index}-hint">Paste the video's address, for example https://www.youtube.com/watch?v=… or https://vimeo.com/…</span>
+        <div class="share-row"><input id="fvu-${index}" data-video-url inputmode="url" aria-describedby="fvu-${index}-hint"><button class="btn btn-small" type="button" data-video-add>Add video</button><button class="btn btn-small" type="button" data-video-cancel>Cancel</button></div></div>
+      <p class="hint">JPEG, PNG or WebP images up to 2 MB; larger photos are resized before upload.</p>${status}</div>`;
+    if (media.type === 'image') return html`<div class="field-media" role="group" aria-labelledby="fm-${index}"><span class="label" id="fm-${index}">Image</span>
+      <div class="media-edit"><img class="media-thumb" src="${workspaceAssetUrl(media.asset)}" alt="">
+        <div><label for="fa-${index}">Image description (alt text)</label><span class="hint" id="fa-${index}-hint">What the image shows, for people who cannot see it. Up to 250 characters.</span>
+          <input id="fa-${index}" data-media-alt maxlength="250" value="${media.alt || ''}" aria-describedby="fa-${index}-hint" ${media.decorative ? raw('disabled') : ''}>
+          <label class="check"><input type="checkbox" data-media-decorative ${media.decorative ? raw('checked') : ''}> Decorative: it adds nothing a screen-reader user needs</label>
+          <div class="row"><label class="btn btn-small file-button">Replace image<input type="file" accept="${IMAGE_TYPES.join(',')}" data-media-file class="visually-hidden"></label><button class="btn btn-small" type="button" data-media-remove>Remove image</button></div></div></div>${status}</div>`;
+    return html`<div class="field-media" role="group" aria-labelledby="fm-${index}"><span class="label" id="fm-${index}">${VIDEO_PROVIDERS[media.provider]} video</span>
+      <p class="hint">Respondents see a placeholder and load the video only if they choose; nothing contacts ${VIDEO_PROVIDERS[media.provider]} before that. <a href="${videoWatchUrl(media)}" target="_blank" rel="noopener noreferrer" data-external>Check the video<span class="visually-hidden"> (opens in a new tab)</span></a></p>
+      <label for="fv-${index}">Player title <span class="muted">(optional)</span></label><span class="hint" id="fv-${index}-hint">Read by screen readers. Without one, the question is used.</span>
+      <input id="fv-${index}" data-media-title maxlength="150" value="${media.title || ''}" aria-describedby="fv-${index}-hint">
+      <div class="row"><button class="btn btn-small" type="button" data-media-remove>Remove video</button></div>${status}</div>`;
+  };
+  const pendingUploads = new Map(); // editor index → { blob, apply } kept for "Try again"
+  const uploadImage = async (index, file, apply) => {
+    const say = (text, retry = false) => { const node = $(`[data-index="${index}"] [data-media-status]`); if (node) mount(node, html`${text}${retry ? html` <button class="btn-link" type="button" data-media-retry>Try again</button>` : ''}`); };
+    let blob = pendingUploads.get(index)?.blob;
+    try {
+      if (!blob) { say('Preparing image…'); blob = await prepareImage(file); }
+      pendingUploads.set(index, { blob, apply });
+      say('Uploading image…');
+      const asset = await api('POST', wsPath('/form-assets'), { data: await blobBase64(blob) }, {}, { timeout: 60000 });
+      pendingUploads.delete(index);
+      apply(asset);
+      refresh({ fields: true });
+      say(`Image uploaded (${asset.width} × ${asset.height}). Save the draft to keep it.`);
+      ($(`[data-index="${index}"] [data-media-alt]:not([disabled])`) || $(`[data-index="${index}"] [data-media-status]`))?.focus();
+    } catch (error) {
+      if (!blob) pendingUploads.delete(index);
+      say(`Not uploaded. ${error.message}`, Boolean(pendingUploads.get(index)));
+    }
+  };
+  $('#fields').addEventListener('change', event => {
+    const editor = event.target.closest('[data-index]');
+    if (!editor) return;
+    const index = Number(editor.dataset.index);
+    const field = draft.fields[index];
+    if (event.target.matches('[data-media-file], [data-option-file]') && event.target.files[0]) {
+      pendingUploads.delete(index);
+      const option = event.target.dataset.optionFile;
+      return uploadImage(index, event.target.files[0], asset => {
+        if (option !== undefined) field.options[Number(option)].image = { asset: asset.id };
+        else field.media = { type: 'image', asset: asset.id, ...(field.media?.type === 'image' ? { alt: field.media.alt, decorative: field.media.decorative } : { alt: '' }) };
+      });
+    }
+    if (event.target.matches('[data-media-decorative]')) {
+      field.media.decorative = event.target.checked;
+      refresh({ fields: true });
+      return $(`[data-index="${index}"] [data-media-decorative]`)?.focus();
+    }
+  });
+  $('#fields').addEventListener('input', event => {
+    const editor = event.target.closest('[data-index]');
+    if (!editor || !event.target.matches('[data-media-alt], [data-media-title]')) return;
+    draft.fields[Number(editor.dataset.index)].media[event.target.matches('[data-media-alt]') ? 'alt' : 'title'] = event.target.value;
+    refresh();
+  });
+  $('#fields').addEventListener('click', event => {
+    const button = event.target.closest('button');
+    const editor = event.target.closest('[data-index]');
+    if (!button || !editor) return;
+    const index = Number(editor.dataset.index);
+    const field = draft.fields[index];
+    const entry = $('[data-video-entry]', editor);
+    const say = text => { const node = $('[data-media-status]', editor); if (node) node.textContent = text; };
+    if (button.matches('[data-media-video]')) { entry.hidden = false; return $('[data-video-url]', entry).focus(); }
+    if (button.matches('[data-video-cancel]')) { entry.hidden = true; return $('[data-media-video]', editor).focus(); }
+    if (button.matches('[data-video-add]')) {
+      const video = parseVideoUrl($('[data-video-url]', entry).value);
+      if (!video) { say('That is not a YouTube or Vimeo video address. Copy the link from the video page and try again.'); return $('[data-video-url]', entry).focus(); }
+      field.media = { type: 'video', ...video };
+      refresh({ fields: true });
+      announce(`${VIDEO_PROVIDERS[video.provider]} video added. Save the draft to keep it.`);
+      return $(`[data-index="${index}"] [data-media-title]`)?.focus();
+    }
+    if (button.matches('[data-media-remove]')) {
+      const kind = field.media.type;
+      delete field.media;
+      refresh({ fields: true });
+      announce(`${kind === 'image' ? 'Image' : 'Video'} removed from the draft. The live form keeps it until you publish.`);
+      return $(`[data-index="${index}"] [data-media-file]`)?.closest('label')?.querySelector('input')?.focus();
+    }
+    if (button.matches('[data-option-image-remove]')) {
+      const option = Number(button.dataset.optionImageRemove);
+      delete field.options[option].image;
+      refresh({ fields: true });
+      announce('Picture removed from the option. The live form keeps it until you publish.');
+      return $(`[data-index="${index}"] [data-option-file="${option}"]`)?.focus();
+    }
+    if (button.matches('[data-media-retry]')) { const pending = pendingUploads.get(index); if (pending) uploadImage(index, null, pending.apply); }
+  });
 
   const renderFields = () => {
     const locked = new Set(form.locked_ids || []);
@@ -494,12 +684,16 @@ export async function builder(ctx) {
           <label for="fl-${index}">Question</label><span class="hint" id="fl-${index}-hint">Insert an earlier answer with {{question_key}}${earlier.length ? `, for example {{${earlier[0].id}}}` : ''}.</span>
           <input id="fl-${index}" data-prop="label" maxlength="300" aria-describedby="fl-${index}-hint" value="${field.label}">
           <label for="fh-${index}">Help text <span class="muted">(optional)</span></label><input id="fh-${index}" data-prop="help" maxlength="500" value="${field.help || ''}">
+          ${mediaEditor(field, index)}
           <label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required: respondents must answer before continuing</label>
           <details class="field-advanced"><summary>Question key <span class="muted">· ${field.id}</span></summary>
             <span class="hint" id="key-hint-${index}">Used in exports, logic and {{${field.id}}} insertions. Lowercase letters, numbers and underscores.</span>
             <input data-prop="id" value="${field.id}" maxlength="40" pattern="[a-z0-9_]+" aria-label="Question key" aria-describedby="key-hint-${index}${locked.has(field.id) ? ' key-locked-' + index : ''}" class="key-input" ${locked.has(field.id) ? raw('readonly') : ''}>
             ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}</details>
-          ${field.type.endsWith('_choice') ? html`<fieldset><legend class="label">Options</legend>${field.options.map((option, optionIndex) => html`<div class="range"><input aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}"><button class="btn btn-small" data-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" ${field.options.length === 1 ? raw('disabled') : ''}>Remove</button></div>`)}
+          ${field.type.endsWith('_choice') ? html`<fieldset><legend class="label">Options</legend>${field.options.map((option, optionIndex) => html`<div class="range"><input aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}">${option.image ? html`<img class="option-thumb" src="${workspaceAssetUrl(option.image.asset)}" alt=""><button class="btn btn-small" type="button" data-option-image-remove="${optionIndex}" aria-label="Remove the picture from option ${optionIndex + 1}">Remove picture</button>`
+              : html`<label class="btn btn-small file-button">Picture<span class="visually-hidden"> for option ${optionIndex + 1}</span><input type="file" accept="${IMAGE_TYPES.join(',')}" data-option-file="${optionIndex}" class="visually-hidden"></label>`}
+              <button class="btn btn-small" data-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" ${field.options.length === 1 ? raw('disabled') : ''}>Remove</button></div>`)}
+            ${field.options.some(option => option.image) ? html`<p class="hint">Pictures appear above each option's text. Answers, logic and exports use the option text, not the picture.</p>` : ''}
             <button class="btn-link" data-add-option>Add option</button></fieldset>` : ''}`}
         <label class="check"><input type="checkbox" data-logic ${field.show_if ? raw('checked') : ''} ${earlier.length ? '' : raw('disabled')}> ${field.type === 'page_break' ? 'Show this page only when…' : 'Show only when…'}</label>
         ${field.show_if ? html`<div class="row">

@@ -1,6 +1,7 @@
 import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
 import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
+import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
 import { availability, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
@@ -297,6 +298,11 @@ export function createApi(app) {
   });
   del('/api/workspaces/:ws/forms/:id/responses/:rid', ctx => { deleteResponse(app, member(ctx, 'responses.delete').workspace.id, ctx.params.id, ctx.params.rid); return { status: 204 }; });
 
+  // Host-authored form images: uploads need forms.manage; reads are workspace-scoped or limited to
+  // images that a collecting form's published version shows.
+  post('/api/workspaces/:ws/form-assets', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'assets', 30); return { status: 201, body: uploadAsset(app, actor.workspace.id, ctx.user.id, await ctx.json(3 * 1024 * 1024)) }; });
+  get('/api/workspaces/:ws/form-assets/:id', ctx => workspaceAsset(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
+  get('/api/public/form-assets/:id', ctx => { limit(ctx, 'manage', 600); return publicAsset(app, ctx.params.id); }, { public: true });
   get('/api/public/forms/:slug', ctx => {
     const form = publishedForm(app, ctx.params.slug);
     const state = availability(app, form.workspace_id);

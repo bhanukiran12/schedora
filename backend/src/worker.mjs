@@ -8,6 +8,7 @@ import { videoTick } from './video/rooms.mjs';
 import { expireLots } from './video/credits.mjs';
 import { reconcileRecharges } from './video/recharge.mjs';
 import { MONITOR_INTERVAL_MS, runMonitoring } from './platform/monitoring.mjs';
+import { pruneAssets } from './forms/assets.mjs';
 
 const DAY = 86400000;
 
@@ -35,6 +36,7 @@ export function applyRetention(app) {
     // Video: provider event and operation records are kept 30 days; participant names follow workspace retention.
     app.db.run('DELETE FROM video_provider_events WHERE processed_at IS NOT NULL AND processed_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM video_provider_ops WHERE status = 'done' AND updated_at < ?", now - 30 * DAY);
+    removed.images = pruneAssets(app);
   });
   return removed;
 }

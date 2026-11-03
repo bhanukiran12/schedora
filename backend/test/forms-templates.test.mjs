@@ -10,11 +10,11 @@ import { FORM_TEMPLATES, questionCount } from '../../frontend/js/forms-templates
 const visibleIds = (definition, answers) => visibleFields(definition, answers).map(field => field.id);
 
 test('every template is a valid supported definition and survives server normalisation unchanged in shape', () => {
-  assert.equal(FORM_TEMPLATES.length, 8);
-  assert.equal(new Set(FORM_TEMPLATES.map(template => template.id)).size, 8);
+  assert.equal(FORM_TEMPLATES.length, 10);
+  assert.equal(new Set(FORM_TEMPLATES.map(template => template.id)).size, 10);
   // Existing ids keep their place (onboarding defaults to the first); the sales and client meeting set is grouped.
   assert.deepEqual(FORM_TEMPLATES.slice(0, 4).map(template => template.id), ['consultation', 'project-brief', 'programme-interest', 'session-feedback']);
-  assert.deepEqual(FORM_TEMPLATES.filter(template => template.group === 'meetings').map(template => template.id), ['sales-discovery', 'demo-request', 'client-onboarding', 'client-review']);
+  assert.deepEqual(FORM_TEMPLATES.filter(template => template.group === 'meetings').map(template => template.id), ['sales-discovery', 'demo-request', 'client-onboarding', 'client-review', 'proposal-questions', 'renewal-feedback']);
   for (const template of FORM_TEMPLATES) {
     assert.deepEqual(definitionProblems(template.definition), [], template.id);
     const normalized = normalizeDefinition(template.definition);
@@ -57,6 +57,16 @@ test('template logic behaves as each card describes', () => {
   assert.ok(!visibleIds(byId['client-review'], { satisfaction: 'very' }).includes('improve'));
   assert.ok(visibleIds(byId['client-review'], { satisfaction: 'neutral' }).includes('improve'));
   assert.deepEqual(Object.keys(validateSubmission(byId['client-review'], { name: 'A', satisfaction: 'very', call: 'yes' }).errors), ['email']);
+  // Proposal questions: "what else" follows a ticked "Something else"; sending is not acceptance.
+  assert.ok(!visibleIds(byId['proposal-questions'], { detail: ['pricing'] }).includes('detail_other'));
+  assert.ok(visibleIds(byId['proposal-questions'], { detail: ['pricing', 'other'] }).includes('detail_other'));
+  assert.deepEqual(validateSubmission(byId['proposal-questions'], { name: 'A', email: 'a@example.com', questions: 'Payment schedule?' }).errors, {});
+  assert.match(byId['proposal-questions'].description, /does not accept or reject the proposal/);
+  // Support and renewal feedback: "what would help" only when not yet continuing; feedback changes nothing.
+  assert.ok(!visibleIds(byId['renewal-feedback'], { continue: 'yes' }).includes('would_help'));
+  assert.ok(visibleIds(byId['renewal-feedback'], { continue: 'unsure' }).includes('would_help'));
+  assert.deepEqual(Object.keys(validateSubmission(byId['renewal-feedback'], { name: 'A', email: 'a@example.com' }).errors).sort(), ['continue', 'support']);
+  assert.match(byId['renewal-feedback'].description, /does not renew, change or cancel anything/);
 });
 
 test('templates collect only what the task needs: no marketing consent, nothing preselected', () => {

@@ -26,6 +26,8 @@ export const MONITORING_TABLES = ['monitor_alerts'];
 export const EMAIL_REPORT_TABLES = ['email_provider_events'];
 // Table of migration 012 (live workspace onboarding), created by the postgres_v11 upgrade.
 export const ONBOARDING_TABLES = ['workspace_onboarding'];
+export const FORM_ASSET_TABLES = ['form_assets', 'form_version_assets'];
+export const SESSION_OFFER_TABLES = ['video_session_offers', 'video_session_receipts', 'video_session_notes'];
 // Indexes of migration 010 (enquiry feed); new databases get them from the base schema.
 export const ENQUIRY_FEED_INDEXES = [
   'CREATE INDEX IF NOT EXISTS responses_workspace_arrival ON responses(workspace_id, created_at, id)',

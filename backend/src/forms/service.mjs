@@ -4,6 +4,8 @@ import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
 import { answerText, conditionHolds, definitionProblems, FIELD_TYPES, publishedTypeChangeAllowed, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
+import { assertDefinitionAssets, recordVersionAssets } from './assets.mjs';
+import { assertSessionClaim, recordSessionSubmission, verifyTicket } from '../video/session.mjs';
 import { invalid, text } from '../validate.mjs';
 
 const MINUTE = 60 * 1000;
@@ -18,6 +20,23 @@ const pick = (object, keys) => Object.fromEntries(keys.filter(key => object[key]
 const parse = value => value ? JSON.parse(value) : null;
 
 // Copies only known keys so stored definitions never carry unexpected data.
+// Keeps only the media keys each kind supports, in a fixed order, so stored JSON is stable.
+function normalizeMedia(media) {
+  if (!media || typeof media !== 'object' || Array.isArray(media)) return media;
+  if (media.type === 'image') {
+    const clean = pick(media, ['type', 'asset', 'alt', 'decorative']);
+    if (typeof clean.alt === 'string') clean.alt = clean.alt.trim();
+    if (clean.decorative === true) delete clean.alt; else delete clean.decorative;
+    return clean;
+  }
+  if (media.type === 'video') {
+    const clean = pick(media, ['type', 'provider', 'video', 'title']);
+    if (typeof clean.title === 'string') clean.title = clean.title.trim() || undefined;
+    return clean;
+  }
+  return media;
+}
+
 export function normalizeDefinition(input) {
   if (!input || typeof input !== 'object') fail(400, 'validation_failed', 'Form definition is missing.', { field: 'definition' });
   const definition = {
@@ -30,11 +49,17 @@ export function normalizeDefinition(input) {
       const clean = pick(field, ['id', 'type', 'label', 'help', 'required']);
       if (typeof clean.label === 'string') clean.label = clean.label.trim();
       if (typeof clean.help === 'string') clean.help = clean.help.trim() || undefined;
-      if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => option && pick(option, ['id', 'label'])) : field.options;
+      if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => {
+        if (!option || typeof option !== 'object') return option;
+        const kept = pick(option, ['id', 'label']);
+        if (option.image != null) kept.image = option.image && typeof option.image === 'object' ? pick(option.image, ['asset']) : option.image;
+        return kept;
+      }) : field.options;
       // Page-break defaults come before show_if so normalizing twice gives identical JSON; the
       // unpublished-changes check compares stored JSON.
       if (clean.type === 'page_break') { delete clean.required; clean.label = clean.label || ''; }
       if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
+      if (field.media != null) clean.media = normalizeMedia(field.media);
       return clean;
     }) : input.fields
   };
@@ -77,6 +102,7 @@ export function getForm(app, workspaceId, id) {
 
 export function createForm(app, workspaceId, userId, body) {
   const definition = normalizeDefinition(body.definition ?? starterDefinition(typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled form'));
+  assertDefinitionAssets(app, workspaceId, definition);
   const id = randomUUID();
   const slug = `${slugify(definition.title).slice(0, 40)}-${randomBytes(4).toString('hex')}`;
   const now = app.now();
@@ -109,12 +135,16 @@ function writeDraft(app, workspaceId, id, body, column, value) {
 }
 
 export function saveDraft(app, workspaceId, id, body) {
-  return writeDraft(app, workspaceId, id, body, 'draft', JSON.stringify(normalizeDefinition(body.definition)));
+  const definition = normalizeDefinition(body.definition);
+  // Only this workspace's images can appear in its forms; a guessed or foreign image id is refused.
+  assertDefinitionAssets(app, workspaceId, definition);
+  return writeDraft(app, workspaceId, id, body, 'draft', JSON.stringify(definition));
 }
 
 function validatePublish(app, workspaceId, form) {
   requireEntitlement(app, workspaceId, 'forms');
   const definition = normalizeDefinition(form.draft);
+  assertDefinitionAssets(app, workspaceId, definition);
   if (!definition.fields.some(field => field.type !== 'page_break')) fail(400, 'validation_failed', 'Add at least one question before publishing.', { field: 'definition' });
   // A published key never comes back as an incompatible type, so earlier answers keep their meaning.
   const published = new Map();
@@ -156,6 +186,7 @@ export function publishForm(app, workspaceId, userId, id, body = {}) {
     const version = (app.db.get('SELECT MAX(version) AS version FROM form_versions WHERE form_id = ?', id).version || 0) + 1;
     app.db.run('INSERT INTO form_versions (form_id, version, definition, routing, published_at, published_by) VALUES (?, ?, ?, ?, ?, ?)',
       id, version, JSON.stringify(definition), form.routing ? JSON.stringify(form.routing) : null, app.now(), userId);
+    recordVersionAssets(app, id, version, definition);
     app.db.run('UPDATE forms SET published_version = ?, updated_at = ? WHERE id = ?', version, app.now(), id);
     return getForm(app, workspaceId, id);
   });
@@ -207,6 +238,8 @@ const answersHash = answers => sha256(JSON.stringify(Object.keys(answers).sort()
 export function submitResponse(app, slug, body) {
   const form = formBySlug(app, slug);
   if (body.website) fail(400, 'rejected', 'Submission rejected.');
+  // Optional: links the response to a meeting's form offer and the attendee's seat (docs/MEET_SESSION_OFFERS.md).
+  const claim = body.session_ticket != null ? verifyTicket(app, body.session_ticket) : null;
   const key = typeof body.submission_id === 'string' && /^[A-Za-z0-9_-]{16,100}$/.test(body.submission_id) ? body.submission_id : randomUUID();
   if (!body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) fail(400, 'validation_failed', 'Answers are missing.');
   if (body.version != null && !Number.isInteger(body.version)) invalid('version', 'Reload the form and try again.');
@@ -231,6 +264,7 @@ export function submitResponse(app, slug, body) {
       }
       const { answers, errors } = validateSubmission(version.definition, body.answers);
       if (Object.keys(errors).length) fail(400, 'validation_failed', 'Please check the highlighted answers.', { errors });
+      if (claim) assertSessionClaim(app, claim, form.id);
       requireEntitlement(app, form.workspace_id, 'forms');
       consumeQuota(app, form.workspace_id, 'responses');
       const id = randomUUID();
@@ -239,6 +273,7 @@ export function submitResponse(app, slug, body) {
       const contactId = emailField ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: typeof answers.name === 'string' ? answers.name : '' }) : null;
       app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, request_hash, created_at, contact_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, form.workspace_id, form.id, pinned, JSON.stringify(answers), key, answersHash(answers), now, contactId);
+      if (claim) recordSessionSubmission(app, claim, id);
       // The event carries identifiers only; Flow loads the answers it needs at run time.
       app.db.run("INSERT INTO outbox (id, workspace_id, type, subject_id, source_id, created_at) VALUES (?, ?, 'forms.response.created', ?, ?, ?)", randomUUID(), form.workspace_id, id, form.id, now);
       return { ...receipt({ id, created_at: now }, pinned), replay: false, answers_changed: false, next: decideNextStep(app, form, id, version, answers) };

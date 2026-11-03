@@ -14,7 +14,10 @@ import { createWorker } from './worker.mjs';
 import { createProviders } from './video/provider.mjs';
 import { meetingCsp } from './video/config.mjs';
 
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const BASE_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+// Form questions may embed a YouTube or Vimeo player after the respondent chooses to load it. Only
+// those two privacy-mode player origins may be framed; meeting pages keep the base policy.
+const CSP = BASE_CSP + '; frame-src https://www.youtube-nocookie.com https://player.vimeo.com';
 
 // Builds the application. Tests pass an in-memory database, fixed clock and fake providers.
 export function createApp(options = {}) {
@@ -40,7 +43,7 @@ export function createApp(options = {}) {
     })
   };
   app.alertEmailProvider = options.alertEmailProvider || createAlertEmailProvider(config, app.emailProvider, (url, init) => app.fetchProvider(url, init));
-  app.meetingCsp = meetingCsp(config, CSP);
+  app.meetingCsp = meetingCsp(config, BASE_CSP);
   // Video providers by deployment id; tests inject fakes with options.videoProviders.
   app.video = { providers: createProviders(config, options.videoProviders) };
   app.payments = createPayments(app, (url, init) => app.fetchProvider(url, init));

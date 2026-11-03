@@ -309,3 +309,123 @@ Working-tree note: every tracked file in this checkout, including files this wor
 5. In the builder change *Your name* to *Email*: a dialog offers *Replace question*. Select **Keep as is**: nothing changes and the draft stays saved.
 6. Open **Responses (1)**, reload, check the receipt matches, and **Export CSV**.
 7. **Email the link** opens your own mail app; Schedora sends nothing. **Stop collecting responses**: the private window now says the form is closed, and the response is still listed.
+
+## Media: question images, picture choices and click-to-load video (30 October 2026)
+
+Supersedes "Media: scoped, not implemented" above. Not committed, pushed or deployed.
+
+**Works locally (automated evidence):** images attached to questions, pictures on choice options and click-to-load YouTube/Vimeo videos. **Not built:** respondent file uploads; see "Respondent uploads: blocked" below.
+
+### Patterns adopted (official Typeform help, checked 30 October)
+
+Picture choices keep a text label for every choice, because that text is what results record ([Picture Choice](https://help.typeform.com/hc/en-us/articles/360052865591-Picture-Choice-question)). Pictures show in a fixed 4:3 frame. Video is embedded by link only, with no autoplay ([video](https://help.typeform.com/hc/en-us/articles/360051639372-How-to-add-video-to-your-form)). Typeform's file uploads (10 MB, stored on its own platform with account storage limits) confirm that respondent uploads need dedicated storage ([File Upload](https://help.typeform.com/hc/en-us/articles/360051567012-File-Upload-question)). No Typeform assets, wording or branding were copied.
+
+### Definition schema (validated by the shared `definitionProblems`, normalised by the server)
+
+- Question `media` (not on page breaks), one of:
+  - `{ type: 'image', asset, alt }`, or `{ type: 'image', asset, decorative: true }`. `asset` is a 32-hex workspace image id. `alt` is up to 250 characters and required unless the image is decorative. The normaliser drops `alt` from decorative images and `decorative: false`, so stored JSON stays stable.
+  - `{ type: 'video', provider: 'youtube' | 'vimeo', video, title? }`. `video` is an 11-character YouTube id or a Vimeo id of up to 12 digits; `title` is up to 150 characters.
+- Choice option `image: { asset }`. The option's label stays required and is the accessible name, so the picture uses empty alt text.
+- Anything else is refused: other media types, iframe/HTML strings, path-like asset ids, foreign or unknown asset ids (checked on create, save and publish), and unsupported providers. Answers, logic, routing, CSV and Flow placeholders keep using option ids and labels, never image addresses. A test proves an image address is not a valid answer.
+
+### Host images: limits and processing
+
+| Limit | Value |
+| --- | --- |
+| Formats | JPEG, PNG, WebP (still images only). SVG, HTML, GIF, animated PNG/WebP and anything that does not parse are refused |
+| Size | 2 MB per stored image (requests up to 3 MB of JSON) |
+| Dimensions | At most 4000 px a side and 16 million pixels |
+| Workspace quota | 10 MB of image bytes (`413 asset_quota`) |
+| Service-wide guard | 60 MB of database space (base64) across all workspaces by default, `FORM_IMAGE_STORAGE_MB` (`507 asset_storage_full`), protecting the shared database; see the review follow-up below |
+| Upload rate | 30 per minute per client; `forms.manage` permission |
+
+- **Browser.** The builder re-encodes the chosen file on a canvas before upload, to at most 1600 px a side. PNG stays PNG unless it would exceed 2 MB; otherwise it becomes WebP, or JPEG where WebP encoding is unavailable. This applies photo orientation and drops camera and location metadata. States: *Preparing image…*, *Uploading…*, uploaded with dimensions, or *Not uploaded* with the reason and **Try again**, which reuses the prepared image.
+- **Server** (`backend/src/forms/images.mjs`, no dependencies). It identifies the format from magic bytes, never the name or MIME type, and parses the structure: PNG chunk CRCs, JPEG segment lengths and end-of-image marker, WebP RIFF size. It reads true dimensions and removes metadata without re-encoding: PNG `tEXt/zTXt/iTXt/eXIf/tIME`; JPEG APP1 and APP3–APP15 except APP14, plus comments; WebP `EXIF/XMP`, clearing the VP8X flags. Colour-profile and JFIF data are kept. Identical images in a workspace are stored once (SHA-256).
+
+### Storage and access model
+
+- **Storage.** Images live in a new `form_assets` table, as base64 text so the SQLite and PostgreSQL bridge paths are identical. They are never in form JSON and never on ephemeral server disk. No new storage service, credential or paid resource. Size overhead is about 33%; the quotas count stored image bytes.
+- **Builder reads:** `GET /api/workspaces/:ws/form-assets/:id` (`forms.manage`, same workspace only, `Cache-Control: private, max-age=300`).
+- **Public reads:** `GET /api/public/form-assets/:id`, only while a published version of a currently collecting form in the same workspace shows the image (`form_version_assets`). Unknown ids, draft-only images, closed forms and other workspaces all get the same 404. `Cache-Control: public, max-age=3600`, so an image can remain in a browser or proxy cache for up to an hour after a form closes.
+- **Response headers** on both routes: the stored MIME type, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`, `Content-Disposition: inline`.
+
+### Versioning, retention and deletion
+
+- Publishing records the images each version shows in `form_version_assets`. Removing or replacing an image in a draft never changes a published version, and the live form keeps it until the next publish. Respondents still holding an older version during the 24-hour grace period still get its images, because public access checks every version of a collecting form.
+- Images are immutable: *Replace image* uploads a new asset id.
+- The retention job (`applyRetention`, through `pruneAssets`) deletes an image only when it is more than a day old **and** no published version references it **and** no draft in its workspace contains its id. The one-day window protects images added to unsaved drafts.
+- Deleting a form removes its version references; its images are then pruned unless another draft uses them. Deleting a workspace deletes its images. Responses never reference images.
+- Type changes: single ↔ multiple choice keeps options and pictures. Choice → text names the pictures that leave the draft. *Replace question* copies option pictures (with new option keys) and the question's media. Duplicating a question reuses the same immutable asset ids.
+
+### Video
+
+- Accepted addresses are exact `youtube.com/watch?v=`, `youtu.be/`, `youtube.com/embed|shorts|live/`, `youtube-nocookie.com/embed/`, `vimeo.com/<digits>` and `player.vimeo.com/video/<digits>`, over https or http. User information, ports, look-alike hosts, extra path segments, unlisted Vimeo hash links and non-matching ids are refused. Only the provider and id are stored. Nothing is fetched server-side, so there is no SSRF path.
+- The respondent sees a placeholder naming the provider, saying that loading connects to it under its own terms, and offering **Load video from YouTube/Vimeo** and a fallback link. No thumbnail, script or frame is requested before that click (asserted on the network log). After the click the player is `youtube-nocookie.com/embed/<id>?rel=0` or `player.vimeo.com/video/<id>?dnt=1`. There is no autoplay, the title is "<Provider> video: <title or question>", it has a restricted `sandbox` and `allow` list, and focus moves to it. A loaded player stays loaded when the page redraws. Answering never requires watching.
+- CSP: ordinary pages and `/f/` pages add only `frame-src https://www.youtube-nocookie.com https://player.vimeo.com`, in `backend/src/app.mjs` and `frontend/vercel.json`. Meeting pages keep the previous policy. There are no wildcards and no `unsafe-*`, and a test keeps both files consistent. **This is a deployment-affecting change that needs its own release step.**
+
+### Rendering and accessibility
+
+- Question images sit in a fixed 16:9 frame (`object-fit: contain`, lazy loading), so loading never shifts the page. A failed image is replaced by "Image could not be loaded: <alt text>". Images that failed before their listener attached are handled too.
+- Picture choices keep native radio and checkbox inputs inside the label, in a responsive grid with a 4:3 picture frame. Focus ring and checked state apply to the whole card. If the picture fails, the label remains.
+- Builder: **Add image** (a keyboard-reachable file control) and **Add video** (address field with inline errors). An image shows a thumbnail, alt text and a *Decorative* checkbox, plus *Replace* and *Remove*. Each option gets *Picture* / *Remove picture*. Removal is announced together with the fact that the live form keeps the media until publish. Save refuses a non-decorative image with no description.
+
+### Respondent uploads: blocked (not built)
+
+There is no private object storage with lifecycle rules, quotas or scanning. The only durable store is the production free-tier PostgreSQL database shared with every product. Letting anonymous respondents write files of typical upload size there could exhaust it and take Schedora down, and no malware scanner exists. Creating a storage resource was out of scope (spend stays at ₹0, no production resources). So no upload control was added. Releasing it needs:
+
+1. A private bucket with server-side credentials, a per-workspace quota, a service-wide cap and a cost owner.
+2. Short-lived, single-use upload grants bound to form, version, question and submission id. Uploads stay quarantined until the response is accepted, and orphans are deleted after 24 hours.
+3. Type/size/count limits and a decision on scanning: a tested scanner, or "not scanned" stated to hosts.
+4. Downloads only through `responses.read`, with `Content-Disposition: attachment` and no durable links in CSV.
+5. Deleting a response, form, workspace or retention-expired data removes its files.
+
+### Checks (local, final code)
+
+- `npm test`: **243 tests, 238 pass, 0 fail, 5 PostgreSQL skipped**. New `test/forms-media.test.mjs` (8 tests) covers:
+  - metadata removal for PNG, JPEG and WebP, and idempotence;
+  - refusal of SVG/HTML/GIF, a PNG signature followed by script, bad CRCs, truncation, animation, trailing data, oversize dimensions and bytes;
+  - media definition rules, and malicious and look-alike video addresses;
+  - picture-choice answers, logic and type changes;
+  - upload permission, cross-workspace upload and read, guessed ids, deduplication and the workspace quota;
+  - foreign and unknown asset references, draft vs published access, version retention after removal, unpublish revoking public access, cleanup rules and form deletion;
+  - CSP scope and Vercel parity.
+- `npm run check` (158 files), `sync-shared --check` and `git diff --check` pass.
+- `npm run browser-check` final run: every journey passes, **840 layout checks** at 320/375/768/1280 in both colour preferences, no runtime errors or overflow. The new media step, on its own form:
+  - uploads a real PNG through the file input (its text chunk confirmed stripped in storage), and saving without alt text is refused;
+  - adds alt text shown in the preview, an option picture, a refused iframe string and an accepted YouTube link;
+  - checks the preview image fallback, publishing (one deduplicated image recorded) and cookie-less public image delivery;
+  - selects a picture choice with Space and a visible focus ring;
+  - finds no YouTube/Vimeo/ytimg requests before loading, no unpiped title and no placeholder clipping at 320 px; the controlled embed then has its title and receives focus.
+- One earlier full run failed at sign-up (form not yet rendered when the step filled it, an existing timing race unrelated to this work) and cascaded. The unchanged code passed in the next two full runs.
+- The scripted owner journey on the final code still passes: share → anonymous submit with lost-reply retry (one response) → receipt → host detail → CSV → close → cross-workspace 404s.
+- Screenshots reviewed: builder media editor at 1280 px, and the public form with image, video placeholder and picture choice at 375 px. Review caught two defects, both fixed and regression-tested: an unpiped `{{name}}` in the video title, and a clipped placeholder on phones.
+
+**PostgreSQL: not run.** The only configured database is production. The new tables use the existing upgrade mechanism (`postgres_v13_form_assets`) and plain SQL (`COALESCE`, `||`, `LIKE`); CI's PostgreSQL job must pass before release. Not verified: real browsers other than headless Chrome, real photos from phones, Vimeo/YouTube playback (no external playback was relied on), screen readers and human usability.
+
+### Deployment order and rollback
+
+Migration `014_form_assets.sql` (SQLite) and `postgres_v13_form_assets` are additive. Deploy the backend first, then the frontend. The older frontend ignores media fields; the older backend would drop media on save and could not serve images, so do not roll the backend back while forms use media. To roll back, stop using media, then deploy the previous backend; the tables can stay. Watch database size: `SELECT SUM(bytes) FROM form_assets`.
+
+### Next checkpoint
+
+1. CI (including PostgreSQL), then a separate release that includes the CSP change.
+2. Owner validation (below), with a real phone photo.
+3. Respondent uploads after the storage, quota and scanning decisions above.
+
+### Owner validation (local or staging, not production data)
+
+1. In a draft, select **Add image** on a question and choose a phone photo. Check that the status moves to *Image uploaded* and focus lands on the description. Try **Save draft** with an empty description (refused), then describe it, or tick *Decorative*.
+2. Add a **Picture** to two options of a choice question. Select **Add video** and paste a YouTube link (try a random website first; it is refused).
+3. Publish, then open the public link in a private window. The image and pictures show; the video shows a placeholder until you select **Load video**. Choose a picture with the keyboard and submit. The response shows the option text.
+4. Remove the image from the draft and save. The public form still shows it until you publish again.
+
+### Media review follow-up (30 October 2026)
+
+- **Storage budget lowered.** Images are stored as base64, about 4/3 of their bytes, in the same free 500 MB PostgreSQL database and pg_dump backups as everything else, so the earlier 200 MB cap could have taken over half the database.
+  - The service-wide guard now counts stored database space and defaults to 60 MB (about 12%). `FORM_IMAGE_STORAGE_MB` changes it.
+  - The workspace quota is now 10 MB of image bytes.
+  - `SELECT CAST(SUM(bytes) AS BIGINT) * 4 / 3 FROM form_assets` estimates current use.
+- **Concurrency.** Quotas are read and written in one transaction. On PostgreSQL every transaction holds the same advisory lock, so parallel uploads cannot both pass; a test fires two at the quota edge.
+- **Reuse.** Choosing an identical image again now restarts its one-day cleanup clock, so an old unused copy is not pruned before the draft saves it.
+- **PostgreSQL coverage.** `test/forms-media.test.mjs` is now in the CI PostgreSQL job, together with a PostgreSQL-only test of the `postgres_v13_form_assets` upgrade (it runs once and cascades with workspace deletion). `SUM` results use `CAST(... AS BIGINT)`, as elsewhere. Still not run locally: the only configured database is production.
+- **Session offers.** Meeting rooms reuse the public renderer through `respondTo`, with link-only videos, because meeting pages keep their stricter CSP. Errors for meeting forms are listed in [MEET_SESSION_OFFERS.md](MEET_SESSION_OFFERS.md).

@@ -4,6 +4,7 @@
 // Provider tokens live only in memory for the current connection; nothing is persisted.
 import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, fmtFull, html, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle, signInPrompt } from './pages.mjs';
+import { startSession } from './meet-session.mjs';
 
 let sdkPromise = null;
 const sdk = () => sdkPromise ||= import('/vendor/livekit-client.esm.mjs');
@@ -63,7 +64,15 @@ export async function hostRoom(ctx) {
     join: body => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/join`, body),
     end: () => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/end`),
     remove: id => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/participants/${encodeURIComponent(id)}/remove`),
-    invite: () => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/invites`, { seats: 5 })
+    invite: () => api('POST', `/api/meet-video/rooms/${encodeURIComponent(publicId)}/invites`, { seats: 5 }),
+    sessionFor: () => {
+      const base = `/api/meet-video/rooms/${encodeURIComponent(publicId)}/session`;
+      return {
+        load: () => api('GET', base), mark: body => api('POST', base + '/receipts', body),
+        offer: body => api('POST', base + '/offer', body), launch: body => api('POST', base + '/offer/launch', body), removeOffer: body => api('DELETE', base + '/offer', body),
+        note: body => api('POST', base + '/note', body), removeNote: () => api('DELETE', base + '/note')
+      };
+    }
   });
 }
 
@@ -88,7 +97,12 @@ export async function guestRoom(ctx) {
   meetingFlow(ctx, {
     info, host: false, defaultName: '',
     load: participant => api('GET', `/api/public/meet-video/join/${encodeURIComponent(token)}${participant ? '?participant=' + encodeURIComponent(participant) : ''}`),
-    join: async body => { const result = await api('POST', `/api/public/meet-video/join/${encodeURIComponent(token)}`, { ...body, resume: seat.get() || undefined }); seat.set(result.participant_id); return result; }
+    join: async body => { const result = await api('POST', `/api/public/meet-video/join/${encodeURIComponent(token)}`, { ...body, resume: seat.get() || undefined }); seat.set(result.participant_id); return result; },
+    // Session state is read with the link and this tab's own seat; the server checks both.
+    sessionFor: participant => {
+      const base = `/api/public/meet-video/join/${encodeURIComponent(token)}/session`;
+      return { load: () => api('GET', `${base}?participant=${encodeURIComponent(participant)}`), mark: body => api('POST', base + '/receipts', { ...body, participant }) };
+    }
   });
 }
 
@@ -337,6 +351,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     if (state.disposed) return;
     state.disposed = true;
     clearInterval(state.pollTimer);
+    state.session?.dispose();
     room.removeAllListeners();
     for (const entry of remoteAudio.values()) detachAudio(entry);
     remoteAudio.clear();
@@ -356,6 +371,8 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     <div id="remote-audio"></div>
     <aside class="room-panel card" id="people-panel" hidden aria-labelledby="people-heading"><div class="row-between"><h2 id="people-heading">People</h2><button class="btn btn-small" type="button" data-close-panel>Close</button></div><ul class="list" id="people"></ul>
       ${state.host ? html`<button class="btn btn-small" type="button" id="copy-invite">Copy guest link</button>` : ''}</aside>
+    ${state.host ? html`<aside class="room-panel card session-panel" id="session-panel" hidden aria-labelledby="session-heading"></aside>` : ''}
+    <aside class="room-panel card session-form-panel" id="session-form-panel" hidden aria-labelledby="session-form-heading"></aside>
     <aside class="room-panel card" id="devices-panel" hidden aria-labelledby="devices-heading"><div class="row-between"><h2 id="devices-heading">Devices</h2><button class="btn btn-small" type="button" data-close-panel>Close</button></div>
       <label for="dev-audioinput">Microphone</label><select id="dev-audioinput" data-kind="audioinput"></select>
       <label for="dev-videoinput">Camera</label><select id="dev-videoinput" data-kind="videoinput"></select>
@@ -365,6 +382,8 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       <details id="call-check"><summary>Check call quality</summary><p class="hint">Shows what this device is receiving. A connected call can still have low resolution or quiet sound.</p>
         <button class="btn btn-small" type="button" id="refresh-call-check">Refresh call check</button><div id="call-check-result" role="status"></div>
         <p class="hint">Quiet sound? Check the computer's output volume. On the phone, compare its built-in microphone with the wired headset microphone while speaking at the same distance. Browser playback level cannot measure your hardware volume.</p></details></aside>
+    <section class="session-card" id="session-card" hidden aria-label="Session"></section>
+    <span class="visually-hidden" id="session-live" aria-live="polite"></span>
     <nav class="video-controls" aria-label="Meeting controls">
       <button class="btn" type="button" id="enable-audio" hidden>Turn on meeting sound</button>
       <button class="btn" type="button" id="mic" aria-describedby="room-media-state">${MEDIA.microphone(true)}</button>
@@ -372,6 +391,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       <button class="btn" type="button" id="share" ${shareSupported ? '' : raw('aria-disabled="true"')}>Share screen</button>
       <button class="btn" type="button" id="devices-toggle" aria-expanded="false" aria-controls="devices-panel">Devices</button>
       <button class="btn" type="button" id="people-toggle" aria-expanded="false" aria-controls="people-panel">People</button>
+      ${state.host ? html`<button class="btn" type="button" id="session-toggle" aria-expanded="false" aria-controls="session-panel">Session</button>` : ''}
       <button class="btn btn-leave" type="button" id="leave">Leave</button>
       <span class="visually-hidden" id="room-media-state" role="status"></span>
     </nav></div>`);
@@ -476,7 +496,7 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   }
 
   // Panels: one at a time; Escape or Close returns focus to the button that opened it.
-  const panels = { 'people-panel': '#people-toggle', 'devices-panel': '#devices-toggle' };
+  const panels = { 'people-panel': '#people-toggle', 'devices-panel': '#devices-toggle', ...(state.host ? { 'session-panel': '#session-toggle' } : {}) };
   function setPanel(id, open) {
     for (const [panelId, toggle] of Object.entries(panels)) {
       const show = panelId === id && open;
@@ -489,13 +509,16 @@ async function meeting(ctx, flow, LK, admission, tracks) {
       if (!show && wasOpen && panelId === id) $(toggle).focus();
     }
     if (open && id === 'devices-panel') loadDevices();
+    if (open && id === 'session-panel') { state.session?.openHostPanel(); $('#session-panel button:not([data-close-panel]), #session-panel select')?.focus(); }
   }
   $('#video-room').addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     const open = Object.keys(panels).find(id => !$('#' + id).hidden);
     if (open) { event.preventDefault(); setPanel(open, false); }
   });
-  $$('[data-close-panel]').forEach(button => button.onclick = () => setPanel(button.closest('.room-panel').id, false));
+  // Close buttons are found by delegation: the session panel redraws its own.
+  $('#video-room').addEventListener('click', event => { const button = event.target.closest('[data-close-panel]'); if (button) setPanel(button.closest('.room-panel').id, false); });
+  if (state.host) $('#session-toggle').onclick = () => setPanel('session-panel', $('#session-panel').hidden);
   $('#people-toggle').onclick = () => setPanel('people-panel', $('#people-panel').hidden);
   $('#devices-toggle').onclick = () => setPanel('devices-panel', $('#devices-panel').hidden);
   $('#refresh-call-check').onclick = async () => {
@@ -650,6 +673,8 @@ async function meeting(ctx, flow, LK, admission, tracks) {
   } catch { alertBox('warn', 'Your camera or microphone could not be shared. Use the buttons below to try again.'); }
   tracks.video = tracks.audio = null; // the room owns them now and stops them on disconnect
   refresh();
+  // Session form offer and pinned note (docs/MEET_SESSION_OFFERS.md), also for late joiners.
+  if (flow.sessionFor) state.session = startSession({ flow: { session: flow.sessionFor(participantId) }, host: state.host });
 
   // Server state every 30 s: a meeting ended elsewhere, this person's removal, and (hosts) roster and credits.
   const poll = async () => {

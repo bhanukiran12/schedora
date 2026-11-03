@@ -18,6 +18,66 @@ export const FIELD_TYPES = {
 const WIDER_TYPES = { short_text: ['long_text'], email: ['short_text', 'long_text'], phone: ['short_text', 'long_text'], date: ['short_text', 'long_text'], single_choice: ['multiple_choice'] };
 export const publishedTypeChangeAllowed = (from, to) => from === to || Boolean(WIDER_TYPES[from]?.includes(to));
 
+// ---- Media (docs/FORMS.md, "Media") ----
+// A question may show one image (an uploaded workspace asset) or one video from an allow-listed
+// provider; choice options may show an image. Logic, routing and answers always use option ids.
+const ASSET_ID = /^[a-f0-9]{32}$/;
+const VIDEO_IDS = { youtube: /^[A-Za-z0-9_-]{11}$/, vimeo: /^[0-9]{1,12}$/ };
+export const VIDEO_PROVIDERS = { youtube: 'YouTube', vimeo: 'Vimeo' };
+export const MEDIA_LIMITS = { alt: 250, videoTitle: 150 };
+
+/** A supported YouTube or Vimeo address as { provider, video }, or null. Never fetched. */
+export function parseVideoUrl(text) {
+  let url;
+  try { url = new URL(String(text).trim()); } catch { return null; }
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.port) return null;
+  const host = url.hostname.toLowerCase().replace(/^(www|m)\./, '');
+  const path = url.pathname.split('/').filter(Boolean);
+  let provider = null, video = null;
+  if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    provider = 'youtube';
+    video = path[0] === 'watch' && path.length === 1 ? url.searchParams.get('v') : ['embed', 'shorts', 'live'].includes(path[0]) && path.length === 2 ? path[1] : null;
+  } else if (host === 'youtu.be' && path.length === 1) { provider = 'youtube'; video = path[0]; }
+  else if (host === 'vimeo.com' && path.length === 1) { provider = 'vimeo'; video = path[0]; }
+  else if (host === 'player.vimeo.com' && path[0] === 'video' && path.length === 2) { provider = 'vimeo'; video = path[1]; }
+  return provider && VIDEO_IDS[provider].test(video || '') ? { provider, video } : null;
+}
+// Controlled player and fallback addresses built from the stored id; no autoplay, privacy modes on.
+export const videoEmbedUrl = media => media.provider === 'youtube' ? `https://www.youtube-nocookie.com/embed/${media.video}?rel=0` : `https://player.vimeo.com/video/${media.video}?dnt=1`;
+export const videoWatchUrl = media => media.provider === 'youtube' ? `https://www.youtube.com/watch?v=${media.video}` : `https://vimeo.com/${media.video}`;
+
+/** Every uploaded asset a definition shows, in order, without repeats. */
+export function definitionAssets(definition) {
+  const ids = new Set();
+  for (const field of definition?.fields || []) {
+    if (field?.media?.type === 'image') ids.add(field.media.asset);
+    for (const option of field?.options || []) if (option?.image) ids.add(option.image.asset);
+  }
+  return [...ids].filter(id => typeof id === 'string');
+}
+
+function mediaProblems(field, name) {
+  const problems = [];
+  const media = field.media;
+  if (media != null) {
+    if (field.type === 'page_break') problems.push(`${name} is a page break and cannot show media.`);
+    else if (typeof media !== 'object' || Array.isArray(media)) problems.push(`${name} has invalid media.`);
+    else if (media.type === 'image') {
+      if (!ASSET_ID.test(media.asset ?? '')) problems.push(`${name} has an invalid image.`);
+      if (media.decorative != null && typeof media.decorative !== 'boolean') problems.push(`${name} image decorative setting must be true or false.`);
+      if (media.alt != null && (typeof media.alt !== 'string' || media.alt.length > MEDIA_LIMITS.alt)) problems.push(`${name} image description must be under ${MEDIA_LIMITS.alt} characters.`);
+      if (!media.decorative && !(typeof media.alt === 'string' && media.alt.trim())) problems.push(`${name} image needs a description, or mark it decorative.`);
+    } else if (media.type === 'video') {
+      if (!VIDEO_PROVIDERS[media.provider] || !VIDEO_IDS[media.provider].test(media.video ?? '')) problems.push(`${name} has an unsupported video. Use a YouTube or Vimeo link.`);
+      if (media.title != null && (typeof media.title !== 'string' || media.title.length > MEDIA_LIMITS.videoTitle)) problems.push(`${name} video title must be under ${MEDIA_LIMITS.videoTitle} characters.`);
+    } else problems.push(`${name} has an unsupported media type.`);
+  }
+  for (const option of Array.isArray(field.options) ? field.options : []) {
+    if (option?.image != null && (typeof option.image !== 'object' || !ASSET_ID.test(option.image.asset ?? ''))) problems.push(`${name} has an option with an invalid image.`);
+  }
+  return problems;
+}
+
 export const CONDITION_OPS = { equals: 'is', not_equals: 'is not', contains: 'includes', answered: 'is answered', not_answered: 'is not answered' };
 const LIMITS = { short_text: 300, long_text: 5000, email: 254, phone: 30 };
 const EMAIL = /^[^\s@<>()[\]\\,;:"]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -133,6 +193,7 @@ export function definitionProblems(definition) {
     if (field.type !== 'page_break' && (typeof field.label !== 'string' || !field.label.trim() || field.label.length > 300)) problems.push(`${name} needs a question of up to 300 characters.`);
     if (field.help != null && (typeof field.help !== 'string' || field.help.length > 500)) problems.push(`${name} help text must be under 500 characters.`);
     if (field.required != null && typeof field.required !== 'boolean') problems.push(`${name} required must be true or false.`);
+    problems.push(...mediaProblems(field, name));
     if (field.type?.endsWith('_choice')) {
       if (!Array.isArray(field.options) || field.options.length < 1 || field.options.length > 50) problems.push(`${name} needs 1–50 options.`);
       else {

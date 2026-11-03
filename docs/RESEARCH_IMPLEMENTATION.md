@@ -754,3 +754,66 @@ Files: `backend/src/shared/forms-logic.mjs` (synced to `frontend/shared/`), `bac
 Local evidence on the final code: full suite 235 total / 230 pass / 0 fail / 5 optional PostgreSQL skips; syntax 155 files; shared sync and `git diff --check` pass. Browser run on the final frontend: every journey passes, 824 layout checks at 320/375/768/1280 in both colour preferences, no runtime errors or overflow, including keyboard Tab/Enter through the index and the type-change dialogs. An earlier run failed because a scripted `.focus()` does not trigger `:focus-visible` on links; the test now uses real Tab presses. A scripted journey on disposable local data covered template preview (nothing created) → Sales discovery draft (no link, public 404) → edit → preview → publish → copy (honest failure path in headless Chrome) → anonymous submit with a lost reply and retry (exactly one response, receipt `611AC831`) → host detail after reload → CSV → widen a type and republish (stored answer still version 1) → stop collecting (public link closed, response kept) → another workspace gets 404. Screenshots reviewed at 375 and 1280 px.
 
 PostgreSQL not run: the only configured database is production Supabase, where the runner would create and drop a schema, and there is no local PostgreSQL image (pulling one needs approval). CI's PostgreSQL job remains the gate. Not verified: production, clipboard success, physical devices, mail clients, screen readers and human usability.
+
+## 30 October 2026 — Forms media (images, picture choices, click-to-load video); uploads blocked
+
+Pain: forms could not show an image, picture options or a video. Acceptance: hosts upload validated, metadata-free images into durable, workspace-scoped storage with alt text or an explicit decorative choice. Choice options can carry pictures while answers, logic and routing stay on option ids. YouTube/Vimeo videos load only after the respondent chooses, with no provider contact before that. Published versions keep their media regardless of later drafts. Respondent file uploads ship only with safe private storage. That storage does not exist, so uploads were not built and the dependency is documented. Details, limits, the access model and rollback: [FORMS.md](FORMS.md#media-question-images-picture-choices-and-click-to-load-video-30-october-2026).
+
+Files: `backend/migrations/014_form_assets.sql` (new), `backend/src/forms/images.mjs` (new), `backend/src/forms/assets.mjs` (new), `backend/src/forms/service.mjs`, `backend/src/shared/forms-logic.mjs` (+ `frontend/shared/` copy), `backend/src/api.mjs`, `backend/src/worker.mjs`, `backend/src/postgres.mjs`, `backend/src/postgres-sql.mjs`, `backend/src/app.mjs` and `frontend/vercel.json` (frame-src for the two player origins only), `frontend/js/forms.mjs`, `frontend/js/forms-type-change.mjs`, `frontend/app.css`, `backend/test/forms-media.test.mjs` (new), `backend/scripts/browser-check.mjs`.
+
+Evidence (local, final code): 243 tests / 238 pass / 0 fail / 5 PostgreSQL skips; syntax 158 files; shared sync and diff check pass. The final browser run passes every journey with 840 layout checks. One earlier run hit an existing sign-up timing race and passed unchanged afterwards. The owner journey regression still passes. Screenshot review found and fixed an unpiped video title and a clipped placeholder at phone widths. PostgreSQL not run (only production is configured); CI is the gate. No commit, push, deploy, production resource or spend.
+
+## 30 October 2026 — Sidebar typography and compact "Schedora apps" switcher
+
+Pain: sidebar text used five unrelated sizes (10.8–20 px). Navigation labels inherited 16 px, a long workspace name wrapped to 99 px, the email was 10.8 px, and icons rendered at their natural 14–25 px widths so labels did not line up. The *Guided setup* icon file (`Sparkles.svg`) did not exist, and the expanded "Other Schedora products" block took about 250 px with full-size lockups and a paragraph.
+
+Change (frontend only: `frontend/js/shell.mjs`, `frontend/product-shell.css`):
+- A compact **Schedora apps** disclosure (Schedora logo, label, chevron) sits under the product name in Meet, Forms and Flow. It opens an in-flow panel listing Schedora, Meet, Forms and Flow with logo, name, one-line description, a subtle product-colour edge and a visible *Current* marker on the current product (`aria-current="true"`).
+- It is closed by default; Escape closes it and returns focus, and an outside click closes it. In the phone drawer, the first Escape closes the panel and the second closes the drawer. The old block and paragraph were removed, leaving one line: "Same account and workspace. Access follows your workspace plan."
+- The Suite sidebar, which already lists the products, has no switcher. Destinations are unchanged.
+- Type scale in rem using the page's Inter and tokens: product name 1.3125, navigation 0.9375 (active 600), workspace and profile name 0.875, labels and email 0.75. Icons are 20 px with a 12 px gap and rows at least 42 px. Hover, active (product accent) and focus states are explicit.
+- Long workspace names clamp to two lines and long names and emails to one, with full text in the DOM and a `title`. Hard-coded greys became tokens. *Guided setup* uses the existing `GraduationCap` icon. The orphaned `.ecosystem-switcher` header styles were left untouched; no header switcher was added.
+
+Evidence (local, headless Chrome): before and after screenshots of Forms (switcher closed and open), Meet, Flow and Suite at 1280×900, 1280×560 and in the 375 and 320 px drawers, with a 56-character workspace name and an 80-character email. Computed styles were recorded before and after. Scripted checks: Enter opens; Tab reaches the first app with a visible ring; Escape closes and restores focus; outside click closes; the drawer Escape order works; long names stay whole; short screens reach the profile; no overflow at 320, 375 or 200% zoom (640×450). Full unit and browser suites pass, as above. Not a full accessibility audit; no screen-reader or human testing.
+
+## 30 October 2026 — Media stabilisation, session offers in meeting rooms, sales and client starters
+
+**Media.**
+- Pain: the 200 MB image cap counted decoded bytes, while storage is base64 in the shared free 500 MB database, and migration 014 was never run by the CI PostgreSQL job.
+- Change: a 60 MB stored-space guard (configurable) and a 10 MB workspace quota; reuse restarts the cleanup clock; BIGINT casts; and the media tests plus a PostgreSQL upgrade test were added to the PostgreSQL job.
+- Details: [FORMS.md](FORMS.md#media-review-follow-up-30-october-2026).
+
+**Session offers.**
+- Pain (owner, firsthand): late joiners cannot find the form link, so the host reposts it.
+- Contract: [MEET_SESSION_OFFERS.md](MEET_SESSION_OFFERS.md).
+- Built: migration `015_session_offers.sql` and the `postgres_v14_session_offers` step; `backend/src/video/session.mjs`, with routes registered from `api-video.mjs`; a session ticket checked inside `submitResponse`; the frontend `js/meet-session.mjs`, with room wiring in `js/meet-video.mjs`; `respondTo` extracted from the public form page in `js/forms.mjs`; and styles in `app.css`.
+- Acceptance:
+  - host-only control;
+  - late joiners see the offer;
+  - one prompt per offer;
+  - one response per seat and offer;
+  - retry-safe submission;
+  - tampered, foreign and removed-seat tickets write nothing;
+  - status without answers;
+  - response links only with `responses.read`;
+  - replacement creates a new offer identity;
+  - removal and closure handled;
+  - the note is plain text with https links only.
+
+**Starters.**
+- *Proposal questions* and *Support and renewal feedback* templates.
+- `backend/test/sales-client-journeys.test.mjs` proves the sales discovery and client kickoff journeys on local records with supported Flow tasks (assignee and deadline).
+
+**Recording.** A bounded proposal only: [RECORDING_TRANSCRIPT_PROPOSAL.md](RECORDING_TRANSCRIPT_PROPOSAL.md).
+
+**Respondent uploads** remain blocked; the dependency is unchanged (FORMS.md).
+
+**Evidence:** see [MEET_FORMS_CHECKPOINT.md](MEET_FORMS_CHECKPOINT.md). Nothing was committed, pushed or deployed, and nothing touched production or cost money.
+
+## 3 November 2026 — Session-offer access review
+
+Release-gate follow-up: added explicit migration015 PostgreSQL upgrade/reconnect/data-preservation and constraint/cascade coverage in the CI-selected session test file. Added configuration validation after reproducing invalid/NaN image budgets bypassing the service-wide guard. Final local253tests:246pass/0fail/7PGskips; syntax162/shared/vendor/whitespace pass. Browser evidence remains the preceding872-layout run (no later frontend changes); exact-commit CI must cover the new tree before release. Docker Desktop launched but engine remains unresponsive; no downloaded database software or production database tests. Feature-branch preparation uses existing owner push authorization; no main merge or production activation implied.
+
+Reviewed the current uncommitted media/session implementation without replacing earlier work. Reproduced HTTP 201 for a new session-linked response after guest invitation revocation, while its seat still appeared admitted. Submission now rechecks invitation validity, current workspace membership and room status inside the existing response transaction; tests also refuse old tickets after member removal or meeting end. Reproduced ordinary-member session reads before admission; require an admitted/joined seat unless the caller is a host. Session reads now reject API keys so they cannot retrieve attendee tickets or private session status. Existing accepted-response retry behavior is preserved.
+
+Focused tests16:15pass/1optionalPostgreSQLskip. Full suite251:245pass/0fail/6optionalPostgreSQLskips. Syntax162files and shared-code checks pass. Browser review fixed stale template expectations, scoped the deliberately induced offline error to its exact submission URL, restored connectivity in finally, and replaced past poll fixture dates with future-relative ones. Final full browser run: all journeys and872layout checks pass with no runtime errors/overflow. Reviewed media editor/public form and meeting form/completion screenshots at375/1280; synthetic local fixtures, no new visual component changes. Docker engine unavailable; production database not used. Created the missing [continuation checkpoint](MEET_FORMS_CHECKPOINT.md). No commits, pushes, deploys, live messaging, paid resources or production setting changes.

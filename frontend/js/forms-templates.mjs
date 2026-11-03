@@ -195,6 +195,53 @@ export const FORM_TEMPLATES = [
         { id: 'email', type: 'email', label: 'Where should we contact you?', required: true, show_if: { field: 'call', op: 'equals', value: 'yes' } }
       ]
     }
+  },
+  {
+    id: 'proposal-questions',
+    group: 'meetings',
+    name: 'Proposal questions',
+    audience: 'Sales teams and consultants sending proposals',
+    purpose: 'Gather questions and decision details before a proposal review meeting.',
+    logic: 'Asks what else needs detail only when “Something else” is ticked.',
+    definition: {
+      title: 'Questions about our proposal',
+      description: 'Tell us what to cover when we review the proposal together. Sending this form does not accept or reject the proposal.',
+      presentation: 'classic', submit_label: 'Send questions',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'email', type: 'email', label: 'Work email', required: true },
+        { id: 'questions', type: 'long_text', label: 'What questions do you have about the proposal?', required: true },
+        { id: 'detail', type: 'multiple_choice', label: 'Which parts need more detail?', required: false,
+          options: [option('scope', 'Scope and deliverables'), option('timeline', 'Timeline'), option('pricing', 'Pricing and payment terms'), option('support', 'Support after delivery'), option('other', 'Something else')] },
+        { id: 'detail_other', type: 'short_text', label: 'What else needs more detail?', required: false, show_if: { field: 'detail', op: 'contains', value: 'other' } },
+        { id: 'reviewers', type: 'long_text', label: 'Who else will review the proposal?', help: 'Names and roles are enough.', required: false },
+        { id: 'decision', type: 'single_choice', label: 'When do you expect to decide?', required: false,
+          options: [option('fortnight', 'Within two weeks'), option('month', 'Within a month'), option('unsure', 'Not sure yet')] }
+      ]
+    }
+  },
+  {
+    id: 'renewal-feedback',
+    group: 'meetings',
+    name: 'Support and renewal feedback',
+    audience: 'Account managers and support teams',
+    purpose: 'Hear how support has gone and what would help before a renewal conversation.',
+    logic: 'Asks what would help only when someone is not yet sure about continuing.',
+    definition: {
+      title: 'How has it been working with us?',
+      description: 'Your answers help us prepare for our next conversation. This is feedback only: sending it does not renew, change or cancel anything.',
+      presentation: 'conversational', submit_label: 'Send feedback',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Your name', required: true },
+        { id: 'email', type: 'email', label: 'Email address', required: true },
+        { id: 'support', type: 'single_choice', label: 'When you needed help, how well did we respond?', required: true,
+          options: [option('well', 'Well'), option('mixed', 'Sometimes well, sometimes not'), option('poorly', 'Poorly'), option('never', 'I have not needed help')] },
+        { id: 'continue', type: 'single_choice', label: 'Are you planning to continue after your current term?', required: true,
+          options: [option('yes', 'Yes'), option('unsure', 'Not sure yet'), option('no', 'Probably not')] },
+        { id: 'would_help', type: 'long_text', label: 'What would help you decide?', required: false, show_if: { field: 'continue', op: 'not_equals', value: 'yes' } },
+        { id: 'change', type: 'long_text', label: 'What should we change for the next term?', required: false }
+      ]
+    }
   }
 ];
 

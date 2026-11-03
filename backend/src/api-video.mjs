@@ -4,6 +4,7 @@ import { admitGuest, admitMember, createInstantRoom, createRoomInvite, endRoomBy
 import { grantAllowance, walletSummary } from './video/credits.mjs';
 import { calculate, createRecharge, listRecharges, rechargeCatalog, refreshRecharge, testRechargeEvent } from './video/recharge.mjs';
 import { UNITS_PER_CREDIT } from './video/config.mjs';
+import { registerSessionRoutes } from './video/session.mjs';
 
 // Schedora Meet video routes. Browser tokens are returned only in no-store JSON responses (never
 // in URLs) and are never logged: request logs record the route pattern and status only.
@@ -45,6 +46,9 @@ export function registerVideoRoutes(app, router, { member, limit }) {
   post('/api/meet-video/rooms/:room/end', ctx => { endRoomByHost(app, roomActor(ctx, { session: true }), ctx.params.room); return { status: 204 }; });
   post('/api/meet-video/rooms/:room/participants/:participant/remove', ctx => { removeParticipantByHost(app, roomActor(ctx, { session: true }), ctx.params.room, ctx.params.participant); return { status: 204 }; });
   post('/api/meet-video/rooms/:room/invites', async ctx => { limit(ctx, 'video-invite', 20); return { status: 201, body: createRoomInvite(app, roomActor(ctx, { session: true }), ctx.params.room, await ctx.json()) }; });
+
+  // Session form offers and the pinned note (docs/MEET_SESSION_OFFERS.md).
+  registerSessionRoutes(app, router, { roomActor, limit });
 
   // ---- Guests: scoped attendance credential only (no account, no booking management rights) ----
   get('/api/public/meet-video/join/:token', ctx => {
