@@ -104,11 +104,37 @@ Between steps 2 and 3, and in tabs left open afterwards, older browsers are not 
 
 **Rolling forward afterwards:** rehearsed. No migration repeats, attribution and reusable themes return, and forms nobody saved are unchanged. Responses from the rollback stay as written, and a version published during it stays without the settings.
 
+### Staging preparation (6 November 2026)
+
+Release branch: `codex/forms-release-staging`. **Stopped before any deployment. Production is unchanged**, and the next production step needs the owner's decision.
+
+| Gate | Result | Evidence or what is missing |
+|---|---|---|
+| Production backend revision | **Pass: `e3b6b5d`** | Newest GitHub deployment record for `main - schedora-api`. Its asset route also lacks the `2f54fe7` response |
+| Production frontend revision | **Pass: `e3b6b5d`** | Served `forms-logic`, `forms`, `forms-templates` and `forms-type-change` match that commit and no other in the last 40 |
+| Differs from the rehearsal baseline, so rerun | **Pass** | Baseline was `ba76f3f`. Rerun from `e3b6b5d` on PostgreSQL in CI: 76 of 76 |
+| Local diff reviewed | **Pass** | 39 files. Secret scan clean; no environment, key or database files |
+| A push cannot deploy production | **Pass, by observation** | Pushing `2f54fe7`, and this branch four times, created previews and CI only: no Render deployment, and production files unchanged. Dashboard settings not seen |
+| GitHub CI | **Pass** | `6acf5b0`: `verify` and `postgres` both succeeded. An earlier failure was the browser journeys sharing one rate limit, now fixed in the test script |
+| Non-production Render and Vercel | **Blocked** | No account access here, and no staging service exists. Needs `schedora-api-staging`, and a `staging` branch whose `frontend/vercel.json` points at it (`docs/DEPLOYMENT.md`) |
+| Disposable hosted database | **Blocked** | None provided |
+| Approved, sanitized fixtures | **Blocked** | None exist, and no approval has been given |
+| Snapshot, backend then frontend deploy | **Blocked** | Needs the above |
+| Old open tab, conditional choices, attribution, publishing on staging | **Blocked** | Needs the above. Passes only on the rehearsal's local servers, against a real `e3b6b5d` frontend |
+| Draft preservation during rollback on staging | **Blocked** | Needs the above. On the rehearsal, a save on the old backend removes settings, as expected |
+| Author freeze before backend rollback | **Fail** | There is no freeze: no switch, role or check stops a save. `e3b6b5d` has none either, so it cannot be verified, only asked for |
+| Production deployment | **Not attempted** | Out of scope |
+
+**Pushing has a side effect:** each push creates Vercel previews on `schedora` and `schedora-frontend`, and previews forward `/api` to the production Render service (`docs/DEPLOYMENT.md`). So a form submitted on a preview of this branch would reach production. These previews were not opened. They shouldn't be used for testing.
+
+**Also open:** PR #1 (`codex/meet-forms-media-session` to `main`) is still open. Merging it deploys `2f54fe7` to production without this release's compatibility rule, and `REHEARSAL_BASELINE` in `ci.yml` must follow production when it moves.
+
 ### Remaining before release
 
 - [ ] Gate 5: sanitized fixtures from production, then rerun the older-form checks against them.
 - [ ] Gates 12 and 13: rerun `release-rehearsal`'s scenarios on real staging, and measure the deployment gap.
-- [ ] GitHub CI passes on the pushed branch, including `forms-rollout-compat`.
+- [x] GitHub CI passes on the pushed branch, including `forms-rollout-compat` and the rehearsal.
+- [ ] A real author freeze, or an owner decision to rely on asking authors. See "Staging preparation".
 - [x] Production's revision: `e3b6b5d`, not `ba76f3f`. Gates 3, 4 and 8 are rerun from it in CI's PostgreSQL job.
 - [ ] Count how many production forms would be flagged for republishing, on the same fixtures.
 - [ ] Removal gate: delete the compatibility rule (`olderClient`, `CLIENT_EVALUATOR`) once old tabs are gone, such as when requests without `evaluator` stop arriving. Those requests aren't counted anywhere yet, and a scripted API client without the marker is also treated as an older browser.
