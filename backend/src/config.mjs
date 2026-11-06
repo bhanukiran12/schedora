@@ -35,6 +35,10 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Proxies in front of the app that append to X-Forwarded-For (Render = 1; Vercel rewrite + Render = 2).
     trustProxyHops: Math.max(1, Number(env.TRUST_PROXY_HOPS || 1)),
     // Local development serves the static frontend from ../frontend; on Render the API runs alone.
+    // Set before a rollback, so authors stop while this backend is still running.
+    formsAuthoringFrozen: env.FORMS_AUTHORING_FREEZE ? env.FORMS_AUTHORING_FREEZE === 'true' : false,
+    // Names a non-production deployment, so a check can see where a frontend really sends its requests.
+    deployment: env.RELEASE_ENVIRONMENT || '',
     serveFrontend: env.SERVE_FRONTEND ? env.SERVE_FRONTEND === 'true' : !production,
     frontendDir: env.FRONTEND_DIR || fileURLToPath(new URL('../../frontend/', import.meta.url)),
     cookieDomain: env.COOKIE_DOMAIN || '',
@@ -119,6 +123,8 @@ export function isAllowedOrigin(config, origin) {
 export function publicConfig(config) {
   return {
     productDomain: config.productDomain,
+    ...(config.deployment ? { deployment: config.deployment } : {}),
+    ...(config.formsAuthoringFrozen ? { formsAuthoringFrozen: true } : {}),
     analytics: config.analytics,
     googleSignIn: Boolean((config.googleSignIn?.clientId ? config.googleSignIn.clientId && config.googleSignIn.clientSecret : config.google.clientId && config.google.clientSecret) && (!config.production || config.encryptionKey)),
     billingMode: config.billingMode,

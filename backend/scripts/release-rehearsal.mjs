@@ -3,7 +3,7 @@
 // release, the mixed-version rollout matrix and the rollback. It never needs a private environment file.
 //
 // Usage: DATABASE_URL=postgres://...@127.0.0.1:port/postgres DATABASE_CA_CERT=<pem> \
-//        npm run release-rehearsal -- --prev <exported previous release> [--only upgrade,rollout,cached,rollback] [--json <file>]
+//        npm run release-rehearsal -- --prev <exported previous release> [--only upgrade,rollout,cached,rollback,freeze] [--rollback-build <exported rollback build>] [--json <file>]
 // Export the previous release with: git archive <commit> | tar -x -C <dir>
 // It refuses any database that is not on this computer.
 import { spawn } from 'node:child_process';
@@ -22,12 +22,16 @@ if (!['127.0.0.1', 'localhost', '[::1]'].includes(adminUrl.hostname)) { console.
 const ca = process.env.DATABASE_CA_CERT;
 const prevRoot = resolve(argument('--prev') || '');
 if (!existsSync(join(prevRoot, 'backend/server.mjs'))) { console.error('Give the exported previous release with --prev <dir>.'); process.exit(2); }
-const only = (argument('--only') || 'upgrade,rollout,cached,rollback').split(',');
+const only = (argument('--only') || 'upgrade,rollout,cached,rollback,freeze').split(',');
+const rollbackRoot = argument('--rollback-build') ? resolve(argument('--rollback-build')) : null;
+if (only.includes('freeze') && !rollbackRoot) { console.error('Give the exported rollback build with --rollback-build <dir>.'); process.exit(2); }
+if (rollbackRoot && !existsSync(join(rollbackRoot, 'backend/src/forms/freeze.mjs'))) { console.error('--rollback-build does not contain the authoring freeze.'); process.exit(2); }
 const newBackend = fileURLToPath(new URL('..', import.meta.url));
 const newFrontend = join(newBackend, '../frontend');
 const oldBackend = join(prevRoot, 'backend');
 const oldFrontend = join(prevRoot, 'frontend');
 if (!existsSync(join(oldBackend, 'node_modules'))) symlinkSync(join(newBackend, 'node_modules'), join(oldBackend, 'node_modules'), 'junction');
+if (rollbackRoot && !existsSync(join(rollbackRoot, 'backend/node_modules'))) symlinkSync(join(newBackend, 'node_modules'), join(rollbackRoot, 'backend/node_modules'), 'junction');
 
 // ---- Results -------------------------------------------------------------------------------------
 const results = [];
@@ -61,9 +65,9 @@ async function stopServer() {
   await new Promise(done => { child.once('exit', done); setTimeout(done, 4000); });
 }
 // Only what the server needs: nothing is inherited from a private environment.
-async function startServer(backend, frontend, database) {
+async function startServer(backend, frontend, database, extraEnv = {}) {
   await stopServer();
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'development', PORT: String(PORT), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl(database), DATABASE_CA_CERT: ca, SERVE_FRONTEND: 'true', FRONTEND_DIR: frontend, RATE_LIMIT_PER_MINUTE: '100000' };
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'development', PORT: String(PORT), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl(database), DATABASE_CA_CERT: ca, SERVE_FRONTEND: 'true', FRONTEND_DIR: frontend, RATE_LIMIT_PER_MINUTE: '100000', ...extraEnv };
   let output = '';
   server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server.mjs'], { cwd: backend, env, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
@@ -89,7 +93,7 @@ function apiClient() {
     if (parsed?.csrf_token) csrf = parsed.csrf_token;
     return { status: response.status, body: parsed };
   };
-  return { get: path => request('GET', path), post: (path, body = {}) => request('POST', path, body), patch: (path, body) => request('PATCH', path, body), put: (path, body) => request('PUT', path, body) };
+  return { get: path => request('GET', path), post: (path, body = {}) => request('POST', path, body), patch: (path, body) => request('PATCH', path, body), put: (path, body) => request('PUT', path, body), del: path => request('DELETE', path) };
 }
 let accounts = 0;
 async function signUp(http) {
@@ -707,6 +711,166 @@ async function rollbackSection() {
   await stopServer();
 }
 
+// ---- Authoring freeze ----------------------------------------------------------------------------
+async function freezeSection() {
+  heading('Freeze, rollback and recovery: synthetic data, drafts holding settings the previous code cannot keep');
+  const S = 'freeze';
+  const rollbackBackend = join(rollbackRoot, 'backend');
+  const rollbackFrontend = join(rollbackRoot, 'frontend');
+  const FROZEN = { FORMS_AUTHORING_FREEZE: 'true' };
+
+  // Upgrade, then an author's work: one form live, and one draft whose newest settings exist nowhere else.
+  await freshDatabase('rh_freeze');
+  await startServer(oldBackend, oldFrontend, 'rh_freeze');
+  const http = apiClient();
+  const owner = await signUp(http);
+  const older = await published(http, owner.forms, typedForm('Published before the upgrade'));
+  await startServer(newBackend, newFrontend, 'rh_freeze');
+  await logIn(http, owner.email);
+  const rich = shell('Newer settings', {
+    theme: THEME, url_params: [{ key: 'utm_source', record: true }],
+    fields: [
+      { id: 'plan', type: 'single_choice', label: 'Plan', required: true, options: options('free', 'team') },
+      { id: 'help', type: 'single_choice', label: 'Help', required: true, options: options('email', 'phone'), media: { type: 'video', provider: 'youtube', video: 'dQw4w9WgXcQ', title: 'Intro' } },
+      { id: 'contact', type: 'page_break', label: 'Contact Info', grouped: true },
+      { id: 'first', type: 'short_text', label: 'First name', required: true, placeholder: 'Asha', group: 'contact' },
+      { id: 'code', type: 'short_text', label: 'Code', required: false }
+    ],
+    choice_rules: [{ field: 'help', rules: [{ when: is('plan', 'free'), hide: ['phone'] }] }],
+    logic: [{ field: 'code', rules: [{ when: is('code', 'jump'), to: { type: 'ending', id: 'done' } }] }],
+    endings: [{ id: 'thanks', title: 'Thanks' }, { id: 'done', title: 'Jumped' }]
+  });
+  const live = await published(http, owner.forms, rich);
+  const liveEdit = await http.patch(`${owner.forms}/${live.id}`, { definition: { ...rich, title: 'Newer settings, edited after publishing' }, base_revision: live.revision });
+  check(S, 'a live form has an unpublished edit', liveEdit.status === 200 && liveEdit.body.has_unpublished_changes === true);
+  const draftOnly = (await http.post(owner.forms, { definition: { ...rich, title: 'Draft never published' } })).body;
+  const theme = await http.post(`/api/workspaces/${owner.ws}/form-themes`, THEME);
+  const first = await http.post(`/api/public/forms/${live.slug}/responses`, { answers: { plan: 'team', help: 'phone', first: 'Asha', code: 'jump' }, url_params: { utm_source: 'newsletter' }, evaluator: 2 });
+  check(S, 'a response with attribution exists', first.status === 201);
+  const drafts = () => q('rh_freeze', 'SELECT id, draft, routing, draft_revision, published_version FROM forms ORDER BY id').then(JSON.stringify);
+  const versions = () => q('rh_freeze', 'SELECT form_id, version, definition FROM form_versions ORDER BY form_id, version').then(JSON.stringify);
+  const themes = () => q('rh_freeze', 'SELECT id, name, tokens, revision FROM form_themes ORDER BY id').then(JSON.stringify);
+  const before = { drafts: await drafts(), versions: await versions(), themes: await themes() };
+  const unchanged = async () => (await drafts()) === before.drafts && (await versions()) === before.versions && (await themes()) === before.themes;
+
+  // Snapshot, as the deploy and rollback order says to.
+  await stopServer();
+  await copyDatabase('rh_freeze', 'rh_freeze_snapshot');
+  const snapshotCount = Number((await q('rh_freeze_snapshot', 'SELECT COUNT(*) AS count FROM responses'))[0].count);
+  check(S, 'snapshot taken', snapshotCount === 1, String(snapshotCount));
+
+  // Every write an author can send, directly. Themes and images do not exist on the rollback build, which is fine as long as nothing is written.
+  const attempts = (hasNewRoutes) => [
+    ['POST', owner.forms, { definition: shell('New', { fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] }) }],
+    ['PATCH', `${owner.forms}/${draftOnly.id}`, { definition: { title: 'Stripped', description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] }, base_revision: draftOnly.revision }],
+    ['PATCH', `${owner.forms}/${draftOnly.id}`, { definition: rich }],
+    ['DELETE', `${owner.forms}/${draftOnly.id}`],
+    ['PUT', `${owner.forms}/${draftOnly.id}/routing`, { routing: null }],
+    ['POST', `${owner.forms}/${live.id}/publish`, {}],
+    ['POST', `${owner.forms}/${live.id}/unpublish`, {}],
+    ...(hasNewRoutes ? [
+      ['POST', `/api/workspaces/${owner.ws}/form-themes`, THEME],
+      ['PATCH', `/api/workspaces/${owner.ws}/form-themes/${theme.body.id}`, THEME],
+      ['DELETE', `/api/workspaces/${owner.ws}/form-themes/${theme.body.id}`],
+      ['POST', `/api/workspaces/${owner.ws}/form-assets`, { image: 'x' }]
+    ] : [])
+  ];
+  const directWrites = async (label, hasNewRoutes) => {
+    const raw = async (method, path, body) => method === 'POST' ? http.post(path, body) : method === 'PATCH' ? http.patch(path, body) : method === 'PUT' ? http.put(path, body) : http.del(path);
+    const refused = [];
+    for (const [method, path, body] of attempts(hasNewRoutes)) { const result = await raw(method, path, body); refused.push(`${method}:${result.status}`); check(S, `${label}: ${method} ${path.replace(/[0-9a-f-]{36}/g, ':id')} is refused`, result.status === 423 && result.body?.error?.code === 'forms_authoring_frozen', JSON.stringify(result.body).slice(0, 160)); }
+    check(S, `${label}: nothing changed in drafts, versions or themes`, await unchanged());
+  };
+  // The builder, as an author sees it: told first, then the server refuses even if the page is forced.
+  const uiWrites = async label => {
+    await evaluate(`fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(owner.email)}, password: 'a sufficiently long password' }) })`);
+    await open(`/forms/${draftOnly.id}`, "document.querySelector('#save') && document.querySelector('[data-authoring-frozen]')");
+    check(S, `${label}: the builder says editing is paused and disables Save and Publish`, await evaluate("document.querySelector('#save').disabled && document.querySelector('#publish').disabled"));
+    await evaluate("(() => { const save = document.querySelector('#save'); save.disabled = false; save.removeAttribute('aria-disabled'); document.querySelector('#f-title')?.dispatchEvent(new Event('input', { bubbles: true })); save.click(); })()");
+    await waitFor("document.querySelector('#builder-notice').innerText.includes('paused while a release is in progress') && document.querySelector('#builder-notice').innerText.includes('Not saved')", label + ': a forced save is refused and says so');
+    check(S, `${label}: a forced save from the page is refused`, true);
+    const publish = await evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/${owner.ws}/forms/${live.id}/publish', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: '{}' }); return r.status; })()`);
+    check(S, `${label}: a publish sent from the signed-in page is refused`, publish === 423, String(publish));
+    await evaluate('delete document.body.dataset.dirty');
+    await open('/forms', "document.querySelector('#main h1')");
+    const createButton = await evaluate("Boolean(document.querySelector('[data-template]'))");
+    if (createButton) {
+      const count = async () => Number((await q('rh_freeze', 'SELECT COUNT(*) AS count FROM forms'))[0].count);
+      const formsBefore = await count();
+      await click('[data-template]');
+      await sleep(1500);
+      check(S, `${label}: creating a form from the dashboard creates nothing`, (await count()) === formsBefore);
+    }
+    check(S, `${label}: nothing changed after using the builder`, await unchanged());
+    check(S, `${label}: no page errors in the builder`, pageErrors.length === 0, pageErrors.join(' | ').slice(0, 240));
+  };
+  const respondentsWork = async (label, frontendIsNew) => {
+    const direct = await apiClient().post(`/api/public/forms/${live.slug}/responses`, { answers: { plan: 'team', help: 'email', first: 'Direct', code: 'x' }, ...(frontendIsNew ? { evaluator: 2 } : {}) });
+    check(S, `${label}: a public submission is accepted`, direct.status === 201, JSON.stringify(direct.body).slice(0, 200));
+    await open(`/f/${older.slug}`, "document.querySelector('#q-code')");
+    await fill('#q-code', 'no');
+    const result = await submitAndRead();
+    check(S, `${label}: a respondent completes a form in the browser`, result.outcome === 'accepted', JSON.stringify(result).slice(0, 200));
+  };
+
+  // 1. Freeze the running release, before anything is rolled back.
+  await startServer(newBackend, newFrontend, 'rh_freeze', FROZEN);
+  await logIn(http, owner.email);
+  check(S, 'freeze on the release: public config says so', (await http.get('/api/config')).body.formsAuthoringFrozen === true);
+  await directWrites('release frozen', true);
+  await uiWrites('release frozen');
+  await respondentsWork('release frozen', true);
+
+  // 2. Backend back first would leave a new page on the rollback build: still refused, by the server.
+  await startServer(rollbackBackend, newFrontend, 'rh_freeze', FROZEN);
+  await logIn(http, owner.email);
+  await uiWrites('rollback backend, new frontend');
+  await directWrites('rollback backend, new frontend', false);
+
+  // 3. Fully on the rollback build.
+  await startServer(rollbackBackend, rollbackFrontend, 'rh_freeze', FROZEN);
+  await logIn(http, owner.email);
+  await directWrites('rollback build', false);
+  await uiWrites('rollback build');
+  await respondentsWork('rollback build', false);
+  const opened = (await http.get(`${owner.forms}/${draftOnly.id}`)).body;
+  check(S, 'rollback build: the draft is still readable with every newer setting', Boolean(opened.draft.choice_rules && opened.draft.url_params && opened.draft.theme && opened.draft.logic && opened.draft.endings));
+  const lived = await apiClient().get(`/api/public/forms/${live.slug}`);
+  check(S, 'rollback build: the public form still loads', lived.status === 200);
+  const afterRollback = Number((await q('rh_freeze', 'SELECT COUNT(*) AS count FROM responses'))[0].count);
+
+  // 4. Roll forward, unfrozen: nothing lost, and authoring resumes at the same revision.
+  await startServer(newBackend, newFrontend, 'rh_freeze');
+  await logIn(http, owner.email);
+  check(S, 'roll forward: drafts, versions and themes are byte for byte what they were', await unchanged());
+  const forward = (await http.get(`${owner.forms}/${draftOnly.id}`)).body;
+  const keeps = definition => Boolean(definition.choice_rules && definition.url_params && definition.theme && definition.logic && definition.endings && definition.fields.find(field => field.id === 'first').group === 'contact' && definition.fields.find(field => field.id === 'first').placeholder === 'Asha' && definition.fields.find(field => field.id === 'help').media);
+  check(S, 'roll forward: the never-published draft kept every newer setting', keeps(forward.draft));
+  const liveForward = (await http.get(`${owner.forms}/${live.id}`)).body;
+  check(S, 'roll forward: the unpublished edit on a live form is still there', liveForward.draft.title === 'Newer settings, edited after publishing' && liveForward.has_unpublished_changes === true && keeps(liveForward.draft));
+  const listed = (await http.get(`${owner.forms}/${live.id}/responses`)).body.responses;
+  check(S, 'roll forward: attribution from before the rollback is intact', listed.some(row => row.attribution?.utm_source === 'newsletter'));
+  check(S, 'roll forward: responses taken during the freeze and rollback are kept', Number((await q('rh_freeze', 'SELECT COUNT(*) AS count FROM responses'))[0].count) === afterRollback && afterRollback > snapshotCount);
+  const resumed = await http.patch(`${owner.forms}/${draftOnly.id}`, { definition: { ...forward.draft, title: 'Edited after recovery' }, base_revision: forward.revision });
+  check(S, 'roll forward: an author can save at the same revision, keeping the settings', resumed.status === 200 && keeps(resumed.body.draft) && resumed.body.draft.title === 'Edited after recovery');
+  const republished = await http.post(`${owner.forms}/${draftOnly.id}/publish`);
+  check(S, 'roll forward: and publish', republished.status === 200 && republished.body.published_version === 1);
+  const newest = (await q('rh_freeze', 'SELECT definition FROM form_versions WHERE form_id = $1 ORDER BY version DESC LIMIT 1', [draftOnly.id]))[0].definition;
+  check(S, 'roll forward: the new version has the settings and the policy', keeps(JSON.parse(newest)) && JSON.parse(newest).evaluation_policy === 'normalized_v1');
+  await stopServer();
+
+  // 5. Recovery: the snapshot is usable on its own.
+  await copyDatabase('rh_freeze_snapshot', 'rh_freeze_restored');
+  await startServer(newBackend, newFrontend, 'rh_freeze_restored');
+  await logIn(http, owner.email);
+  const restoredDraft = (await http.get(`${owner.forms}/${draftOnly.id}`)).body;
+  check(S, 'recovery from the snapshot: the draft is back as it was', keeps(restoredDraft.draft) && restoredDraft.draft.title === 'Draft never published' && restoredDraft.published_version === null);
+  check(S, 'recovery from the snapshot: it holds only what existed then', Number((await q('rh_freeze_restored', 'SELECT COUNT(*) AS count FROM responses'))[0].count) === snapshotCount);
+  observe(S, 'recovery note', `restoring the snapshot would lose the ${afterRollback - snapshotCount} responses taken after it, so roll forward instead unless the data itself is damaged`);
+  check(S, 'recovery from the snapshot: a live form answers', (await apiClient().post(`/api/public/forms/${live.slug}/responses`, { answers: { plan: 'team', help: 'email', first: 'After', code: 'x' }, evaluator: 2 })).status === 201);
+  await stopServer();
+}
+
 // ---- Run -----------------------------------------------------------------------------------------
 let crashed = null;
 try {
@@ -714,6 +878,7 @@ try {
   if (only.includes('rollout')) await rolloutSection();
   if (only.includes('cached')) await cachedSection();
   if (only.includes('rollback')) await rollbackSection();
+  if (only.includes('freeze')) await freezeSection();
 } catch (error) { crashed = error; console.error('\nRehearsal stopped: ' + (error.stack || error)); }
 await stopServer();
 socket.close();

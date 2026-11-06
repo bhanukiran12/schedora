@@ -14,6 +14,7 @@
     "sync-shared": "node scripts/sync-shared.mjs",
     "browser-check": "node --disable-warning=ExperimentalWarning scripts/browser-check.mjs",
     "release-rehearsal": "node --disable-warning=ExperimentalWarning scripts/release-rehearsal.mjs",
+    "staging-preflight": "node scripts/staging-preflight.mjs",
     "migrate": "node --disable-warning=ExperimentalWarning scripts/migrate.mjs",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.mjs",
     "restore": "node --disable-warning=ExperimentalWarning scripts/restore.mjs",

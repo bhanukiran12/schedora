@@ -6,12 +6,14 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fail } from '../http.mjs';
 import { definitionAssets } from '../shared/forms-logic.mjs';
 import { IMAGE_LIMITS, ImageError, inspectImage, storedBytes } from './images.mjs';
+import { assertAuthoringOpen } from './freeze.mjs';
 
 const DAY = 86400000;
 const ASSET_ID = /^[a-f0-9]{32}$/;
 const megabytes = bytes => `${Math.round(bytes / 1024 / 1024)} MB`;
 
 export function uploadAsset(app, workspaceId, userId, body) {
+  assertAuthoringOpen(app);
   if (typeof body?.data !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(body.data)) fail(400, 'validation_failed', 'Choose a JPEG, PNG or WebP image to upload.', { field: 'data' });
   let image;
   try { image = inspectImage(Buffer.from(body.data, 'base64')); }

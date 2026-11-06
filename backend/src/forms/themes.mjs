@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
 import { THEME_TOKENS, themeProblems } from '../shared/forms-logic.mjs';
+import { assertAuthoringOpen } from './freeze.mjs';
 
 export const MAX_THEMES = 50;
 
@@ -21,6 +22,7 @@ function themeFrom(body) {
 export const listThemes = (app, workspaceId) => app.db.all('SELECT * FROM form_themes WHERE workspace_id = ? ORDER BY updated_at DESC, id DESC', workspaceId).map(view);
 
 export function createTheme(app, workspaceId, userId, body) {
+  assertAuthoringOpen(app);
   const { name, tokens } = themeFrom(body);
   return app.db.transaction(() => {
     if (app.db.get('SELECT COUNT(*) AS count FROM form_themes WHERE workspace_id = ?', workspaceId).count >= MAX_THEMES) fail(409, 'theme_limit', `A workspace can keep up to ${MAX_THEMES} themes. Delete one to add another.`);
@@ -35,6 +37,7 @@ const stored = (app, workspaceId, id) => app.db.get('SELECT * FROM form_themes W
 
 // Saving over someone else's edit is refused, as drafts do; the reply carries the current theme.
 export function updateTheme(app, workspaceId, id, body) {
+  assertAuthoringOpen(app);
   const { name, tokens } = themeFrom(body);
   return app.db.transaction(() => {
     const current = stored(app, workspaceId, id);
@@ -45,6 +48,7 @@ export function updateTheme(app, workspaceId, id, body) {
 }
 
 export function deleteTheme(app, workspaceId, id) {
+  assertAuthoringOpen(app);
   stored(app, workspaceId, id);
   app.db.run('DELETE FROM form_themes WHERE id = ?', id);
 }
