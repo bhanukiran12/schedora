@@ -182,6 +182,7 @@ Deleting a workspace and deleting an account are **separate operations from auth
 | Gate | Result | Evidence or what is missing |
 |---|---|---|
 | CI on `b54a99f` | **Pass** | `verify` and `postgres` green, rehearsal 143 of 143 |
+| CI after the added checks | **Pass** | `cb46b55`: rehearsal 161 of 161, including deletion during a freeze and the rollback build in production mode with no freeze setting. Tests, scripts and docs only: no product code changed after `b54a99f` |
 | Staging URLs and access | **Blocked** | No staging frontend or backend address was provided, and there is no Render or Vercel access from here. The documented name `schedora-api-staging.onrender.com` returns 404 |
 | `npm run staging-preflight` against staging | **Blocked** | Needs the two addresses. Must exit 0 before any data is submitted |
 | Render points at the disposable database | **Blocked** | Needs someone with Render dashboard access. It cannot be seen from outside |
