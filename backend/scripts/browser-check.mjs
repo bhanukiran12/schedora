@@ -2713,5 +2713,9 @@ try {
 
 console.log(steps.join('\n'));
 console.log(`\n${checks} layout checks across ${WIDTHS.join('/')} px in light and dark themes.`);
-if (problems.length) { console.log('\nProblems:\n- ' + [...new Set(problems)].join('\n- ')); process.exit(1); }
+if (problems.length) { console.log('\nProblems:\n- ' + [...new Set(problems)].join('\n- '));
+  // In CI, annotations stay readable without signing in to download the log.
+  if (process.env.GITHUB_ACTIONS) for (const problem of [...new Set(problems)].slice(0, 9)) console.log('::error::' + problem.replace(/\s+/g, ' ').slice(0, 600));
+  process.exit(1);
+}
 console.log('No runtime errors, overflow or failed journeys.');
