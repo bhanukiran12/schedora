@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.mjs';
+import { createRateLimiter } from '../src/http.mjs';
 
 const candidates = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean);
 const browserPath = candidates.find(path => existsSync(path));
@@ -122,6 +123,8 @@ async function layoutCheck(name, screenshotAnchor) {
 
 const steps = [];
 async function step(name, fn) {
+  // Each journey has its own allowance: on a fast machine they would otherwise share one minute's limit.
+  app.rateLimit = createRateLimiter();
   try { await fn(); steps.push(`✓ ${name}`); }
   catch (error) {
     const seen = await evaluate("location.pathname + ' | ' + (document.querySelector('#main')?.innerText || '').split(String.fromCharCode(10)).join(' ').slice(0, 160)").catch(() => '');
@@ -909,9 +912,9 @@ try {
     await open('/meet?tab=polls', "document.querySelector('#new-poll')");
     await click('#new-poll');
     await fill('#poll-title', 'Planning');
-    await evaluate("{ const input = document.querySelector('[data-option]'); input.value = '2026-11-03T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await evaluate("{ const input = document.querySelector('[data-option]'); input.value = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10) + 'T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
     await click('#add-option');
-    await evaluate("{ const input = document.querySelectorAll('[data-option]')[1]; input.value = '2026-11-04T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
+    await evaluate("{ const input = document.querySelectorAll('[data-option]')[1]; input.value = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10) + 'T10:00'; input.dispatchEvent(new Event('change', { bubbles: true })); }");
     await click('#create-poll [type="submit"]');
     await waitFor("document.querySelector('[data-open]')", 'poll listed');
     const pollPath = await evaluate("new URL(document.querySelector('[data-copy]').dataset.copy).pathname");
@@ -1427,7 +1430,8 @@ try {
     const type = await request('POST', '/event-types', { title: 'Team readiness verification', kind: 'collective', timezone: 'Asia/Kolkata', published: false, hosts: [{ user_id: host }, { user_id: peer }], use_host_schedules: true, locations: [{ type: 'zoom' }] });
     if (!type.id) throw new Error('team fixture was not created: ' + JSON.stringify(type));
     const sentinel = 'DO_NOT_SHOW_PRIVATE_CALENDAR';
-    app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now());
+    // Marked as just synced: otherwise the background worker fetches this address and overwrites the status under test.
+    app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, last_synced_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now(), app.now());
     const effects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM busy_blocks) AS blocks, (SELECT COUNT(*) FROM outbox) AS outbox'));
     const before = effects();
     const ready = "document.querySelector('[data-host-readiness]')";
@@ -1470,5 +1474,9 @@ try {
 
 console.log(steps.join('\n'));
 console.log(`\n${checks} layout checks across ${WIDTHS.join('/')} px in light and dark themes.`);
-if (problems.length) { console.log('\nProblems:\n- ' + [...new Set(problems)].join('\n- ')); process.exit(1); }
+if (problems.length) { console.log('\nProblems:\n- ' + [...new Set(problems)].join('\n- '));
+  // In CI, annotations stay readable without signing in to download the log.
+  if (process.env.GITHUB_ACTIONS) for (const problem of [...new Set(problems)].slice(0, 9)) console.log('::error::' + problem.replace(/\s+/g, ' ').slice(0, 600));
+  process.exit(1);
+}
 console.log('No runtime errors, overflow or failed journeys.');
