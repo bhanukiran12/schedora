@@ -75,7 +75,7 @@ jobs:
           # Update when production moves. See docs/RELEASE_ACCEPTANCE.md.
           REHEARSAL_BASELINE: e3b6b5d73829
           # The rollback build: e3b6b5d plus the authoring freeze.
-          REHEARSAL_ROLLBACK_BUILD: a81e4bb9896f
+          REHEARSAL_ROLLBACK_BUILD: a412507c2d5d
         run: |
           export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
           git fetch --no-tags --quiet origin main
