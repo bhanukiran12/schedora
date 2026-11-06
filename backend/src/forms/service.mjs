@@ -5,6 +5,7 @@ import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../
 import { answerText, conditionHolds, definitionProblems, FIELD_TYPES, publishedTypeChangeAllowed, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { invalid, text } from '../validate.mjs';
+import { assertAuthoringOpen } from './freeze.mjs';
 
 const MINUTE = 60 * 1000;
 // A respondent who opened an earlier version may still submit it for this long after it was
@@ -76,6 +77,7 @@ export function getForm(app, workspaceId, id) {
 }
 
 export function createForm(app, workspaceId, userId, body) {
+  assertAuthoringOpen(app);
   const definition = normalizeDefinition(body.definition ?? starterDefinition(typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled form'));
   const id = randomUUID();
   const slug = `${slugify(definition.title).slice(0, 40)}-${randomBytes(4).toString('hex')}`;
@@ -109,6 +111,7 @@ function writeDraft(app, workspaceId, id, body, column, value) {
 }
 
 export function saveDraft(app, workspaceId, id, body) {
+  assertAuthoringOpen(app);
   return writeDraft(app, workspaceId, id, body, 'draft', JSON.stringify(normalizeDefinition(body.definition)));
 }
 
@@ -147,6 +150,7 @@ export function checkFormPublish(app, workspaceId, id, body = {}) {
 // Publishing snapshots the draft questions and routing together as one immutable version;
 // responses record the version they answered.
 export function publishForm(app, workspaceId, userId, id, body = {}) {
+  assertAuthoringOpen(app);
   requireEntitlement(app, workspaceId, 'forms');
   const expected = baseRevision(body);
   return app.db.transaction(() => {
@@ -163,12 +167,14 @@ export function publishForm(app, workspaceId, userId, id, body = {}) {
 
 // Stops collection. Accepted responses and their handoffs are kept.
 export function unpublishForm(app, workspaceId, id) {
+  assertAuthoringOpen(app);
   getForm(app, workspaceId, id);
   app.db.run('UPDATE forms SET published_version = NULL, updated_at = ? WHERE id = ?', app.now(), id);
   return getForm(app, workspaceId, id);
 }
 
 export function deleteForm(app, workspaceId, id) {
+  assertAuthoringOpen(app);
   getForm(app, workspaceId, id);
   app.db.run('DELETE FROM forms WHERE id = ?', id);
 }
@@ -384,6 +390,7 @@ export function routingProblems(app, workspaceId, definition, routing) {
 }
 
 export function saveRouting(app, workspaceId, id, body) {
+  assertAuthoringOpen(app);
   const form = getForm(app, workspaceId, id);
   if (body.routing === null) return writeDraft(app, workspaceId, id, body, 'routing', null);
   const routing = body.routing || {};

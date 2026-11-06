@@ -815,6 +815,13 @@ export async function builder(ctx) {
   onScroll();
   renderAll();
   renderRouting();
+  // The server refuses these anyway; this says so before anyone spends time on an edit.
+  const showFreeze = () => {
+    if (!boot.formsAuthoringFrozen) return;
+    for (const id of ['#save', '#publish']) { $(id).disabled = true; $(id).setAttribute('aria-disabled', 'true'); }
+    mount($('#builder-notice'), notice('warn', html`<p data-authoring-frozen><strong>Editing forms is paused while a release is in progress.</strong> Your form is safe and live forms keep working, but changes here cannot be saved or published right now.</p>`));
+  };
+  showFreeze();
   // Arriving from the template picker: say plainly what exists and what does not yet.
   const created = ctx.query.get('created');
   if (created && !form.published_version) {
