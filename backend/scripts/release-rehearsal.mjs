@@ -856,7 +856,7 @@ async function freezeSection() {
   await deletionsWork('rollback build', separate.rollback);
 
   // The rollback build as a real production-mode server, with no freeze setting at all.
-  await startServer(rollbackBackend, rollbackFrontend, 'rh_freeze', { NODE_ENV: 'production', RELEASE_MODE: 'evaluation', APP_ENCRYPTION_KEY: 'a'.repeat(64) });
+  await startServer(rollbackBackend, rollbackFrontend, 'rh_freeze', { NODE_ENV: 'production', RELEASE_MODE: 'evaluation', BILLING_MODE: 'open', BILLING_PROVIDER: 'none', APP_ENCRYPTION_KEY: 'a'.repeat(64) });
   await logIn(http, owner.email);
   check(S, 'rollback build, production mode, no override: starts frozen', (await http.get('/api/config')).body.formsAuthoringFrozen === true);
   const unset = await http.patch(`${owner.forms}/${draftOnly.id}`, { definition: shell('Stripped', { fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] }), base_revision: draftOnly.revision });
