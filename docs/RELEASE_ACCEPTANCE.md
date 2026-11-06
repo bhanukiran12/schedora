@@ -83,10 +83,13 @@ Between steps 2 and 3, and in tabs left open afterwards, older browsers are not 
 
 **Prefer rolling forward.** A rollback changes what respondents are asked and what authors can keep, while a fix forward changes neither.
 
-1. **Before anything:** snapshot the database, and tell authors to stop saving and publishing Forms. Nothing enforces this. An edit that exists only in a draft is held nowhere else.
-2. Roll back the **frontend first**. Old frontend on the new backend is the case the compatibility rule protects: hidden choices stay enforced and nothing is lost.
-3. Roll back the **backend** only if it is the cause. If so, do it straight after. In the reverse state, a new frontend on the old backend asks a stamped `"yes "` follow-up and then drops the answer.
-4. **Do not reverse the migrations.** The previous backend runs on the upgraded schema, and the data in them survives for rolling forward.
+1. **Snapshot the database.** An edit that exists only in a draft is held nowhere else.
+2. **Freeze authoring on the running release:** set `FORMS_AUTHORING_FREEZE=true` on the backend, restart, and confirm `/api/config` reports `formsAuthoringFrozen`, and that a save is refused with 423.
+3. Roll back the **frontend first**. Old frontend on the new backend is the case the compatibility rule protects: hidden choices stay enforced and nothing is lost.
+4. Roll back the **backend** only if it is the cause, straight after, and **only to the rollback build** on `codex/forms-rollback-e3b6b5d`, not to plain `e3b6b5d`. It starts frozen in production. In the reverse state, a new frontend on the old backend asks a stamped `"yes "` follow-up and then drops the answer.
+5. **Do not reverse the migrations.** The previous backend runs on the upgraded schema, and the data in them survives for rolling forward.
+6. **Never set `FORMS_AUTHORING_FREEZE=false` on the rollback build.** That is what lets a save strip settings for good.
+7. **Recover by rolling forward:** deploy the release with the freeze off. Restore the snapshot only if the data itself is damaged, because that loses every response taken after it.
 
 ### While the previous backend runs
 
@@ -100,7 +103,7 @@ Between steps 2 and 3, and in tabs left open afterwards, older browsers are not 
 | Evaluation policy | `"yes "` compared as typed | Follow-up not asked | Can stay published |
 | Question media | Not shown; uploaded images have no route | Unaffected | Can stay published if the media isn't needed to answer |
 
-**Authors, frozen without exception:** a save on the previous backend succeeds and silently removes `logic`, `endings`, `choice_rules`, `url_params`, `theme`, `media`, `group`, `grouped` and `placeholder` from the draft. Rolling forward does not bring them back. A publish then makes a live version without them. Versions published before the rollback keep their settings, and those can be copied back by hand. Settings only in an unpublished draft are recoverable only from the snapshot.
+**Authors, frozen without exception:** on plain `e3b6b5d`, with no freeze, a save succeeds and silently removes `logic`, `endings`, `choice_rules`, `url_params`, `theme`, `media`, `group`, `grouped` and `placeholder` from the draft. Rolling forward does not bring them back. A publish then makes a live version without them. Versions published before the rollback keep their settings, and those can be copied back by hand. Settings only in an unpublished draft are recoverable only from the snapshot.
 
 **Rolling forward afterwards:** rehearsed. No migration repeats, attribution and reusable themes return, and forms nobody saved are unchanged. Responses from the rollback stay as written, and a version published during it stays without the settings.
 
@@ -122,19 +125,61 @@ Release branch: `codex/forms-release-staging`. **Stopped before any deployment. 
 | Snapshot, backend then frontend deploy | **Blocked** | Needs the above |
 | Old open tab, conditional choices, attribution, publishing on staging | **Blocked** | Needs the above. Passes only on the rehearsal's local servers, against a real `e3b6b5d` frontend |
 | Draft preservation during rollback on staging | **Blocked** | Needs the above. On the rehearsal, a save on the old backend removes settings, as expected |
-| Author freeze before backend rollback | **Fail** | There is no freeze: no switch, role or check stops a save. `e3b6b5d` has none either, so it cannot be verified, only asked for |
+| Author freeze before backend rollback | **Pass (CI)** | Superseded the earlier failure. See "Authoring freeze" |
 | Production deployment | **Not attempted** | Out of scope |
 
 **Pushing has a side effect:** each push creates Vercel previews on `schedora` and `schedora-frontend`, and previews forward `/api` to the production Render service (`docs/DEPLOYMENT.md`). So a form submitted on a preview of this branch would reach production. These previews were not opened. They shouldn't be used for testing.
 
 **Also open:** PR #1 (`codex/meet-forms-media-session` to `main`) is still open. Merging it deploys `2f54fe7` to production without this release's compatibility rule, and `REHEARSAL_BASELINE` in `ci.yml` must follow production when it moves.
 
+### Authoring freeze and rollback build (6 November 2026)
+
+`codex/forms-rollback-e3b6b5d` is `e3b6b5d` plus the freeze and test-script fixes. The release carries the same freeze, off by default. Only the rollback build starts frozen, in production mode. It is refused in the service functions, so no route can go around it.
+
+| Write | While frozen |
+|---|---|
+| Create, save, delete a form; routing; publish; unpublish | **423** |
+| Create, edit, delete a reusable theme; upload an image (release only) | **423** |
+| Publish check, reading, CSV export | Allowed: they change nothing |
+| Public submissions | **Allowed** |
+| Deleting a response | Allowed: a data request, not authoring |
+| Deleting a workspace or an account | **Allowed, and it removes that workspace's forms.** Deliberate, not authoring, and not stopped |
+
+`forms-freeze.test.mjs` fails if a new Forms write route is left unclassified. The route scan and the freeze tests run in both trees.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Rollback build CI | **Pass** | `a412507`: `verify` and `postgres` |
+| Release CI, including the rehearsal on PostgreSQL | **Pass** | `073cb70`: 143 of 143 |
+| Direct API writes refused | **Pass** | On the frozen release, and on the rollback backend with both frontends |
+| UI writes refused | **Pass** | Builder says so and disables Save and Publish. A forced Save and a publish sent from the signed-in page are refused. Creating from the dashboard creates nothing |
+| Public submissions while frozen | **Pass** | Through the API and in the browser, on the frozen release and the rollback build |
+| Drafts keep newer settings after rolling forward | **Pass** | Drafts, versions and themes byte-identical, including a never-published draft and an unpublished edit on a live form |
+| Authoring resumes after rolling forward | **Pass** | Save at the same revision, then publish, with settings and the policy |
+| Snapshot and recovery | **Pass** | A database copy restores the draft and answers a live form. It loses later responses, so rolling forward is preferred |
+| Isolated Render and Vercel staging | **Blocked** | Do not exist yet |
+| Frontend API destination | **Script ready, not run** | `npm run staging-preflight` uses GET only, and refuses a frontend whose API is not the staging backend. Tested against local servers |
+| Snapshot, upgrade, mixed versions, freeze, rollback and recovery on staging | **Blocked** | Passes only in CI, on one machine with servers swapped |
+| Production-data fixtures | **Open** | Synthetic data only. Open until an approved, sanitized export exists or the release owner waives this gate |
+| Production deployment | **Not attempted** | |
+
+Rehearsal data is synthetic, created by the code under test. The freeze flag needs a restart to change, so plan for that in a rollback. It was exercised with an explicit `FORMS_AUTHORING_FREEZE=true`; the rollback build's production default is covered by a config test, not a production-mode server.
+
+### Staging setup, when available
+
+1. **Render:** a new service, not a change to `schedora-api`, on a disposable PostgreSQL. Set `RELEASE_ENVIRONMENT=staging`, its own `APP_ENCRYPTION_KEY`, `BILLING_MODE=open`, `EMAIL_PROVIDER=outbox`, `SMS_PROVIDER=outbox`, no `COOKIE_DOMAIN`, `BASE_URL` and `ALLOWED_ORIGINS` for the staging frontend, and no production secrets.
+2. **Vercel:** a new project on a branch whose `frontend/vercel.json` rewrites `/api` to the staging service. Existing previews forward to production and must not be used.
+3. **Before submitting anything:** `npm run staging-preflight -- --frontend <url> --backend <url>` must exit 0. Then confirm in the Render dashboard that `DATABASE_URL` is the disposable database, which that script cannot see.
+4. **Rehearse:** snapshot, upgrade from `e3b6b5d`, backend then frontend, an old open tab, conditional choices, attribution, publishing, freeze, rollback build, roll forward, recovery.
+
 ### Remaining before release
 
 - [ ] Gate 5: sanitized fixtures from production, then rerun the older-form checks against them.
 - [ ] Gates 12 and 13: rerun `release-rehearsal`'s scenarios on real staging, and measure the deployment gap.
 - [x] GitHub CI passes on the pushed branch, including `forms-rollout-compat` and the rehearsal.
-- [ ] A real author freeze, or an owner decision to rely on asking authors. See "Staging preparation".
+- [x] A real author freeze, tested in CI. See "Authoring freeze and rollback build".
+- [ ] Decide whether deleting a workspace or an account should also be stopped during a freeze.
+- [ ] Keep PR #1 open and unmerged. `e3b6b5d` is the baseline, and `REHEARSAL_ROLLBACK_BUILD` in `ci.yml` pins the rollback build.
 - [x] Production's revision: `e3b6b5d`, not `ba76f3f`. Gates 3, 4 and 8 are rerun from it in CI's PostgreSQL job.
 - [ ] Count how many production forms would be flagged for republishing, on the same fixtures.
 - [ ] Removal gate: delete the compatibility rule (`olderClient`, `CLIENT_EVALUATOR`) once old tabs are gone, such as when requests without `evaluator` stop arriving. Those requests aren't counted anywhere yet, and a scripted API client without the marker is also treated as an older browser.
