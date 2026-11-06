@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.mjs';
+import { createRateLimiter } from '../src/http.mjs';
 
 const candidates = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean);
 const browserPath = candidates.find(path => existsSync(path));
@@ -129,6 +130,8 @@ async function layoutCheck(name, screenshotAnchor) {
 
 const steps = [];
 async function step(name, fn) {
+  // Each journey has its own allowance: on a fast machine they would otherwise share one minute's limit.
+  app.rateLimit = createRateLimiter();
   try { await fn(); steps.push(`✓ ${name}`); }
   catch (error) {
     const seen = await evaluate("location.pathname + ' | ' + (document.querySelector('#main')?.innerText || '').split(String.fromCharCode(10)).join(' ').slice(0, 160)").catch(() => '');
