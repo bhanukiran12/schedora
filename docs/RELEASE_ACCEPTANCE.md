@@ -165,6 +165,41 @@ Release branch: `codex/forms-release-staging`. **Stopped before any deployment. 
 
 Rehearsal data is synthetic, created by the code under test. The freeze flag needs a restart to change, so plan for that in a rollback. It was exercised with an explicit `FORMS_AUTHORING_FREEZE=true`; the rollback build's production default is covered by a config test, not a production-mode server.
 
+### Separate operations during a freeze
+
+Deleting a workspace and deleting an account are **separate operations from authoring, and stay available while Forms authoring is frozen**. This is deliberate: someone asking to remove their data should not have to wait for a release.
+
+| Operation | Route | Confirmation still required | Effect on forms |
+|---|---|---|---|
+| Delete a workspace | `DELETE /api/workspaces/:ws` | The workspace name, typed, and the `workspace.delete` permission | Removes every form, version, draft and response in that workspace |
+| Delete an account | `DELETE /api/me` | The password | Also removes any workspace that account alone owned, with its forms |
+| Delete a Google-linked account | `POST /api/auth/google/delete-account` | A fresh Google reauthentication | Same |
+
+**A freeze therefore does not preserve a draft in a workspace someone chooses to delete,** and a deleted workspace cannot be recovered by rolling forward. Only the snapshot holds it, and restoring that loses later responses for everyone. Other workspaces are not affected. Operators who need these held during a rollback must arrange that separately, by asking the people concerned.
+
+### Staging rehearsal status (6 November 2026)
+
+| Gate | Result | Evidence or what is missing |
+|---|---|---|
+| CI on `b54a99f` | **Pass** | `verify` and `postgres` green, rehearsal 143 of 143 |
+| Staging URLs and access | **Blocked** | No staging frontend or backend address was provided, and there is no Render or Vercel access from here. The documented name `schedora-api-staging.onrender.com` returns 404 |
+| `npm run staging-preflight` against staging | **Blocked** | Needs the two addresses. Must exit 0 before any data is submitted |
+| Render points at the disposable database | **Blocked** | Needs someone with Render dashboard access. It cannot be seen from outside |
+| Snapshot on staging | **Blocked** | Needs the above |
+| Backend-first rollout on staging | **Blocked** | Needs the above |
+| Old-tab submissions on staging | **Blocked** | Needs the above |
+| Author freeze on staging | **Blocked** | Needs the above |
+| Rollback to `a412507` on staging | **Blocked** | Needs the above |
+| Rollback build frozen in production mode, no override, on staging | **Blocked** | A production-mode server with no freeze setting passes in CI; not on a real Render service |
+| Public submissions on the frozen rollback build, on staging | **Blocked** | Pass in CI |
+| Newer draft settings survive recovery, on staging | **Blocked** | Pass in CI |
+| Deletion documented as separate operations | **Pass** | This section. Tested on the release, and on `a412507` in the rehearsal |
+| Production deployment | **Not attempted** | |
+
+**Production-fixture gate, recorded separately: open.** No approved, sanitized export exists and no waiver has been given. All rehearsal data, in CI and on staging, is synthetic and does not count toward this gate.
+
+No test data was submitted anywhere for these staging gates, and Vercel previews were not used.
+
 ### Staging setup, when available
 
 1. **Render:** a new service, not a change to `schedora-api`, on a disposable PostgreSQL. Set `RELEASE_ENVIRONMENT=staging`, its own `APP_ENCRYPTION_KEY`, `BILLING_MODE=open`, `EMAIL_PROVIDER=outbox`, `SMS_PROVIDER=outbox`, no `COOKIE_DOMAIN`, `BASE_URL` and `ALLOWED_ORIGINS` for the staging frontend, and no production secrets.

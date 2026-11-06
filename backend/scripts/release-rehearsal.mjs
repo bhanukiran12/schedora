@@ -93,14 +93,14 @@ function apiClient() {
     if (parsed?.csrf_token) csrf = parsed.csrf_token;
     return { status: response.status, body: parsed };
   };
-  return { get: path => request('GET', path), post: (path, body = {}) => request('POST', path, body), patch: (path, body) => request('PATCH', path, body), put: (path, body) => request('PUT', path, body), del: path => request('DELETE', path) };
+  return { get: path => request('GET', path), post: (path, body = {}) => request('POST', path, body), patch: (path, body) => request('PATCH', path, body), put: (path, body) => request('PUT', path, body), del: (path, body) => request('DELETE', path, body) };
 }
 let accounts = 0;
 async function signUp(http) {
   const email = `rehearsal${++accounts}.${Date.now()}@example.com`;
   const created = await http.post('/api/auth/signup', { name: 'Rehearsal', email, password: 'a sufficiently long password', workspace: `Rehearsal ${accounts}` });
   if (created.status !== 201) throw new Error('signup failed: ' + JSON.stringify(created.body));
-  return { email, forms: `/api/workspaces/${created.body.workspaces[0].id}/forms`, ws: created.body.workspaces[0].id };
+  return { email, forms: `/api/workspaces/${created.body.workspaces[0].id}/forms`, ws: created.body.workspaces[0].id, wsName: created.body.workspaces[0].name };
 }
 const logIn = async (http, email) => { const result = await http.post('/api/auth/login', { email, password: 'a sufficiently long password' }); if (result.status !== 200) throw new Error('login failed: ' + JSON.stringify(result.body)); return result; };
 async function published(http, forms, definition) {
@@ -747,9 +747,13 @@ async function freezeSection() {
   const theme = await http.post(`/api/workspaces/${owner.ws}/form-themes`, THEME);
   const first = await http.post(`/api/public/forms/${live.slug}/responses`, { answers: { plan: 'team', help: 'phone', first: 'Asha', code: 'jump' }, url_params: { utm_source: 'newsletter' }, evaluator: 2 });
   check(S, 'a response with attribution exists', first.status === 201);
-  const drafts = () => q('rh_freeze', 'SELECT id, draft, routing, draft_revision, published_version FROM forms ORDER BY id').then(JSON.stringify);
-  const versions = () => q('rh_freeze', 'SELECT form_id, version, definition FROM form_versions ORDER BY form_id, version').then(JSON.stringify);
-  const themes = () => q('rh_freeze', 'SELECT id, name, tokens, revision FROM form_themes ORDER BY id').then(JSON.stringify);
+  // Scoped to this workspace: other people's deletions below must not disturb it, and that is checked too.
+  const drafts = () => q('rh_freeze', 'SELECT id, draft, routing, draft_revision, published_version FROM forms WHERE workspace_id = $1 ORDER BY id', [owner.ws]).then(JSON.stringify);
+  const versions = () => q('rh_freeze', 'SELECT form_id, version, definition FROM form_versions WHERE form_id IN (SELECT id FROM forms WHERE workspace_id = $1) ORDER BY form_id, version', [owner.ws]).then(JSON.stringify);
+  const themes = () => q('rh_freeze', 'SELECT id, name, tokens, revision FROM form_themes WHERE workspace_id = $1 ORDER BY id', [owner.ws]).then(JSON.stringify);
+  // Someone else's workspaces, to delete during the freeze. Deleting is a separate operation from authoring.
+  const others = async () => { const client = apiClient(); const account = await signUp(client); await published(client, account.forms, typedForm('Belongs to someone else')); return { client, account }; };
+  const separate = { release: { workspace: await others(), person: await others() }, rollback: { workspace: await others(), person: await others() } };
   const before = { drafts: await drafts(), versions: await versions(), themes: await themes() };
   const unchanged = async () => (await drafts()) === before.drafts && (await versions()) === before.versions && (await themes()) === before.themes;
 
@@ -804,6 +808,21 @@ async function freezeSection() {
     check(S, `${label}: nothing changed after using the builder`, await unchanged());
     check(S, `${label}: no page errors in the builder`, pageErrors.length === 0, pageErrors.join(' | ').slice(0, 240));
   };
+  const deletionsWork = async (label, { workspace, person }) => {
+    const formsOf = async ws => Number((await q('rh_freeze', 'SELECT COUNT(*) AS count FROM forms WHERE workspace_id = $1', [ws]))[0].count);
+    await logIn(workspace.client, workspace.account.email);
+    check(S, `${label}: the other workspace has its form before deleting`, (await formsOf(workspace.account.ws)) === 1);
+    const unconfirmed = await workspace.client.del(`/api/workspaces/${workspace.account.ws}`, { confirm: 'wrong name' });
+    check(S, `${label}: deleting a workspace still needs its name typed`, unconfirmed.status === 400 && (await formsOf(workspace.account.ws)) === 1, JSON.stringify(unconfirmed.body).slice(0, 160));
+    const removedWorkspace = await workspace.client.del(`/api/workspaces/${workspace.account.ws}`, { confirm: workspace.account.wsName });
+    check(S, `${label}: deleting a workspace remains available, and removes its forms`, removedWorkspace.status === 204 && (await formsOf(workspace.account.ws)) === 0, JSON.stringify(removedWorkspace.body).slice(0, 160));
+    await logIn(person.client, person.account.email);
+    const wrongPassword = await person.client.del('/api/me', { password: 'not the password' });
+    check(S, `${label}: deleting an account still needs the password`, wrongPassword.status === 401 && (await formsOf(person.account.ws)) === 1, JSON.stringify(wrongPassword.body).slice(0, 160));
+    const removedAccount = await person.client.del('/api/me', { password: 'a sufficiently long password' });
+    check(S, `${label}: deleting an account remains available, and removes the forms of a workspace it alone owned`, removedAccount.status === 204 && (await formsOf(person.account.ws)) === 0, JSON.stringify(removedAccount.body).slice(0, 160));
+    check(S, `${label}: those deletions left every other form untouched`, await unchanged());
+  };
   const respondentsWork = async (label, frontendIsNew) => {
     const direct = await apiClient().post(`/api/public/forms/${live.slug}/responses`, { answers: { plan: 'team', help: 'email', first: 'Direct', code: 'x' }, ...(frontendIsNew ? { evaluator: 2 } : {}) });
     check(S, `${label}: a public submission is accepted`, direct.status === 201, JSON.stringify(direct.body).slice(0, 200));
@@ -820,6 +839,7 @@ async function freezeSection() {
   await directWrites('release frozen', true);
   await uiWrites('release frozen');
   await respondentsWork('release frozen', true);
+  await deletionsWork('release frozen', separate.release);
 
   // 2. Backend back first would leave a new page on the rollback build: still refused, by the server.
   await startServer(rollbackBackend, newFrontend, 'rh_freeze', FROZEN);
@@ -833,6 +853,18 @@ async function freezeSection() {
   await directWrites('rollback build', false);
   await uiWrites('rollback build');
   await respondentsWork('rollback build', false);
+  await deletionsWork('rollback build', separate.rollback);
+
+  // The rollback build as a real production-mode server, with no freeze setting at all.
+  await startServer(rollbackBackend, rollbackFrontend, 'rh_freeze', { NODE_ENV: 'production', RELEASE_MODE: 'evaluation', APP_ENCRYPTION_KEY: 'a'.repeat(64) });
+  await logIn(http, owner.email);
+  check(S, 'rollback build, production mode, no override: starts frozen', (await http.get('/api/config')).body.formsAuthoringFrozen === true);
+  const unset = await http.patch(`${owner.forms}/${draftOnly.id}`, { definition: shell('Stripped', { fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] }), base_revision: draftOnly.revision });
+  check(S, 'rollback build, production mode, no override: a save is refused', unset.status === 423 && unset.body?.error?.code === 'forms_authoring_frozen', JSON.stringify(unset.body).slice(0, 160));
+  const unsetPublish = await http.post(`${owner.forms}/${live.id}/publish`);
+  check(S, 'rollback build, production mode, no override: a publish is refused', unsetPublish.status === 423, JSON.stringify(unsetPublish.body).slice(0, 160));
+  await respondentsWork('rollback build, production mode', false);
+  check(S, 'rollback build, production mode: nothing changed', await unchanged());
   const opened = (await http.get(`${owner.forms}/${draftOnly.id}`)).body;
   check(S, 'rollback build: the draft is still readable with every newer setting', Boolean(opened.draft.choice_rules && opened.draft.url_params && opened.draft.theme && opened.draft.logic && opened.draft.endings));
   const lived = await apiClient().get(`/api/public/forms/${live.slug}`);

@@ -42,6 +42,31 @@ test('the default state: the release starts open, and an operator can set it', (
   assert.equal(publicConfig(loadConfig({ RELEASE_ENVIRONMENT: 'staging' })).deployment, 'staging');
 });
 
+test('server: deleting a workspace or an account are separate operations that stay available while frozen', async () => {
+  const env = await setup();
+  try {
+    const forms = ws => env.app.db.get('SELECT COUNT(*) AS count FROM forms WHERE workspace_id = ?', ws).count;
+    const make = async name => { const http = env.client(); const account = await signUp(http, name); await http.post(`/api/workspaces/${account.ws.id}/forms`, { definition: definition(name) }); return { http, ...account }; };
+    const kept = await make('Keeper');
+    const workspace = await make('Workspace');
+    const person = await make('Person');
+    env.app.config.formsAuthoringFrozen = true;
+
+    assert.equal((await workspace.http.raw('DELETE', `/api/workspaces/${workspace.ws.id}`, { confirm: 'wrong name' })).status, 400, 'the usual confirmation still applies');
+    assert.equal(forms(workspace.ws.id), 1);
+    assert.equal((await workspace.http.raw('DELETE', `/api/workspaces/${workspace.ws.id}`, { confirm: workspace.ws.name })).status, 204);
+    assert.equal(forms(workspace.ws.id), 0, 'and its forms go with it');
+
+    assert.equal((await person.http.raw('DELETE', '/api/me', { password: 'wrong password' })).status, 401, 'so does the password');
+    assert.equal(forms(person.ws.id), 1);
+    assert.equal((await person.http.raw('DELETE', '/api/me', { password: 'a sufficiently long password' })).status, 204);
+    assert.equal(forms(person.ws.id), 0, 'a workspace it alone owned goes too');
+
+    assert.equal(forms(kept.ws.id), 1, 'nobody else is affected');
+    assert.equal((await kept.http.raw('POST', `/api/workspaces/${kept.ws.id}/forms`, { definition: definition('Still frozen') })).status, 423, 'and the freeze still holds');
+  } finally { await env.close(); }
+});
+
 test('server: while frozen, direct writes are refused with nothing changed; reading, checking and responding still work', async () => {
   const env = await setup();
   try {
