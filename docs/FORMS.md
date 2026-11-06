@@ -171,6 +171,7 @@ The table below records the earlier implementation author's checks before this f
 - Expired, invalid, unavailable and used handoffs no longer silently fall back to ordinary booking. Direct public booking without a handoff remains possible; this is not a universal person/email duplicate-booking restriction. A lost or rotated token requires returning to the response receipt or contacting the team.
 - Role granularity is unchanged: members can read and export every form's responses, as before. Response-reviewer and editor roles from the strategy need an authorization decision first.
 - Not built in this milestone: templates, the shared status queue, email receipts, branch tester, uploads, payments and AI.
+- **Legacy text comparison:** fixed for new publishes by the evaluation policy (see "Evaluation policy"). Versions published before it keep their behaviour: `"yes "` does not show a question ruled on `yes`, yet counts as `yes` for the ending.
 
 
 ## Per-form follow-up history and response paging (28 October 2026 increment)
@@ -225,6 +226,200 @@ Unchanged: explicit save, revision conflicts, version pinning, idempotent submis
 ### Not verified
 
 Production submission and storage, and PostgreSQL behaviour, for this journey; real clipboard and native share sheets on physical devices; real mail clients opening the `mailto:` draft; screen readers; human comprehension of the panel, templates or logic sentences.
+
+### Form editor layout (5 November, local only)
+
+The editor shows one surface at a time, chosen in the top bar, without changing the address or the unsaved draft: **Content** (toolbar above a framed canvas, with a question outline and an inspector beside them), **Workflow** (the logic map), **Settings** (form details, presentation, next step after submitting) and **Share** (respondent link and readiness). Publishing lands on Share with focus on its heading. The workspace sidebar and footer step aside inside the editor; the *Forms* breadcrumb returns to them. Draft and publish states, explicit save and conflict handling are unchanged.
+
+- **Toolbar:** Add content, Design, device view, Edit/Preview, more actions. Device view reshapes the canvas and the preview. Preview is a separate run in the real renderer that stores nothing.
+- **Outline:** colour-coded type badges, drag handles on hover or focus, and a separate Endings card. From 901 to 1180 px it collapses to badges, keeping names for assistive technology. At 900 px and below it is a scrolling strip, the panes stack, and reordering uses the move buttons.
+- **Canvas:** wording is edited in place in a frame with the respondent's proportions; its text scales with the frame. The answer area is a sample, not an input.
+- **Inspector:** Question and Answer start open. Media and Logic stay one line until used. A section stays as the author left it.
+
+### Design and themes (5 November, local only)
+
+**Design** opens a panel beside the canvas with **My themes** (*Create theme*, then Apply, Edit, Duplicate, Delete per card) and a **Gallery** of eight Schedora presets (Apply, Copy to My themes per card). A theme sets typography and the background, question text, answer text, button and button text colours. A weak colour pair is named in the editor (under 4.5:1) and does not block saving. Themes are separate from form templates, which hold questions.
+
+**A form holds its own copy.** Applying a theme copies its values into `definition.theme`. Publishing freezes that copy in the version, like every other part of the definition, so:
+
+- Editing or deleting a reusable theme changes no saved or published form. A draft using an older copy says so and offers *Apply again*.
+- Edits show at once on the draft's canvas and preview. Respondents see them only after a publish. Each version keeps the look it was published with.
+- The public payload omits `theme.source`.
+
+Only a named font stack and `#rrggbb` colours are accepted, by the shared validator on save, on publish and again before the page uses them. So a theme cannot carry CSS or a URL, and no font is loaded from elsewhere. Reusable themes live in `form_themes` (workspace-scoped, `forms.manage`, 50 per workspace, `409 theme_conflict` on a stale edit), via `/api/workspaces/:ws/form-themes`. Migration `016_form_themes.sql` and `postgres_v15_form_themes` are additive.
+
+### Multi-question pages and Contact Info (5 November, local only)
+
+A page stays flat in the definition: a titled page break (`grouped: true`, `label`, optional `help`) followed directly by questions carrying `group: <its id>`. Every question therefore keeps its own key, answer, CSV column, Flow placeholder and logic. The page title is never an answer or a column. Existing page breaks, forms and published versions are unchanged, and no group key is stored on them.
+
+- **Add content** offers **Contact Info** (First name, Last name, Phone number, Email, Company; first name and email start required) and **Page of questions**. Preset keys are readable and never reuse one the draft or any published version already uses: with an `email` in use it becomes `email_2`. A question added while a page or one of its questions is selected joins that page. An optional `placeholder` is kept per text question.
+- **Builder:** the page is a collapsible row with its questions indented, lettered A, B, C under its number. The canvas shows the whole page; focusing a question selects it without moving the cursor, and the inspector shows that question's settings. The move buttons reorder within a page and move a question out at either end; a page moves whole, and a question outside moves past a page, not into it. Drag can also drop a question into a page. Removing a page asks first.
+- **Respondent:** conversational mode shows a whole page on one screen; classic gives it its own page, and questions after it do not join it. Enter validates the visible questions and focuses the first invalid one (in conversational mode the error list is shown but focus goes to the question).
+- **Logic:** a jump can target the page or a question on it, and a question on a page can jump onward. A hidden page hides only its own questions. Skipped questions are not required and their answers are discarded on submit.
+- Contacts and booking handoffs take the name from `first_name`/`last_name` when there is no `name` question.
+
+**Rollback:** the previous backend strips `theme`, `group` and `grouped` from a saved draft and shows such pages as ordinary questions. Do not roll back while forms use them.
+
+### Workflow: the logic map (5 November, local only)
+
+**Workflow** lists every question, page and ending in order, draws each jump beside the list (dashed when conditional, solid when always taken) and writes each one in words under its question, which is the accessible version. Below 900 px only the words show. Anything no rule or next-question step leads to is marked *No path leads here*. Selecting an item opens the same jump editor as the Content inspector, so there is one set of rules and one selection. "Reached" considers jumps and order; a display rule can still hide an item on a path. Scoring, tagging, outcome quiz, variables and URL parameters are not built, and no placeholder for them is shown.
+
+### Jumps and endings (5 November, local only)
+
+Optional definition keys, stored only when not empty, so a form without logic keeps its exact JSON:
+
+- `logic: [{ field, rules: [{ when?, to: { type: 'field' | 'group' | 'ending', id } }] }]`. `when` uses the display-rule operators, or `{ all: [...] }` / `{ any: [...] }` of them (API and templates only; the editor keeps such a rule as written). A rule with no `when` always matches and must be last. `group` targets a page break, so groups are pages for now.
+- `endings: [{ id, title, message? }]`, up to 20. The first is the default.
+
+Semantics, all in `walkForm` in the shared Forms logic, which preview, the public form and server validation use alike:
+
+- A question's rules are checked once it is shown, and the first match decides.
+- Jumps only go forward, so every path ends. Typeform's reference also allows going back to a visited question; that is not built.
+- Skipped questions are not required and their answers are discarded on submit. A respondent who changes an earlier answer keeps the abandoned answers on the page in case they switch back, but the server never stores them.
+- A jump to an ending stops the form there.
+- The server returns the ending with the receipt, worked out from the accepted answers of the version answered, so a retry after a republish shows the same ending.
+- Post-submit routing and the Meet handoff are unchanged and independent. When a booking is offered, its heading stays and the ending appears under it.
+- The receipt reference always shows with an ending.
+
+A builder edit that invalidates a jump (a moved or deleted question, option or ending) removes that rule, with an announcement and a toast. Readiness reports jump forms as *not verified* for reachability, because its checker does not follow jumps yet.
+
+Respondent changes in the same pass:
+
+- Enter advances from the current answers, even when an answer redraws the form.
+- In one-question-at-a-time mode, letter keys choose options, Shift+Enter makes a new line in long text, and a pointer pick on a single choice moves on after 300 ms. Arrow keys never advance. The last question always waits for Submit. These details are assumptions from general knowledge of the product; no fetched Typeform document confirmed them.
+- Classic Next and Back now move focus to the new page.
+- *Restart preview* keeps images.
+
+No schema migration or environment change. **Rollback:** the previous backend ignores `logic`, so a published form with jumps would demand the skipped required questions. Unpublish or remove jumps from such forms before rolling back.
+
+**Before quizzes:** the public payload includes the whole definition, so scoring and correct answers must not be added to it as they stand, or respondents could read them.
+
+### Hiding answer choices (6 November, local only)
+
+**Workflow → Logic** lets an author hide one or more choices of a standalone choice question, based on an answer to an earlier question. Typeform's behaviour was verified by the product owner beforehand; these are the Schedora rules built from it:
+
+- `choice_rules: [{ field, rules: [{ when: { field, op, value? }, hide: [option keys] }] }]`, stored only when used, so a form without rules keeps its exact JSON. Conditions use the display-rule operators and stable keys, one condition per rule. Every rule that holds adds to what is hidden. Up to 20 rules per question.
+- **Inputs:** only earlier questions, never the question itself. Variables and scores are unsupported, as in Typeform. Typeform's URL parameter input is deferred until Schedora has URL parameters.
+- **Grouped pages:** a question inside a multi-question page cannot hide choices, as in Typeform. A question on such a page can be the *input* to a rule on a standalone question. A plain page break is not a multi-question page, and in classic presentation a rule can act on a question on the same page, which updates as answers change.
+- **A selected choice that becomes hidden** is removed from the active answer and never stored. It does not come back by itself if the choice is shown again, unlike an answer on an abandoned jump path, which is kept in case the respondent switches back: a silently restored choice could be submitted unnoticed. If a required question is left empty, it asks again.
+- **All choices hidden:** the question is skipped even when required, its response stays blank, its outgoing jumps do not run, and later rules read it as unanswered.
+- **One evaluator:** `walkForm` in the shared Forms logic, used by preview, the public form and validation of the submitted version. Later display rules, jumps and hide rules read the answer without its hidden choices. A crafted request gets the same result: a hidden choice is dropped, refused if that leaves a required question empty, and cannot trigger a jump, an ending or post-submit routing.
+- **Text on these forms is compared as it would be stored** (spacing tidied, email lower-cased), in the browser and on the server, so `" VIP "` cannot slip past a rule for `VIP`. The evaluation policy later extended this to every newly published version.
+
+**Conflicts:** moving a rule-bearing question onto a multi-question page, moving its input after it, or removing a choice or question a rule uses keeps the rule, tells the author (toast, announcement, beside the question and on the map) and refuses publishing. The draft can still be saved, so the work is not lost; a conflicting rule does nothing in preview. *Publish check*, *Publish* and readiness all report it. Jumps differ: a jump a builder edit invalidates is removed, which remains right for rules with nowhere to go, whereas a hide rule usually needs only a small repair. Deleting the question that holds the rules removes them with it. Changing the type of a question a rule reads follows the same blocks as display rules.
+
+Readiness reports these forms as *not verified* for reachability, because its checker does not follow them yet. The map writes the rules in words; they change what a question offers, not where it leads, so they are not drawn as arcs.
+
+No schema migration or environment change. **Deployment order:** backend first. An older frontend on the new backend still shows hidden choices, and the server then drops them. **Rollback:** the previous backend strips `choice_rules` from drafts on save and ignores them on published versions, so hidden choices would be offered and stored again. Unpublish such forms before rolling back.
+
+**Evidence (6 November, final code, local data only):** `npm test`: 317 tests, 310 pass, 0 fail, 7 skipped (the opt-in PostgreSQL tests). `npm run check`, `sync-shared --check` and `git diff --check` pass. `npm run browser-check`: exit 0, 952 layout checks at 320/375/768/1280 px in both colour preferences, no runtime errors. Its new journey authors rules in Workflow, tries them in preview, moves a question onto a page by drag, removes a choice, is refused at Publish both times, repairs, publishes, answers with Back and a changed answer (single, multi-select and full hiding), posts crafted requests, then checks the database, inbox and CSV, and Enter on a classic page. Breaking the evaluator or the publish check on purpose made `forms-choice-rules.test.mjs` fail each time.
+
+**Not verified:** PostgreSQL (the new test file is in CI's PostgreSQL job, which must pass before release) and any deployed environment. The rule editor's focus after each change was checked, but it was not driven by real key presses or a screen reader.
+
+### Evaluation policy (6 November, local only)
+
+Every newly published version records `evaluation_policy: "normalized_v1"` in its stored definition. **A version without it keeps the behaviour it was published with.** Nothing rewrites a published version or a response.
+
+With the policy, an answer and the value a rule compares it with both go through the question type's own clean-up in `checkAnswer`, in the shared `walkForm` and `answerConditionHolds`. So `"yes "` matches a rule for `yes` in display rules, jumps, hide-choice rules, endings and post-submit routing alike.
+
+| Question type | Compared as |
+|---|---|
+| Short text, phone, date | Spacing collapsed and trimmed |
+| Long text | Trimmed; line breaks kept |
+| Email | Trimmed and lower-cased |
+| Single and multiple choice | Option keys, unchanged |
+
+- **Rule values are cleaned too, when compared.** Otherwise a rule for `Foo@Example.com` could never match a lower-cased email in the new version. A value that isn't a valid answer of its type, such as part of an email in an *includes* rule, is only tidied. The stored rule is not changed.
+- **Unchanged:** capitals are still significant for `is` on text, and `includes` still ignores them. URL parameters keep their own clean-up and limits. Booking questions are outside this policy.
+- **Versions from before the policy:** a form without hide rules compares answers as typed. A form with hide rules compares tidied answers with rule values as written. Both are kept exactly.
+- **Drafts do not hold the policy.** Publishing stamps it, and an API request cannot set or remove it. *Unpublished changes* ignores the stamp. Builder and template previews stamp a copy to show what the next publish will do, and readiness checks reachability the same way.
+- **Adopting it:** a live version from before the policy is flagged only if it has a rule comparing typed text, the only case where a result can change. The builder then explains this in Preview and readiness, and Publish works without an edit. Others adopt the policy at their next publish.
+- **Responses on the old version:** a page opened on an old version keeps using it, and the server judges it by the submitted version during the existing 24-hour grace. Retries and receipts use the version answered.
+
+**Rollout:** a tab opened before this logic cannot be updated and can still load new versions, so holding publishes is not enough. See "Rollout and rollback". **Rollback:** the previous backend ignores the key, so versions with the policy go back to legacy comparison, with no data change.
+
+**Evidence (6 November, final code, local SQLite only):** `npm test`: 346 tests, 339 pass, 0 fail, 7 skipped (the opt-in PostgreSQL tests). `forms-evaluation-policy.test.mjs` covers forms with and without hide rules and URL parameters. `npm run check`, `sync-shared --check` and `git diff --check` pass. `npm run browser-check`: exit 0, 992 layout checks, no runtime errors. Its new journey tries `"yes "` in preview, on the public form and against the server, on an old version, on a new version and on a page left open across a republish. "Old versions" in these tests are real publishes with the stamp removed from the stored row, not data from a real earlier release. Breaking stamping, old-version behaviour, new-version clean-up, rule-value clean-up, routing or the unpublished-changes check on purpose made the tests fail; one routing break first survived, so the test was strengthened.
+
+**Not verified:** PostgreSQL, rollout compatibility and rollback, all open on the release checklist in `docs/RELEASE_ACCEPTANCE.md`.
+
+### Rollout and rollback (6 November, local only)
+
+A real old frontend on the new backend got stuck: the server demanded a question the browser had not displayed, the old code had no page to show it on, and the person saw no message. A hold on publishes did not prevent it, because a tab open through the hold reaches later versions by in-app navigation, or by the reload after the 24-hour grace. Old tabs can't be patched, so the fix is on the server, with a smaller one in the browser:
+
+- **Marker:** current browsers send `evaluator: 2` (`CLIENT_EVALUATOR`) with a submission.
+- **A request without it** is treated as an older browser. An error on a question that browser did not display is waived, using `olderClientFieldIds`, which models the old walk: answers as typed, display rules and plain page breaks only. It matches the real previous renderer on 3000 random forms. An invalid leftover answer on such a question is not stored.
+- **Not relaxed:** questions it did display, answer validation, and hidden choices, which are still refused or dropped, now with a message saying why. Someone crafting a request could omit the marker to skip a follow-up the old walk would not show, but required questions are not a security control and could be answered with anything anyway.
+- **New browser, older server:** if the server wants a question this path skipped, as a previous backend does for a jump, the browser shows it at the end. An error naming nothing in the form shows a message rather than nothing.
+
+`npm run release-rehearsal` runs the previous release and this tree as real servers on a disposable local PostgreSQL. Results, the deploy and rollback order, and what must be frozen are in `docs/RELEASE_ACCEPTANCE.md`.
+
+### URL parameters (6 November, local only)
+
+**Workflow → URL parameters** lets an author declare named parameters, such as `utm_source`, and copy an example link. **Preview** takes sample values and records nothing.
+
+- **Schema:** `url_params: [{ key, record? }]`, stored only when used, up to 20. Names are lowercase letters, numbers and underscores, starting with a letter. `mode`, `embed` and `product` are refused because form links already use them. A rule reads a parameter as `{ param, op, value? }`, never as `field`, so a parameter is not an answer and may share a question's name without crossover.
+- **What can read them:** jumps and hide-choice rules. Display rules and post-submit routing stay on answers in this slice. Variables, scoring, calculations and quizzes are out of scope.
+- **One evaluator:** `walkForm` cleans parameters itself, in preview, on the public form and in validation against the submitted version, so nothing undeclared can reach a rule by any route. A respondent on an earlier version is judged by that version's declarations.
+
+| Value | Result |
+|---|---|
+| Missing | `is` and `includes` are false, `is not` and `is not answered` are true |
+| Empty, or only spaces | Same as missing |
+| Repeated name | The first occurrence counts, even if it is empty |
+| Over 200 characters | Same as missing. It is never shortened, since a shortened value could match a rule the full one does not |
+| Control characters | Same as missing |
+| Not text (a crafted request) | Same as missing. It is not an error, because a respondent should not be blocked over a link |
+| Undeclared name, or different case | Ignored |
+| Spacing | Tidied, in link values and in rule values when saved. Case is kept: `is` is exact, `includes` ignores case, as for other text rules |
+
+**Untrusted input.** Anyone can edit a link, and the server can only judge what a request claims. So the server enforces a rule given the value sent, but someone can drop `utm_source=partner` and see the default choices. A hidden choice is about relevance, never access control, and the builder says so. Parameters never reach contacts, booking handoffs, Flow, webhooks, routing or authorization: only `answers` does. The values are only ever shown as escaped text, and CSV cells are neutralised against formulas.
+
+**Attribution.** An author opts in per parameter with *Record with each response*. Only those values are stored, in `responses.attribution`, apart from `answers`. Other parameters are used for rules, then discarded. The inbox and CSV label them `Attribution: key`, in the last columns, and the response detail shows them under their own heading as unverified. A form that records nothing keeps its exact CSV columns. A later version that stops recording keeps earlier values, which go when the response goes, under the same retention and deletion. Retention, deletion and the answers hash are otherwise unchanged. A retry replays the first response: its parameters overwrite nothing.
+
+**Choices made for this slice:**
+
+- A parameter a rule reads cannot be removed until the rule changes, so nothing disappears as a side effect. There is no rename: add the new name, repoint the rules, remove the old one.
+- An unsent value is not kept, so a retry works out its ending from the parameters it sends, which come from the same link. A crafted retry could only change the ending shown to itself.
+- Meeting rooms pass no parameters, so rules see them as missing. The embed code does not pass on the parent page's parameters; add them to the embed address.
+
+**Deployment:** migration `017_response_attribution.sql` and `postgres_v16_response_attribution` add one nullable column, with existing rows left as NULL. Deploy the backend before the frontend. An older frontend sends no parameters, so rules see them as missing and attribution is not recorded until it updates. **Rollback:** the column is additive and can stay, but the previous backend strips `url_params` and treats `{ param }` conditions as unmatched, so unpublish forms using them first.
+
+**Evidence (6 November, final code, local SQLite only):** `npm test`: 328 tests, 321 pass, 0 fail, 7 skipped (the opt-in PostgreSQL tests). `npm run check`, `sync-shared --check` and `git diff --check` pass. `npm run browser-check`: exit 0, 984 layout checks at 320/375/768/1280 px in both colour preferences, no runtime errors. Its new journey declares parameters, hides a choice with `utm_source=partner`, adds a jump, tries both in preview, publishes, then checks the partner, default, empty, duplicate, oversized and undeclared links, crafted requests, a markup value, the database, inbox and CSV. That run found a real bug, since fixed: the first receipt worked out its ending without the parameters. Breaking opt-in, the size limit, the evaluator, server validation or the separation from answers on purpose made `forms-url-params.test.mjs` fail each time.
+
+**Not verified:** PostgreSQL and frontend/backend rollout, both open on the release checklist in `docs/RELEASE_ACCEPTANCE.md`. The clipboard outcome was checked only as a reported status. The rule editor was not driven by real key presses or a screen reader.
+
+### Comparison with Typeform's Contact Info editor (5 November)
+
+Reference captures are normalised to CSS pixels. `…-1280.jpg` is a 1280×900 viewport scaled by 0.889 on a wider canvas (its panels start at y=50, and 50/0.889 = 56, the top edge the unscaled 1024 capture shows directly). `…-1440.jpg` is cropped to 907 px at about 1.018 scale, so nothing to the right of the canvas's start is comparable at 1440. `…-1024.jpg` shows Typeform's mobile canvas, compared with Schedora's mobile device view. These are JPEGs, some scaled, so read figures as about ±2 px. No Typeform asset or wording was copied.
+
+| Measure (CSS px) | Typeform | Schedora now |
+| --- | --- | --- |
+| Top bar height | 56 | 56 |
+| Toolbar height, 1280 | about 49 | 49 |
+| Toolbar x range, 1280 | 288–992 | 288–992 |
+| Rail expanded / at 1024 | 256 / 91 | 256 / 91 |
+| Inspector width | 256 | 256 |
+| Canvas frame, 1280 | x 299, y 301, 681×385 | x 299, y 307, 682×384 |
+| Mobile canvas frame, 1024 | x 221, y 129, 415×734 | x 222, y 130, 415×738 |
+| Question title x, 1280 | about 401 | 401 |
+| Field right edge, 1280 | about 880 | about 880 |
+| Rail row pitch | about 52 | 52 |
+| Panel / selected row / frame colour | about #f7f7f7 / #eee / #f9f9f9 | #f7f7f7 / #eee / #f9f9f9 |
+
+**Remaining differences, not built:** Typeform's Connect tab, mode selector, welcome screen, AI box, Text/Video switch, comments, accessibility, translation and settings toolbar icons, inspector panel toggle and phone-country picker. **Deliberate:** Schedora's purple primary and accents against its near-black, a thin purple edge on the selected row, a chevron on the page row where it has a menu, draft and save states where it has Share and View plans, numbered question badges, a visible OK sample on the canvas, and a single question vertically centred in the frame. **Unknown:** the width at which Typeform's rail collapses and whether its 1024 mobile view is automatic; Schedora collapses at 1180 px and stays in desktop view until asked. No reference exists for Typeform's Design panel or Logic map, so those were built from the owner's description and are not compared.
+
+### Evidence (5 November, final code)
+
+- `npm test`: 298 tests, 291 pass, 0 fail, 7 skipped (the opt-in PostgreSQL tests). `npm run check`, `sync-shared --check` and `git diff --check` pass.
+- `npm run browser-check`: exit 0, 928 layout checks at 320/375/768/1280 px in both colour preferences, no runtime errors. Journeys added, on disposable local data:
+  - **Contact form:** add from the picker by keyboard; move, duplicate and delete with focus checked; endings and a jump; preview at both sizes; publish; submit with real key events including a wrong email, Back, a letter-key choice and a changed path; stored response, inbox and CSV.
+  - **Themes:** create a theme, every colour and font reaching the canvas; contrast warning; desktop and mobile device views and preview; preview stores nothing; publish; public page shows the theme; a saved draft with another theme and an edit to the reusable theme each leave the public page identical, computed style by computed style; a themed response is stored once.
+  - **Contact Info page:** picker, keys, per-question selection and required setting, keyboard reorder within and out of the page, page moved whole, keyboard collapse, whole page on one screen, focus on the first invalid question then the remaining one, Back keeps every value, preview stores nothing, publish, inbox and CSV; a respondent changing an earlier answer to jump past the page with an abandoned answer unsaved; another jumping straight into the page.
+  - **Workflow:** existing jumps drawn and written, unreached item reported, add, retarget and remove from the map with focus kept, the same rule visible in Content, saved and not published.
+- This work found and fixed: a stale drag test; a nested-redraw exception from the new Enter handling; a phone layout viewport widened by a hidden heading, which the old overflow check could not see; a themed title in the wrong colour; focus lost when My themes finished loading; `$$` collapsed to `$` by a patch script in code Chrome does not run; and an existing test race where the background worker fetched a fixture's `example.com` calendar address and overwrote its status.
+- One earlier full run failed in a cascade of signed-out steps; its log was lost to truncation and the cause was not established. It has not recurred.
+
+**Not verified:** PostgreSQL, including `postgres_v15_form_themes`: the only configured database is production. `forms-jumps`, `forms-themes` and `forms-groups` are now in CI's PostgreSQL job, which must pass before release. Also any deployed environment, real touch devices, browsers other than headless Chrome (including the fallback for browsers without `field-sizing`), screen readers and human usability.
 
 ### Media: scoped, not implemented
 
@@ -370,6 +565,8 @@ Picture choices keep a text label for every choice, because that text is what re
 - Builder: **Add image** (a keyboard-reachable file control) and **Add video** (address field with inline errors). An image shows a thumbnail, alt text and a *Decorative* checkbox, plus *Replace* and *Remove*. Each option gets *Picture* / *Remove picture*. Removal is announced together with the fact that the live form keeps the media until publish. Save refuses a non-decorative image with no description.
 
 ### Respondent uploads: blocked (not built)
+
+3 November feasibility follow-up: [respondent attachment contract](FORM_UPLOADS_CONTRACT.md) records a read-only Supabase inventory (zero buckets/objects), the public Free object-storage allowance and the remaining authorisation/quota/scanning/lifecycle gates. A private object-storage candidate exists, but it has not been configured and does not make uploads available. The database-only constraint below describes the existing implementation, not an assertion that no suitable object store can be provisioned.
 
 There is no private object storage with lifecycle rules, quotas or scanning. The only durable store is the production free-tier PostgreSQL database shared with every product. Letting anonymous respondents write files of typical upload size there could exhaust it and take Schedora down, and no malware scanner exists. Creating a storage resource was out of scope (spend stays at ₹0, no production resources). So no upload control was added. Releasing it needs:
 

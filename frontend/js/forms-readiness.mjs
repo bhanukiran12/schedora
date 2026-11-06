@@ -4,6 +4,7 @@
 // can see and the shared form logic, so the same validator and visibility rules the server uses
 // decide every status. Unsaved edits on the page are never assessed.
 import { summarize } from './readiness.mjs';
+import { withEvaluationPolicy } from '../shared/forms-logic.mjs';
 
 const count = (n, one, many = one + 's') => `${n.toLocaleString('en-IN')} ${n === 1 ? one : many}`;
 const quote = text => `“${text.length > 60 ? text.slice(0, 59) + '…' : text}”`;
@@ -14,6 +15,16 @@ const quote = text => `“${text.length > 60 ? text.slice(0, 59) + '…' : text}
  * shared evaluator enforces; a reference to a missing question or option is named as such.
  */
 export function conditionSentence(condition, fields) {
+  if (condition.param != null) {
+    const name = `the link’s ${condition.param}`;
+    if (condition.op === 'answered') return `when the link has ${condition.param}`;
+    if (condition.op === 'not_answered') return `when the link has no ${condition.param}`;
+    if (!String(condition.value ?? '').trim()) return `when ${name} is an empty value (no value entered yet: enter one so the rule means something)`;
+    const value = quote(String(condition.value));
+    if (condition.op === 'contains') return `when ${name} includes ${value} (any capitalisation)`;
+    if (condition.op === 'not_equals') return `when ${name} is anything other than ${value}, including missing`;
+    return `when ${name} is ${value}`;
+  }
   const field = fields.find(candidate => candidate.id === condition.field);
   if (!field) return 'when a question that is no longer in the form is answered (this rule cannot match)';
   const question = quote(field.label || 'Untitled question');
@@ -42,6 +53,8 @@ export const MAX_COMBINATIONS = 4096;
  * @returns { unreachable: field[], complete: boolean }
  */
 export function unreachableFields(definition, visibleFields, limit = MAX_COMBINATIONS) {
+  if (definition.logic?.length) return { unreachable: [], complete: false, reason: 'jumps' };
+  if (definition.choice_rules?.length) return { unreachable: [], complete: false, reason: 'choice_rules' };
   const conditions = definition.fields.map(field => field.show_if).filter(Boolean);
   const controlling = [...new Set(conditions.map(condition => condition.field))].map(id => definition.fields.find(field => field.id === id)).filter(Boolean);
   // Text can contain several rule values at once (e.g. "red blue"). Sampling each value
@@ -101,7 +114,7 @@ export function draftChanges(live, draft) {
   const settings = ['title', 'description', 'presentation', 'submit_label'].filter(key => (live[key] ?? '') !== (draft[key] ?? ''));
   return [
     added && `${count(added, 'question')} added`, removed && `${count(removed, 'question')} removed`, changed && `${count(changed, 'question')} changed`,
-    order && !added && !removed && 'order or page breaks changed', settings.length && `${settings.map(key => key.replace('_', ' ')).join(', ')} changed`
+    order && !added && !removed && 'order or page breaks changed', JSON.stringify(live.choice_rules ?? null) !== JSON.stringify(draft.choice_rules ?? null) && 'hide-choice rules changed', JSON.stringify(live.url_params ?? null) !== JSON.stringify(draft.url_params ?? null) && 'URL parameters changed', settings.length && `${settings.map(key => key.replace('_', ' ')).join(', ')} changed`
   ].filter(Boolean);
 }
 
@@ -133,6 +146,7 @@ export function assessFormReadiness({ form, live, eventTypes, publishCheck, view
     const changes = draftChanges(liveDefinition, draft);
     if (!form.has_unpublished_changes) versions.push({ status: 'ready', text: `Respondents see version ${form.published_version}, which matches your saved draft.` });
     else versions.push({ status: 'attention', kind: 'recommendation', text: `Your saved draft differs from live version ${form.published_version}: ${changes.length ? changes.join('; ') : 'the questions and settings match, so the difference is in the next step after submitting, which cannot be compared with the live version here'}. Respondents keep seeing version ${form.published_version} until you publish.`, action: { label: 'Go to Publish', section: 'publish' } });
+    if (form.legacy_text_comparison) versions.push({ status: 'attention', kind: 'recommendation', text: `Live version ${form.published_version} compares typed answers exactly as typed, so an answer like “yes ” with a trailing space does not match a rule for “yes”. It stays that way until you publish. The next version compares them as they are stored, and Preview already shows that.`, action: { label: 'Go to Publish', section: 'publish' } });
     const state = live.value.availability;
     if (state === 'capacity_reached') versions.push({ status: 'attention', kind: 'blocker', text: 'The workspace\'s monthly response allowance is used up. The form says so and refuses new responses until the allowance resets.', action: viewer.admin ? { label: 'Review plans', href: '/billing' } : { note: 'Ask a workspace owner about the allowance.' } });
     else if (state === 'not_accepting') versions.push({ status: 'attention', kind: 'blocker', text: 'This workspace has no active Forms or Suite plan, so the form is not accepting responses.', action: viewer.admin ? { label: 'Review plans', href: '/billing' } : { note: 'Ask a workspace owner about the plan.' } });
@@ -146,6 +160,7 @@ export function assessFormReadiness({ form, live, eventTypes, publishCheck, view
     else if (publishCheck.value.can_publish) questions.push({ status: 'ready', text: `Server publish checks passed for saved revision ${form.revision}. Nothing was published. The server checks again when you publish.` });
     else for (const problem of publishCheck.value.problems) questions.push({ status: 'attention', kind: 'blocker', text: `Server publish check: ${problem.message}`, action: problem.field === 'plan'
       ? viewer.admin ? { label: 'Review plans', href: '/billing' } : { note: 'Ask a workspace owner about the plan.' }
+      : ['choice_rules', 'url_params'].includes(problem.field) ? { label: 'Review logic', section: 'workflow' }
       : { label: problem.field === 'routing' ? 'Edit routing' : 'Review questions', section: problem.field === 'routing' ? 'routing' : 'questions' } });
   }
   const asked = questionsOf(draft);
@@ -156,8 +171,12 @@ export function assessFormReadiness({ form, live, eventTypes, publishCheck, view
     const pages = draft.fields.filter(field => field.type === 'page_break').length + 1;
     const conditional = asked.filter(field => field.show_if).length + draft.fields.filter(field => field.type === 'page_break' && field.show_if).length;
     if (!problems.length) questions.push({ status: 'ready', text: `${count(asked.length, 'question')} (${asked.filter(field => field.required).length} required)${draft.presentation === 'classic' ? ` on ${count(pages, 'page')}` : ''}; every question and rule passes the same checks the server runs.${conditional ? ` ${count(conditional, 'item')} ${conditional === 1 ? 'is' : 'are'} shown only when an earlier answer matches.` : ''}` });
-    const reach = problems.length ? null : unreachableFields(draft, logic.visibleFields);
-    if (reach && !reach.complete) questions.push({ status: 'unverified', kind: 'unknown', text: reach.reason === 'text_contains'
+    const reach = problems.length ? null : unreachableFields(withEvaluationPolicy(draft), logic.visibleFields);
+    if (reach && !reach.complete) questions.push({ status: 'unverified', kind: 'unknown', text: reach.reason === 'jumps'
+      ? 'Jump rules decide which questions each person reaches, and automatic checks do not follow them yet. Try each path in Preview.'
+      : reach.reason === 'choice_rules'
+      ? 'Hide-choice rules can change or skip what each person is asked, and automatic checks do not follow them yet. Try each path in Preview.'
+      : reach.reason === 'text_contains'
       ? 'Text-includes rules can match several phrases in one answer, so automatic checks cannot verify every question path. Try those combinations in Preview.'
       : 'The display rules allow too many answer combinations to check that every question can be reached.' });
     for (const field of reach?.unreachable || []) {

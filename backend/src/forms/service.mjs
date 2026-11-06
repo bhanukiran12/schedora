@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail, HttpError } from '../http.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
-import { answerText, conditionHolds, definitionProblems, FIELD_TYPES, publishedTypeChangeAllowed, starterDefinition, validateSubmission } from '../shared/forms-logic.mjs';
+import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { assertDefinitionAssets, recordVersionAssets } from './assets.mjs';
 import { assertSessionClaim, recordSessionSubmission, verifyTicket } from '../video/session.mjs';
@@ -37,6 +37,50 @@ function normalizeMedia(media) {
   return media;
 }
 
+const normalizeCondition = condition => {
+  if (!condition || typeof condition !== 'object') return condition;
+  const clean = pick(condition, ['field', 'param', 'op', 'value']);
+  // Link values are compared tidied, so a rule's value is stored the same way.
+  if (clean.param != null && typeof clean.value === 'string') clean.value = clean.value.replace(/\s+/g, ' ').trim();
+  return clean;
+};
+const normalizeUrlParam = param => {
+  if (!param || typeof param !== 'object') return param;
+  const clean = pick(param, ['key', 'record']);
+  if (clean.record === false) delete clean.record;
+  return clean;
+};
+const normalizeWhen = when => {
+  if (!when || typeof when !== 'object') return when;
+  for (const key of ['all', 'any']) if (when[key]) return { [key]: Array.isArray(when[key]) ? when[key].map(normalizeCondition) : when[key] };
+  return normalizeCondition(when);
+};
+const normalizeRule = rule => {
+  if (!rule || typeof rule !== 'object') return rule;
+  const clean = {};
+  if (rule.when != null) clean.when = normalizeWhen(rule.when);
+  clean.to = rule.to && typeof rule.to === 'object' ? pick(rule.to, ['type', 'id']) : rule.to;
+  return clean;
+};
+const normalizeLogic = logic => Array.isArray(logic) ? logic.map(entry => entry && typeof entry === 'object' ? { field: entry.field, rules: Array.isArray(entry.rules) ? entry.rules.map(normalizeRule) : entry.rules } : entry) : logic;
+const normalizeChoiceRules = list => Array.isArray(list) ? list.map(entry => entry && typeof entry === 'object' ? { field: entry.field, rules: Array.isArray(entry.rules) ? entry.rules.map(rule => rule && typeof rule === 'object' ? { when: normalizeCondition(rule.when), hide: rule.hide } : rule) : entry.rules } : entry) : list;
+const normalizeEnding = ending => {
+  if (!ending || typeof ending !== 'object') return ending;
+  const clean = pick(ending, ['id', 'title', 'message']);
+  if (typeof clean.title === 'string') clean.title = clean.title.trim();
+  if (typeof clean.message === 'string') { clean.message = clean.message.trim(); if (!clean.message) delete clean.message; }
+  return clean;
+};
+const normalizeTheme = theme => {
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return theme;
+  const clean = pick(theme, ['name', 'source', ...THEME_TOKENS]);
+  if (typeof clean.name === 'string') clean.name = clean.name.trim();
+  for (const key of THEME_TOKENS) if (typeof clean[key] === 'string') clean[key] = clean[key].toLowerCase();
+  return clean;
+};
+// Empty lists are not stored, so a form without logic keeps its existing JSON.
+const hasItems = list => list != null && (!Array.isArray(list) || list.length > 0);
+
 export function normalizeDefinition(input) {
   if (!input || typeof input !== 'object') fail(400, 'validation_failed', 'Form definition is missing.', { field: 'definition' });
   const definition = {
@@ -46,7 +90,7 @@ export function normalizeDefinition(input) {
     submit_label: typeof input.submit_label === 'string' && input.submit_label.trim() ? input.submit_label.trim().slice(0, 40) : 'Submit',
     fields: Array.isArray(input.fields) ? input.fields.map(field => {
       if (!field || typeof field !== 'object') return field;
-      const clean = pick(field, ['id', 'type', 'label', 'help', 'required']);
+      const clean = pick(field, ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder']);
       if (typeof clean.label === 'string') clean.label = clean.label.trim();
       if (typeof clean.help === 'string') clean.help = clean.help.trim() || undefined;
       if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => {
@@ -57,26 +101,42 @@ export function normalizeDefinition(input) {
       }) : field.options;
       // Page-break defaults come before show_if so normalizing twice gives identical JSON; the
       // unpublished-changes check compares stored JSON.
-      if (clean.type === 'page_break') { delete clean.required; clean.label = clean.label || ''; }
+      if (clean.type === 'page_break') { delete clean.required; clean.label = clean.label || ''; if (field.grouped != null) clean.grouped = field.grouped; }
       if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
       if (field.media != null) clean.media = normalizeMedia(field.media);
       return clean;
     }) : input.fields
   };
+  if (hasItems(input.logic)) definition.logic = normalizeLogic(input.logic);
+  if (hasItems(input.choice_rules)) definition.choice_rules = normalizeChoiceRules(input.choice_rules);
+  if (hasItems(input.url_params)) definition.url_params = Array.isArray(input.url_params) ? input.url_params.map(normalizeUrlParam) : input.url_params;
+  if (hasItems(input.endings)) definition.endings = Array.isArray(input.endings) ? input.endings.map(normalizeEnding) : input.endings;
+  if (input.theme != null) definition.theme = normalizeTheme(input.theme);
   const problems = definitionProblems(definition);
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'definition', problems });
   return definition;
 }
 
+/** What respondents receive. Where a theme came from is only the builder's business. */
+export function publicDefinition(definition) {
+  if (!definition.theme?.source) return definition;
+  const { source, ...theme } = definition.theme;
+  return { ...definition, theme };
+}
+
 function present(row) {
   const routing = parse(row.routing);
+  const live = parse(row.published_definition);
   return {
     id: row.id, slug: row.slug, draft: JSON.parse(row.draft), published_version: row.published_version, routing,
     published_routing: parse(row.published_routing),
     revision: row.draft_revision, updated_at: row.updated_at, created_at: row.created_at, response_count: row.response_count ?? undefined,
     has_unpublished_changes: row.published_definition
-      ? row.published_definition !== row.draft || (row.published_routing || null) !== (row.routing || null)
-      : row.published_version == null
+      // A published version carries its evaluation policy and the draft does not; nothing else differs.
+      ? (row.published_definition !== row.draft && row.published_definition !== JSON.stringify(withEvaluationPolicy(JSON.parse(row.draft)))) || (row.published_routing || null) !== (row.routing || null)
+      : row.published_version == null,
+    // The live version predates the policy and has a rule it would change, so publishing is worth offering.
+    ...(live && !live.evaluation_policy && comparesTypedText(live, parse(row.published_routing)) ? { legacy_text_comparison: true } : {})
   };
 }
 
@@ -152,6 +212,11 @@ function validatePublish(app, workspaceId, form) {
   const retyped = definition.fields.filter(field => published.has(field.id) && !publishedTypeChangeAllowed(published.get(field.id), field.type))
     .map(field => `“${field.label || field.id}” was published as ${FIELD_TYPES[published.get(field.id)].toLowerCase()} and cannot become ${FIELD_TYPES[field.type].toLowerCase()} under the same key, because earlier answers would change meaning. Replace it with a new question instead.`);
   if (retyped.length) fail(400, 'validation_failed', retyped[0], { field: 'definition', problems: retyped });
+  // A draft may keep a hide-choice rule an edit broke, so the author can repair it; it never goes live.
+  const conflicts = choiceRuleConflicts(definition).map(conflict => conflict.message);
+  if (conflicts.length) fail(400, 'validation_failed', conflicts[0], { field: 'choice_rules', problems: conflicts });
+  const waiting = urlParamRuleConflicts(definition);
+  if (waiting.length) fail(400, 'validation_failed', waiting[0], { field: 'url_params', problems: waiting });
   const problems = form.routing ? routingProblems(app, workspaceId, definition, form.routing) : [];
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'routing', problems });
   return definition;
@@ -185,7 +250,7 @@ export function publishForm(app, workspaceId, userId, id, body = {}) {
     const definition = validatePublish(app, workspaceId, form);
     const version = (app.db.get('SELECT MAX(version) AS version FROM form_versions WHERE form_id = ?', id).version || 0) + 1;
     app.db.run('INSERT INTO form_versions (form_id, version, definition, routing, published_at, published_by) VALUES (?, ?, ?, ?, ?, ?)',
-      id, version, JSON.stringify(definition), form.routing ? JSON.stringify(form.routing) : null, app.now(), userId);
+      id, version, JSON.stringify(withEvaluationPolicy(definition)), form.routing ? JSON.stringify(form.routing) : null, app.now(), userId);
     recordVersionAssets(app, id, version, definition);
     app.db.run('UPDATE forms SET published_version = ?, updated_at = ? WHERE id = ?', version, app.now(), id);
     return getForm(app, workspaceId, id);
@@ -230,6 +295,20 @@ export function publishedForm(app, slug) {
   return { ...form, definition: JSON.parse(version.definition) };
 }
 
+// The ending a respondent reached, for the receipt. Always worked out from the accepted answers of the
+// version they answered, so a retry shows the same ending after a republish. URL parameters are not kept
+// unless opted in, so a retry uses the ones it sends, which come from the same link.
+const endingStep = (definition, answers, params) => { const ending = formEnding(definition, answers, params); return ending ? { ending } : {}; };
+
+// The respondent's name for contacts and booking handoffs: a name question, or split name questions.
+const respondentName = answers => {
+  if (typeof answers.name === 'string' && answers.name) return answers.name;
+  return [answers.first_name, answers.last_name].filter(part => typeof part === 'string' && part).join(' ');
+};
+
+// A request without the marker comes from a browser older than this logic (see CLIENT_EVALUATOR).
+const olderClient = body => ({ olderClient: body.evaluator == null });
+
 const answersHash = answers => sha256(JSON.stringify(Object.keys(answers).sort().map(key => [key, answers[key]])));
 
 // Accepts a response against the version the respondent was shown. The response, its usage and
@@ -245,12 +324,12 @@ export function submitResponse(app, slug, body) {
   if (body.version != null && !Number.isInteger(body.version)) invalid('version', 'Reload the form and try again.');
   try {
     return app.db.transaction(() => {
-      const existing = app.db.get('SELECT id, form_version, request_hash, created_at FROM responses WHERE form_id = ? AND idempotency_key = ?', form.id, key);
+      const existing = app.db.get('SELECT id, form_version, answers, request_hash, created_at FROM responses WHERE form_id = ? AND idempotency_key = ?', form.id, key);
       if (existing) {
         const version = loadVersion(app, form.id, existing.form_version);
-        const retry = validateSubmission(version.definition, body.answers);
+        const retry = validateSubmission(version.definition, body.answers, body.url_params, olderClient(body));
         const changed = Object.keys(retry.errors).length > 0 || (existing.request_hash != null && answersHash(retry.answers) !== existing.request_hash);
-        return { ...receipt(existing, existing.form_version), replay: true, answers_changed: changed, next: replayNextStep(app, form, existing.id, version) };
+        return { ...receipt(existing, existing.form_version), replay: true, answers_changed: changed, next: replayNextStep(app, form, existing.id, version), ...endingStep(version.definition, JSON.parse(existing.answers), body.url_params) };
       }
       const live = app.db.get('SELECT published_version FROM forms WHERE id = ?', form.id).published_version;
       if (live == null) closed(app, form);
@@ -262,7 +341,7 @@ export function submitResponse(app, slug, body) {
           fail(409, 'form_version_changed', 'This form was updated while you were answering. Nothing was submitted. Review the updated questions and submit again.', { version: live });
         }
       }
-      const { answers, errors } = validateSubmission(version.definition, body.answers);
+      const { answers, errors } = validateSubmission(version.definition, body.answers, body.url_params, olderClient(body));
       if (Object.keys(errors).length) fail(400, 'validation_failed', 'Please check the highlighted answers.', { errors });
       if (claim) assertSessionClaim(app, claim, form.id);
       requireEntitlement(app, form.workspace_id, 'forms');
@@ -270,13 +349,15 @@ export function submitResponse(app, slug, body) {
       const id = randomUUID();
       const now = app.now();
       const emailField = version.definition.fields.find(field => field.type === 'email' && answers[field.id]);
-      const contactId = emailField ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: typeof answers.name === 'string' ? answers.name : '' }) : null;
-      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, request_hash, created_at, contact_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        id, form.workspace_id, form.id, pinned, JSON.stringify(answers), key, answersHash(answers), now, contactId);
+      const contactId = emailField ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: respondentName(answers) }) : null;
+      // Kept apart from the answers: unverified, and never read for identity, contacts, Flow or routing.
+      const attribution = attributionValues(version.definition, body.url_params);
+      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, request_hash, created_at, contact_id, attribution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, form.workspace_id, form.id, pinned, JSON.stringify(answers), key, answersHash(answers), now, contactId, attribution ? JSON.stringify(attribution) : null);
       if (claim) recordSessionSubmission(app, claim, id);
       // The event carries identifiers only; Flow loads the answers it needs at run time.
       app.db.run("INSERT INTO outbox (id, workspace_id, type, subject_id, source_id, created_at) VALUES (?, ?, 'forms.response.created', ?, ?, ?)", randomUUID(), form.workspace_id, id, form.id, now);
-      return { ...receipt({ id, created_at: now }, pinned), replay: false, answers_changed: false, next: decideNextStep(app, form, id, version, answers) };
+      return { ...receipt({ id, created_at: now }, pinned), replay: false, answers_changed: false, next: decideNextStep(app, form, id, version, answers), ...endingStep(version.definition, answers, body.url_params) };
     });
   } finally { app.nudge?.(); }
 }
@@ -297,13 +378,13 @@ export function listResponses(app, workspaceId, formId, { before, limit = 50 } =
   const at = cursor ? Number(cursor[1]) : Number.MAX_SAFE_INTEGER;
   const id = cursor?.[2] || '';
   const size = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 50)));
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
+  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.attribution, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
     FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ?
     AND (r.created_at < ? OR (r.created_at = ? AND r.id < ?))
     ORDER BY r.created_at DESC, r.id DESC LIMIT ?`, formId, workspaceId, at, at, id, size + 1);
   const page = rows.slice(0, size);
   const last = page.at(-1);
-  return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row) })),
+  return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row), ...(row.attribution ? { attribution: JSON.parse(row.attribution) } : {}) })),
     next: rows.length > size ? `${last.created_at}.${last.id}` : null };
 }
 
@@ -355,16 +436,21 @@ export function exportCsv(app, workspaceId, formId) {
   const form = getForm(app, workspaceId, formId);
   const versions = formVersions(app, formId);
   const columns = exportColumns(versions, form.draft);
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
+  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.attribution, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
     FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ? ORDER BY r.created_at`, formId, workspaceId);
-  const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(field => field.label || field.id)].map(csvCell).join(',')];
+  // Attribution columns come last and only when recorded, so existing exports keep their shape.
+  const attributed = rows.map(row => ({ attribution: parse(row.attribution) }));
+  const attribution = attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), attributed);
+  const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(field => field.label || field.id), ...attribution.map(key => `Attribution: ${key}`)].map(csvCell).join(',')];
   for (const row of rows) {
     const answers = JSON.parse(row.answers);
     const fields = versions[row.form_version]?.fields || [];
     const step = nextStepSummary(app, workspaceId, row);
     const stepText = step ? [NEXT_STEP_TEXT[step.status], step.reference].filter(Boolean).join(' ') : '';
+    const recorded = parse(row.attribution) || {};
     lines.push([row.id, new Date(row.created_at).toISOString(), row.form_version, stepText,
-      ...columns.map(column => answerText(fields.find(field => field.id === column.id) || column, answers[column.id]))].map(csvCell).join(','));
+      ...columns.map(column => answerText(fields.find(field => field.id === column.id) || column, answers[column.id])),
+      ...attribution.map(key => recorded[key] ?? '')].map(csvCell).join(','));
   }
   return { filename: `${form.slug}-responses.csv`, body: '﻿' + lines.join('\r\n') + '\r\n' };
 }
@@ -438,9 +524,9 @@ export function saveRouting(app, workspaceId, id, body) {
 }
 
 // First matching rule, else the fallback, else nothing. Pure, so retries decide the same way.
-export function chooseAction(routing, answers) {
+export function chooseAction(routing, answers, definition = null) {
   if (!routing) return null;
-  return routing.rules.find(rule => conditionHolds(rule.condition, answers))?.action || routing.fallback || null;
+  return routing.rules.find(rule => answerConditionHolds(definition, rule.condition, answers))?.action || routing.fallback || null;
 }
 
 const respondentAction = action => action && action.type !== 'event' ? action : null;
@@ -461,7 +547,7 @@ function offer(app, handoffId, eventType, expiresAt) {
 
 // Runs inside the submission transaction, so the decision is recorded with the response.
 function decideNextStep(app, form, responseId, version, answers) {
-  const action = chooseAction(version.routing, answers);
+  const action = chooseAction(version.routing, answers, version.definition);
   if (action?.type !== 'event') return action;
   const now = app.now();
   const id = randomUUID();
@@ -479,7 +565,7 @@ function replayNextStep(app, form, responseId, version) {
   const handoff = app.db.get('SELECT * FROM form_handoffs WHERE response_id = ?', responseId);
   if (!handoff) {
     const answers = JSON.parse(app.db.get('SELECT answers FROM responses WHERE id = ?', responseId).answers);
-    return respondentAction(chooseAction(version.routing, answers));
+    return respondentAction(chooseAction(version.routing, answers, version.definition));
   }
   const fallback = respondentAction(version.routing?.fallback);
   if (handoff.status === 'booked') return { type: 'booking', status: 'booked' };
@@ -509,7 +595,7 @@ export function handoffDetails(app, token) {
   const definition = JSON.parse(response.definition);
   const questions = JSON.parse(app.db.get('SELECT questions FROM event_types WHERE id = ?', eventType.id).questions || '[]');
   const email = definition.fields.find(field => field.type === 'email' && answers[field.id]);
-  const prefill = { name: typeof answers.name === 'string' ? answers.name : '', email: email ? answers[email.id] : '', answers: {} };
+  const prefill = { name: respondentName(answers), email: email ? answers[email.id] : '', answers: {} };
   for (const question of questions) if (answers[question.id] !== undefined) prefill.answers[question.id] = answers[question.id];
   return { status: 'offered', event: { workspace_slug: eventType.workspace_slug, slug: eventType.slug, title: eventType.title }, expires_at: handoff.expires_at, prefill };
 }

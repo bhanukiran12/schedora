@@ -4,6 +4,8 @@ Evidence reconciled: 30 October 2026. Latest deployed application observed: `ba7
 
 ## Evidence rules
 
+3 November direct metadata check: the connected Supabase project matched the backend's configured project identity. Read-only SQL confirmed the `schedora.schema_migrations` records through `postgres_v12_calendar_success`, including `postgres_v6_email_transport`, `postgres_v8_email_delivery_reports` and `postgres_v11_live_onboarding`; the actual `accepted_transport`, `delivery_status`, `delivery_event_at` and calendar `last_success_at` columns exist. This strengthens the earlier startup-only migration evidence. It proves neither inbox delivery, row-count preservation against a before snapshot, nor a successful customer journey. Media/session upgrades13/14 were absent, consistent with this feature branch not being released. No production data or configuration changed.
+
 Implemented code, automated tests, deployment health, real-provider results and customer validation are different evidence classes. A passing test proves only its covered scenario. Do not count old local skips as failing CI, or count healthy startup as a direct database/data-integrity audit. Pricing stimuli are not approved commercial terms. Hypotheses are not interview findings.
 
 ## Acceptance matrix
@@ -31,6 +33,85 @@ Implemented code, automated tests, deployment health, real-provider results and 
 3. Run the owner's existing manual validation checklist against the released login/setup/Forms/Meet/Flow journeys. Record environment, dates and actual outcomes; unrun steps remain open.
 4. Conduct the scoped consenting-operator research in UX_RESEARCH_PLAN.md before prioritising major feature expansion or approving prices. Research scripts are ready; no interviews or conversions are fabricated.
 5. Enable production video only after its operational, smoke and budget gates are genuinely met. AWS migration remains separate and blocked by account readiness.
+
+## Release checklist: Forms (themes, groups, jumps, hide-choice rules, URL parameters, evaluation policy)
+
+Readiness pass of 6 November 2026, on uncommitted work on top of `2f54fe7`. **Nothing was deployed, and no production or staging system was contacted.** All of it ran on this computer against disposable PostgreSQL 17 with verified TLS, the image CI uses. "Previous release" in this table means `ba76f3f`, which this document had recorded as deployed. **That was out of date:** production runs `e3b6b5d`, so the checks are rerun below.
+
+| # | Gate | Result | Evidence or what is missing |
+|---|---|---|---|
+| 1 | Forms CI suite on PostgreSQL | **Pass (local)** | CI's test list: 182 tests, 182 pass. GitHub CI itself has not run, because nothing is pushed |
+| 2 | Migrations on a fresh database | **Pass** | `postgres_v13` to `v16` recorded; a form publishes and answers |
+| 3 | Upgrade from the previous release | **Pass** | Exactly four new steps apply; a restart repeats none; fresh and upgraded databases have identical columns and indexes |
+| 4 | Older forms and responses, using data made by the previous release's own code | **Pass** | Forms, versions and responses byte-identical after upgrade; CSVs byte-identical; retry replays; `"yes "` keeps its old path |
+| 5 | Older forms and responses, using sanitized production fixtures | **Blocked** | No such fixture exists in the repository. Needs a sanitized export of `forms`, `form_versions` and `responses` from production |
+| 6 | Old frontend on new backend, before the fix | **Fail, reproduced** | 5 stuck cases: stamped `"yes "`, tab past the grace, tab using in-app navigation, a hidden choice changing a follow-up, a question after a hidden page |
+| 7 | Holding publishes is enough | **Fail** | A tab open through the hold still reaches later versions by in-app navigation, or by the reload after the 24-hour grace. The hold is no longer required |
+| 8 | Respondents never stuck on a required question their browser did not display | **Pass (local)** | With the compatibility fix, all 5 are accepted; a real `ba76f3f` frontend drove them. The rule matches the real old renderer on 3000 random forms |
+| 9 | Conditional choices and attribution in the same matrix | **Pass, with limits** | Old frontend: a hidden choice is refused with a message saying why, and never stored. It is still offered, partner rules are not applied, and no attribution is recorded |
+| 10 | Cached clients | **Pass (local)** | Behind a Vercel-like stand-in, the service worker is network-first and a reload runs new code. With the server down, no form can be submitted from the cache |
+| 11 | Rollback rehearsal, respondents and authors | **Pass on a stand-in** | Disposable database built by the previous release, then this tree, with themes, groups, jumps, hidden choices, attribution and the policy. Limits are below |
+| 12 | Rollback on a real staging copy | **Blocked** | Needs a non-production database copy and staging Render and Vercel deployments. `backend/.env` and `.env.meet-staging` were not opened |
+| 13 | Rollout on real Render and Vercel | **Blocked** | Same environment. Locally, servers were swapped on one address; the real gap between the two deployments was not measured |
+| 14 | Local suite and checks on the final tree | **Pass** | Results below |
+
+### Exact checks run
+
+```
+git archive ba76f3f | tar -x -C <prev>
+# DATABASE_URL: disposable PostgreSQL 17 on 127.0.0.1:54329; DATABASE_CA_CERT: its throwaway certificate
+npm run test:postgres -- <CI's list, including forms-rollout-compat>   # 182 pass, 0 fail
+npm run release-rehearsal -- --prev <prev>                             # 76 checks, 76 pass
+npm run browser-check                                                  # exit 0, 992 layout checks, 84 steps
+npm test                                                               # 350 tests, 343 pass, 0 fail, 7 PostgreSQL opt-in skipped
+npm run check; npm run sync-shared -- --check; git diff --check        # pass
+```
+
+The rehearsal refuses any database that is not on this computer, and gives its servers no inherited environment. Before the fix, its rollout section gave 16 pass and 5 fail.
+
+### Safe deploy order
+
+1. Snapshot the database.
+2. Deploy the **backend**. It applies `postgres_v13` to `v16` on start, all additive.
+3. Deploy the **frontend** straight after. A hold on publishes is not needed for safety.
+4. Confirm in the first responses that `evaluator` is being sent: new attribution appearing is the visible sign.
+5. Keep the compatibility rule until old tabs are gone. See the removal gate below.
+
+Between steps 2 and 3, and in tabs left open afterwards, older browsers are not stuck, but they offer hidden choices (refused if chosen), ignore partner rules and record no attribution. Expect those responses to have no attribution.
+
+### Safe rollback order
+
+**Prefer rolling forward.** A rollback changes what respondents are asked and what authors can keep, while a fix forward changes neither.
+
+1. **Before anything:** snapshot the database, and tell authors to stop saving and publishing Forms. Nothing enforces this. An edit that exists only in a draft is held nowhere else.
+2. Roll back the **frontend first**. Old frontend on the new backend is the case the compatibility rule protects: hidden choices stay enforced and nothing is lost.
+3. Roll back the **backend** only if it is the cause. If so, do it straight after. In the reverse state, a new frontend on the old backend asks a stamped `"yes "` follow-up and then drops the answer.
+4. **Do not reverse the migrations.** The previous backend runs on the upgraded schema, and the data in them survives for rolling forward.
+
+### While the previous backend runs
+
+| Form uses | Respondents see | Stored | Do this |
+|---|---|---|---|
+| Hidden choices | All choices | **Hidden choices are stored**, and cannot be told apart later | Unpublish if a hidden choice must never be collected. Otherwise keep the backend newer |
+| URL attribution | Partner rules ignored | **No attribution recorded.** Earlier values are kept but not shown | Unpublish if attribution matters, or accept the gap |
+| Jumps and endings | Every question, and no custom ending | Answers on paths that used to be skipped | Unpublish if the extra required questions are a problem |
+| Multi-question pages | Plain questions, no page title | Same keys, unaffected | Can stay published |
+| Themes | Default look | Unaffected | Can stay published, if the look can wait |
+| Evaluation policy | `"yes "` compared as typed | Follow-up not asked | Can stay published |
+| Question media | Not shown; uploaded images have no route | Unaffected | Can stay published if the media isn't needed to answer |
+
+**Authors, frozen without exception:** a save on the previous backend succeeds and silently removes `logic`, `endings`, `choice_rules`, `url_params`, `theme`, `media`, `group`, `grouped` and `placeholder` from the draft. Rolling forward does not bring them back. A publish then makes a live version without them. Versions published before the rollback keep their settings, and those can be copied back by hand. Settings only in an unpublished draft are recoverable only from the snapshot.
+
+**Rolling forward afterwards:** rehearsed. No migration repeats, attribution and reusable themes return, and forms nobody saved are unchanged. Responses from the rollback stay as written, and a version published during it stays without the settings.
+
+### Remaining before release
+
+- [ ] Gate 5: sanitized fixtures from production, then rerun the older-form checks against them.
+- [ ] Gates 12 and 13: rerun `release-rehearsal`'s scenarios on real staging, and measure the deployment gap.
+- [ ] GitHub CI passes on the pushed branch, including `forms-rollout-compat`.
+- [x] Production's revision: `e3b6b5d`, not `ba76f3f`. Gates 3, 4 and 8 are rerun from it in CI's PostgreSQL job.
+- [ ] Count how many production forms would be flagged for republishing, on the same fixtures.
+- [ ] Removal gate: delete the compatibility rule (`olderClient`, `CLIENT_EVALUATOR`) once old tabs are gone, such as when requests without `evaluator` stop arriving. Those requests aren't counted anywhere yet, and a scripted API client without the marker is also treated as an older browser.
 
 ## Current source map
 

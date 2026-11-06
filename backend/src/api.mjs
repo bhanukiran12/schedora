@@ -2,7 +2,8 @@ import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress }
 import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
 import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
-import { availability, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/themes.mjs';
+import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
@@ -298,6 +299,12 @@ export function createApi(app) {
   });
   del('/api/workspaces/:ws/forms/:id/responses/:rid', ctx => { deleteResponse(app, member(ctx, 'responses.delete').workspace.id, ctx.params.id, ctx.params.rid); return { status: 204 }; });
 
+  // Reusable form themes. Forms hold their own copy, so changing one here restyles nothing (forms/themes.mjs).
+  get('/api/workspaces/:ws/form-themes', ctx => listThemes(app, member(ctx, 'forms.manage').workspace.id));
+  post('/api/workspaces/:ws/form-themes', async ctx => { const actor = member(ctx, 'forms.manage'); return { status: 201, body: createTheme(app, actor.workspace.id, ctx.user.id, await ctx.json()) }; });
+  patch('/api/workspaces/:ws/form-themes/:id', async ctx => updateTheme(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
+  del('/api/workspaces/:ws/form-themes/:id', ctx => { deleteTheme(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
+
   // Host-authored form images: uploads need forms.manage; reads are workspace-scoped or limited to
   // images that a collecting form's published version shows.
   post('/api/workspaces/:ws/form-assets', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'assets', 30); return { status: 201, body: uploadAsset(app, actor.workspace.id, ctx.user.id, await ctx.json(3 * 1024 * 1024)) }; });
@@ -306,7 +313,7 @@ export function createApi(app) {
   get('/api/public/forms/:slug', ctx => {
     const form = publishedForm(app, ctx.params.slug);
     const state = availability(app, form.workspace_id);
-    return { slug: form.slug, version: form.published_version, definition: form.definition, workspace_name: form.workspace_name, availability: state, accepting: state === 'open' };
+    return { slug: form.slug, version: form.published_version, definition: publicDefinition(form.definition), workspace_name: form.workspace_name, availability: state, accepting: state === 'open' };
   }, { public: true });
   // Opaque booking handoff from an accepted response: returns only what the booking page may pre-fill.
   get('/api/public/form-handoffs/:token', ctx => { limit(ctx, 'manage', 60); return { status: 200, body: handoffDetails(app, ctx.params.token) }; }, { public: true });

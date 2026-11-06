@@ -34,12 +34,14 @@ jobs:
           CHROME_PATH: /usr/bin/google-chrome
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -65,7 +67,19 @@ jobs:
           DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
         run: |
           export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
-          npm run test:postgres -- test/flow.test.mjs test/meet-readiness.test.mjs test/host-readiness.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/forms-media.test.mjs test/meet-session.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
+          npm run test:postgres -- test/flow.test.mjs test/meet-readiness.test.mjs test/host-readiness.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/forms-media.test.mjs test/forms-jumps.test.mjs test/forms-choice-rules.test.mjs test/forms-url-params.test.mjs test/forms-evaluation-policy.test.mjs test/forms-rollout-compat.test.mjs test/forms-themes.test.mjs test/forms-groups.test.mjs test/meet-session.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
+      - name: Release rehearsal against the revision production runs
+        env:
+          DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
+          CHROME_PATH: /usr/bin/google-chrome
+          # Update when production moves. See docs/RELEASE_ACCEPTANCE.md.
+          REHEARSAL_BASELINE: e3b6b5d73829
+        run: |
+          export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
+          git fetch --no-tags --quiet origin main
+          mkdir -p "$RUNNER_TEMP/baseline"
+          git -C .. archive "$REHEARSAL_BASELINE" | tar -x -C "$RUNNER_TEMP/baseline"
+          npm run release-rehearsal -- --prev "$RUNNER_TEMP/baseline"
       - name: Remove disposable database
         if: always()
         run: docker rm --force schedora-test-pg || true

@@ -362,6 +362,7 @@ try {
   });
   await step('form builder: preview stores nothing, keyboard reorder keeps focus', async () => {
     const before = responseCount();
+    await click('#builder-index [data-section="questions"]'); // publishing left the share surface showing
     await fill('#preview #q-name', 'Preview person'); await fill('#preview #q-email', 'preview@example.com');
     await evaluate("const o = document.querySelector('#preview [name=topic][value=support]'); o.checked = true; o.dispatchEvent(new Event('change', { bubbles: true }))");
     await click('#preview [type="submit"]');
@@ -394,16 +395,103 @@ try {
     await click('#conflict-load');
     await waitFor("document.querySelector('#f-title').value === 'Edited elsewhere' && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'latest loaded');
   });
+  // The builder shows one question at a time: choose it in the sidebar by its key. Returns its index.
+  const selectQuestion = async key => {
+    const index = await evaluate(`document.querySelector('[data-question-key="${key}"]').dataset.questionRow`);
+    await click(`[data-question-index="${index}"]`);
+    return Number(index);
+  };
+  const questionKeys = () => evaluate("[...document.querySelectorAll('[data-question-key]')].map(row => row.dataset.questionKey)");
+  await step('form builder: three panes keep content, settings and selection apart', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('#fields .question-canvas') && document.querySelector('[data-question-key=\"topic\"]')");
+    const i = await selectQuestion('topic');
+    const placed = await evaluate(`(() => { const inPane = (selector, pane) => Boolean(document.querySelector('[data-index="${i}"] ' + selector)?.closest(pane)); return { label: inPane('[data-prop="label"]', '.question-canvas'), options: inPane('[data-option]', '.question-canvas'), media: inPane('[data-media-file]', '.question-settings'), type: inPane('[data-type]', '.question-settings'), required: inPane('[data-prop="required"]', '.question-settings'), key: inPane('[data-prop="id"]', '.question-settings'), logic: inPane('[data-logic]', '.question-settings') }; })()`);
+    if (Object.values(placed).includes(false)) throw new Error('controls are in the wrong pane: ' + JSON.stringify(placed));
+    const panes = await evaluate("['.question-sidebar', '.question-canvas', '.question-settings'].map(selector => { const box = document.querySelector(selector).getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top }; })");
+    if (!(panes[0].right <= panes[1].left && panes[1].right <= panes[2].left)) throw new Error('panes are not side by side at 1280 px: ' + JSON.stringify(panes));
+    if ((await evaluate(`document.querySelector('[data-question-index="${i}"]').getAttribute('aria-pressed')`)) !== 'true' || (await evaluate("document.querySelectorAll('[data-question-index][aria-pressed=\"true\"]').length")) !== 1) throw new Error('selection not exposed on exactly one sidebar row');
+    if (!(await evaluate(`(() => { const selected = getComputedStyle(document.querySelector('[data-question-index="${i}"]').closest('.question-row')); const probe = document.createElement('i'); probe.style.color = 'var(--forms)'; document.body.append(probe); const brand = getComputedStyle(probe).color; probe.remove(); return selected.boxShadow.includes(brand) && selected.backgroundColor !== 'rgba(0, 0, 0, 0)'; })()`))) throw new Error('selected row has no neutral fill and Forms brand edge');
+    // Typing on the canvas updates the sidebar and the live preview together.
+    await fill(`[data-index="${i}"] [data-prop="label"]`, 'Canvas wording');
+    if (!(await evaluate(`document.querySelector('[data-question-row="${i}"]').innerText.includes('Canvas wording') && document.querySelector('#preview').textContent.includes('Canvas wording')`))) throw new Error('canvas edit did not reach the sidebar and preview');
+    // The live preview is one switch away at every width, and the outline collapses to icons on narrower desktops with its names intact.
+    await click('.mobile-switch [data-view="preview"]');
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-preview')).display !== 'none' && getComputedStyle(document.querySelector('.builder-edit')).display === 'none'"))) throw new Error('preview not shown by the switch');
+    await click('.mobile-switch [data-view="edit"]');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
+    const collapsed = await evaluate("(() => { const rail = document.querySelector('.question-sidebar').getBoundingClientRect(); const label = document.querySelector('.question-row-label'); return { rail: rail.width, clipped: label.getBoundingClientRect().width <= 1, name: label.closest('button').textContent }; })()");
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    if (collapsed.rail > 92 || !collapsed.clipped || !collapsed.name.trim()) throw new Error('outline did not collapse with accessible names: ' + JSON.stringify(collapsed));
+    await layoutCheck('form builder three panes', '#questions');
+    await evaluate('delete document.body.dataset.dirty');
+  });
+  await step('form builder: drag reorder matches the move buttons, can be cancelled and keeps logic honest', async () => {
+    await open(`/forms/${formId}`, "document.querySelector('[data-question-key=\"details\"]')");
+    const mouse = (type, x, y, buttons) => send('Input.dispatchMouseEvent', { type, x, y, buttons, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
+    // Scrolls only when told to: scrolling between reading two rows would leave the first position stale.
+    const middle = (index, scroll = true) => evaluate(`(() => { const row = document.querySelector('[data-question-row="${index}"]'); ${scroll ? "row.scrollIntoView({ block: 'center' });" : ''} const box = row.getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2, height: box.height }; })()`);
+    const begin = async (from, to) => {
+      const start = await middle(from);
+      const end = await middle(to, false);
+      const y = end.y + (to > from ? end.height / 2 - 1 : -end.height / 2 + 1);
+      await mouse('mouseMoved', start.x, start.y, 0);
+      await mouse('mousePressed', start.x, start.y, 1);
+      await mouse('mouseMoved', start.x, start.y + Math.sign(y - start.y) * 10, 1);
+      await mouse('mouseMoved', end.x, y, 1);
+      return { x: end.x, y };
+    };
+    const original = await questionKeys();
+    if (original.join() !== 'name,email,topic,details') throw new Error('unexpected starting order: ' + original.join());
+    try {
+      // Holding a row over another shows where it would land; nothing has moved yet.
+      let at = await begin(0, 1);
+      if (!(await evaluate("document.querySelector('[data-question-row=\"0\"]').classList.contains('dragging') && Boolean(document.querySelector('.drop-before, .drop-after'))")) || (await questionKeys()).join() !== original.join()) throw new Error('drag shows no drop position, or moved early');
+      // Escape cancels: same order, no unsaved change, no leftovers, and a later click still selects.
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await mouse('mouseReleased', at.x, at.y, 0);
+      if ((await questionKeys()).join() !== original.join() || (await text()).includes('Unsaved changes') || (await evaluate("Boolean(document.querySelector('.dragging, .drop-before, .drop-after, .is-dragging'))"))) throw new Error('Escape did not cancel the drag cleanly');
+      const plain = await middle(2);
+      await mouse('mouseMoved', plain.x, plain.y, 0);
+      await mouse('mousePressed', plain.x, plain.y, 1);
+      await mouse('mouseReleased', plain.x, plain.y, 0);
+      if ((await evaluate("document.querySelector('[data-question-index=\"2\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('a plain click on a row does not select it');
+      // A real drop: the moved question stays selected and focused, the draft is unsaved, the move is announced, and a rule still valid survives.
+      at = await begin(0, 1);
+      await mouse('mouseReleased', at.x, at.y, 0);
+      if ((await questionKeys()).join() !== 'email,name,topic,details') throw new Error('drag did not reorder: ' + (await questionKeys()).join());
+      if (!(await focused('[data-question-index="1"]')) || (await evaluate("document.querySelector('[data-question-index=\"1\"]').getAttribute('aria-pressed')")) !== 'true' || (await evaluate("document.querySelector('#fields [data-prop=\"id\"]').value")) !== 'name') throw new Error('moved question not selected and focused after the drop');
+      await waitFor("document.querySelector('#builder-live').innerText.includes('position 2')", 'drag announced');
+      if (!(await text()).includes('Unsaved changes')) throw new Error('drag did not mark the draft unsaved');
+      if (!(await evaluate("document.querySelector('[data-question-row=\"3\"]').innerText.includes('Logic')"))) throw new Error('a rule that is still valid was lost');
+      // The move buttons act on the same order.
+      await click('[data-index="1"] [data-move="-1"]');
+      if ((await questionKeys()).join() !== 'name,email,topic,details') throw new Error('move button did not undo the drag');
+      // Dragging a question below the one whose rule depends on it removes the rule, visibly.
+      at = await begin(2, 3);
+      await mouse('mouseReleased', at.x, at.y, 0);
+      if ((await questionKeys()).join() !== 'name,email,details,topic') throw new Error('second drag did not reorder: ' + (await questionKeys()).join());
+      await waitFor("document.querySelector('#builder-live').innerText.includes('display rule was removed')", 'removed rule announced');
+      if (await evaluate("document.querySelector('[data-question-row=\"2\"]').innerText.includes('Logic')")) throw new Error('rule pointing at a later question was kept');
+      if (!(await evaluate("[...document.querySelectorAll('.toast')].some(toast => toast.innerText.includes('display rule was removed'))"))) throw new Error('removed rule not shown to sighted users');
+    } finally { await evaluate('delete document.body.dataset.dirty'); }
+    await open(`/forms/${formId}`, "document.querySelector('[data-question-key=\"details\"]')");
+    if ((await questionKeys()).join() !== original.join()) throw new Error('an unsaved drag changed the saved order');
+  });
   await step('form builder: logic in plain words, keyed duplicate, first-match routing explained', async () => {
-    await open(`/forms/${formId}`, "document.querySelector('#fields [data-logic-sentence]')");
+    await open(`/forms/${formId}`, "document.querySelector('#fields [data-prop=label]') && document.querySelector('[data-question-key=\"details\"]')");
+    await selectQuestion('details');
     const sentence = await evaluate("document.querySelector('#fields [data-logic-sentence]').textContent");
     if (sentence !== 'Shown only when “What can we help with?” is “Something else”.') throw new Error('unexpected logic sentence: ' + sentence);
+    await selectQuestion('topic');
     await fill('[data-index="2"] [data-prop="label"]', 'What brings you here?');
+    await selectQuestion('details');
     if (!(await evaluate("document.querySelector('#fields [data-logic-sentence]').textContent.includes('What brings you here?')"))) throw new Error('logic sentence does not follow the edited label');
-    const before = await evaluate("document.querySelectorAll('#fields .field-editor').length");
+    const before = (await questionKeys()).length;
+    await selectQuestion('topic');
     await click('[data-index="2"] [data-duplicate]');
     if (!(await focused('[data-index="3"] [data-prop="label"]'))) throw new Error('duplicate does not focus the copy');
-    const keys = await evaluate("[...document.querySelectorAll('#fields [data-prop=\"id\"]')].map(input => input.value)");
+    const keys = await questionKeys();
     if (keys.length !== before + 1 || new Set(keys).size !== keys.length) throw new Error('duplicate did not create a uniquely keyed copy: ' + keys.join(','));
     await click('[data-index="3"] [data-remove]');
     await evaluate("document.querySelector('#routing details').open = true");
@@ -414,52 +502,52 @@ try {
     await click('#save');
     await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'saved after logic checks');
   });
-  await step('form builder: section index keeps edits, moves focus, marks the current section and never overlaps', async () => {
+  await step('form builder: top navigation keeps edits, moves focus, shows one surface and stays in view', async () => {
     await open(`/forms/${formId}`, "document.querySelector('#builder-index [data-section]') && document.querySelector('#fields [data-prop=label]')");
     await fill('#f-title', 'Unsaved index title');
     const path = await evaluate('location.pathname + location.search + location.hash');
     const key = async (name, code) => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: name, code: name, windowsVirtualKeyCode: code }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: name, code: name, windowsVirtualKeyCode: code }); };
     const enter = () => key('Enter', 13);
+    const shown = selector => evaluate(`document.querySelector('${selector}').getClientRects().length > 0`);
     try {
-    // Real Tab presses: the index follows the builder actions and every link shows a focus ring.
-    await evaluate("document.querySelector('#delete-form').focus()");
-    for (const section of ['share', 'readiness', 'routing', 'settings', 'questions', 'preview']) {
+    // Real Tab presses: the navigation follows the breadcrumb and every link shows a focus ring.
+    await evaluate("document.querySelector('.builder-crumbs a').focus()");
+    for (const section of ['questions', 'workflow', 'settings', 'share']) {
       await key('Tab', 9);
-      if (!(await evaluate(`document.activeElement.dataset.section === '${section}' && getComputedStyle(document.activeElement).outlineStyle !== 'none'`))) throw new Error(`Tab does not reach the ${section} index link with visible focus`);
+      if (!(await evaluate(`document.activeElement.dataset.section === '${section}' && getComputedStyle(document.activeElement).outlineStyle !== 'none'`))) throw new Error(`Tab does not reach the ${section} link with visible focus`);
     }
-    for (const [section, heading] of [['share', '#share-heading'], ['readiness', '#readiness-heading'], ['routing', '#routing summary'], ['settings', '#settings-heading'], ['questions', '#questions-heading'], ['preview', '#preview-heading']]) {
+    for (const [section, heading, surface, hidden] of [['share', '#share-heading', '#share-panel', '.question-canvas'], ['settings', '#settings-heading', '#routing', '#share-panel'], ['questions', '#questions-heading', '.question-canvas', '#settings']]) {
       await evaluate(`document.querySelector('#builder-index [data-section="${section}"]').focus()`);
       await enter();
-      if (!(await focused(heading))) throw new Error(`index link ${section} does not move focus to ${heading}`);
+      if (!(await focused(heading))) throw new Error(`link ${section} does not move focus to ${heading}`);
       if (!(await evaluate(`document.querySelector('#builder-index [data-section="${section}"]').getAttribute('aria-current') === 'location'`))) throw new Error(`${section} not marked current`);
+      if (!(await shown(surface)) || (await shown(hidden))) throw new Error(`${section} does not show exactly its own surface`);
     }
-    if ((await evaluate('location.pathname + location.search + location.hash')) !== path || (await evaluate("document.querySelector('#f-title').value")) !== 'Unsaved index title' || !(await text()).includes('Unsaved changes')) throw new Error('the index changed the address or lost unsaved edits');
-    if (!(await evaluate("document.querySelector('.builder-index-state').textContent === 'Unsaved changes'"))) throw new Error('save state not mirrored beside the index');
-    // Desktop: the index stays at the top and the sticky preview starts below it.
-    await click('#builder-index [data-section="questions"]');
-    await evaluate('window.scrollBy(0, 400)');
-    await new Promise(resolve => setTimeout(resolve, 150));
-    const desk = await evaluate("(() => { const i = document.querySelector('#builder-index').getBoundingClientRect(); const p = document.querySelector('#builder-preview').getBoundingClientRect(); return { top: Math.round(i.top), clear: p.top >= i.bottom - 1, current: document.querySelector('#builder-index [aria-current]')?.dataset.section }; })()");
-    if (desk.top !== 0 || !desk.clear || desk.current !== 'questions') throw new Error('sticky index overlaps or mis-marks: ' + JSON.stringify(desk));
-    await layoutCheck('form builder section index', '#questions');
-    // Phone: the index scrolls with the page, and Preview switches to the preview panel.
+    if ((await evaluate('location.pathname + location.search + location.hash')) !== path || (await evaluate("document.querySelector('#f-title').value")) !== 'Unsaved index title' || !(await text()).includes('Unsaved changes')) throw new Error('the navigation changed the address or lost unsaved edits');
+    if (await evaluate("document.querySelector('.builder-topbar').getBoundingClientRect().top !== 0")) throw new Error('top bar not in view on a wide screen');
+    await layoutCheck('form builder top navigation', '#questions');
+    // Design opens beside the canvas and closes back to its button.
+    await click('#open-design');
+    if (!(await shown('#design-panel')) || !(await focused('#design-heading'))) throw new Error('Design does not open its panel');
+    await click('[data-design-close]');
+    if (await shown('#design-panel')) throw new Error('Design does not close');
+    // Phone: the bar scrolls away, and the Preview switch shows the preview.
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
-    await click('#builder-index [data-section="preview"]');
-    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display === 'none' && getComputedStyle(document.querySelector('.builder-preview')).display !== 'none'")) || !(await focused('#preview-heading'))) throw new Error('phone Preview link does not show the preview');
+    await click('.mobile-switch [data-view="preview"]');
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display === 'none' && getComputedStyle(document.querySelector('.builder-preview')).display !== 'none'"))) throw new Error('phone switch does not show the preview');
     await click('#builder-index [data-section="questions"]');
-    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display !== 'none'")) || !(await focused('#questions-heading'))) throw new Error('phone Questions link does not return to the editor');
-    if (await evaluate("getComputedStyle(document.querySelector('#builder-index')).position === 'sticky'")) throw new Error('index should not be sticky on phones');
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display !== 'none'")) || !(await focused('#questions-heading'))) throw new Error('phone Content link does not return to the editor');
+    if (await evaluate("getComputedStyle(document.querySelector('.builder-topbar')).position === 'sticky'")) throw new Error('top bar should not be sticky on phones');
     } finally {
       await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
       await evaluate('delete document.body.dataset.dirty');
     }
   });
   await step('form builder: question type changes are safe, explained, cancellable and never retype a published key', async () => {
-    await open(`/forms/${formId}`, "document.querySelector('#fields [data-type]')");
+    await open(`/forms/${formId}`, "document.querySelector('#fields [data-type]') && document.querySelector('[data-question-key=\"details\"]')");
     try {
-    const indexOf = key => evaluate(`[...document.querySelectorAll('#fields [data-prop="id"]')].findIndex(input => input.value === '${key}')`);
-    const types = () => evaluate("JSON.stringify([...document.querySelectorAll('#fields [data-type]')].map(select => select.value))");
-    const choose = async (key, type) => { const i = await indexOf(key); await evaluate(`(() => { const select = document.querySelector('[data-index="${i}"] [data-type]'); select.focus(); select.value = '${type}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`); return i; };
+    const types = () => evaluate("JSON.stringify([...document.querySelectorAll('[data-question-type]')].map(row => row.dataset.questionType))");
+    const choose = async (key, type) => { const i = await selectQuestion(key); await evaluate(`(() => { const select = document.querySelector('[data-index="${i}"] [data-type]'); select.focus(); select.value = '${type}'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`); return i; };
     const before = await types();
     // Published long text cannot become short text in place: a replacement is offered; cancelling changes nothing.
     let i = await choose('details', 'short_text');
@@ -515,7 +603,7 @@ try {
       await waitFor("document.querySelector('#fields [data-media-file]')", 'media form builder');
       const mediaFormId = await evaluate("location.pathname.split('/')[2]");
       const mediaSlug = app.db.get('SELECT slug FROM forms WHERE id = ?', mediaFormId).slug;
-      const row = key => evaluate(`[...document.querySelectorAll('#fields [data-prop="id"]')].findIndex(input => input.value === '${key}')`);
+      const row = selectQuestion;
       // Image on the first question: real upload, metadata stripped on the server, alt text required.
       let i = await row('name');
       await setFile(`[data-index="${i}"] [data-media-file]`);
@@ -543,11 +631,14 @@ try {
       await waitFor(`document.querySelector('[data-index="${i}"] [data-media-title]')`, 'video added');
       await click('#save');
       await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'media saved');
+      await row('name');
       await evaluate("document.querySelector('#fields [data-media-alt]').scrollIntoView({ block: 'center' })");
       await layoutCheck('form builder media editor', '#questions');
-      // Image failure in the preview falls back to text.
+      // Image failure in the preview falls back to text. Shown first: a lazy image in a hidden panel never loads.
+      await click('.mobile-switch [data-view="preview"]');
       await evaluate("document.querySelector('#preview [data-media-image] img').src = '/api/public/form-assets/' + 'f'.repeat(32)");
       await waitFor("!document.querySelector('#preview .q-media-failed').hidden", 'image fallback');
+      await click('.mobile-switch [data-view="edit"]');
       await click('#publish');
       await waitFor("document.querySelector('#share-link') && document.querySelector('#builder-status').innerText.includes('Live · version 1')", 'published with media');
       // The question image and the option picture are the same file, so the server stores and records it once.
@@ -614,6 +705,985 @@ try {
       await layoutCheck(`form receipt ${mode}`);
     });
   }
+  await step('contact form acceptance: add, reorder, focus, jump, endings, preview sizes, publish, keyboard respondent, inbox and CSV', async () => {
+    const press = async (name, code, modifiers = 0) => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: name, code: code.startsWith('Key') || code.startsWith('Arrow') ? code : name, windowsVirtualKeyCode: name.length === 1 ? name.toUpperCase().charCodeAt(0) : Number(code.replace(/\D/g, '')) || { Enter: 13, Escape: 27, ArrowDown: 40, ArrowUp: 38 }[name], text: name === 'Enter' ? '\r' : undefined, modifiers }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: name, code: code.startsWith('Key') || code.startsWith('Arrow') ? code : name, modifiers }); };
+    const type = value => send('Input.insertText', { text: value });
+    await open('/forms', "document.querySelector('#new-form')");
+    await click('#new-form');
+    await click('[data-template="blank"]');
+    await waitFor("document.querySelector('[data-question-key=\"name\"]')", 'blank builder');
+    const id = await evaluate("location.pathname.split('/')[2]");
+    try {
+      // Reopened, without the one-time "Draft created" notice: the question is on the first screen.
+      await open(`/forms/${id}`, "document.querySelector('[data-question-key=\"name\"]')");
+      if (await evaluate("getComputedStyle(document.querySelector('#app-sidebar')).display !== 'none'")) throw new Error('the workspace sidebar still shows inside the editor');
+      const panes = await evaluate("(() => { const box = selector => document.querySelector(selector).getBoundingClientRect(); const rail = box('.question-sidebar'); const tools = box('.builder-toolbar'); const canvas = box('.canvas-frame'); const inspector = box('.question-settings'); const label = box('#fields [data-prop=\"label\"]'); return { top: box('.builder-topbar').height, rail: rail.width, inspector: inspector.width, toolbar: tools.height, railTop: rail.top, toolsTop: tools.top, inspectorTop: inspector.top, ratio: canvas.width / canvas.height, labelBottom: label.bottom, height: innerHeight, scrolls: document.documentElement.scrollHeight > innerHeight }; })()");
+      // Measured from the reference captures at 1280 px, in CSS pixels.
+      if (panes.top !== 56 || panes.rail !== 256 || panes.inspector !== 256 || panes.toolbar !== 49 || panes.railTop !== 56 || panes.toolsTop !== 56 || panes.inspectorTop !== 56 || Math.abs(panes.ratio - 16 / 9) > 0.03 || panes.labelBottom > panes.height - 100 || panes.scrolls) throw new Error('editor layout drifted: ' + JSON.stringify(panes));
+      await fill('#f-title', 'Contact us');
+      // The add-content picker: keyboard open, arrows, Escape returns focus; adding focuses the new question.
+      await selectQuestion('name');
+      await evaluate("document.querySelector('#add-field').focus()");
+      await press('Enter', 'Enter');
+      if ((await evaluate("document.querySelector('#add-field').getAttribute('aria-expanded')")) !== 'true' || !(await focused('[data-add-type="contact_info"]'))) throw new Error('picker did not open with focus on its first item');
+      await press('ArrowDown', 'ArrowDown');
+      if (!(await focused('[data-add-type="email"]'))) throw new Error('arrow key did not move through the picker');
+      await press('Escape', 'Escape');
+      if (!(await evaluate("document.querySelector('#add-menu').hidden")) || !(await focused('#add-field'))) throw new Error('Escape did not close the picker and return focus');
+      await click('#add-field');
+      await click('[data-add-type="phone"]');
+      if (!(await focused('[data-index="1"] [data-prop="label"]'))) throw new Error('adding did not focus the new question');
+      if ((await questionKeys())[0] !== 'name' || (await evaluate("document.querySelector('[data-question-index=\"1\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('new question not added below and selected');
+      await fill('[data-index="1"] [data-prop="label"]', 'Phone number');
+      const phoneKey = (await questionKeys())[1];
+      await waitFor("document.querySelector('#builder-live').innerText.includes('added at position 2')", 'add announced');
+      // Move, duplicate and delete keep focus on the question being worked on.
+      await click('[data-index="1"] [data-move="1"]');
+      if ((await questionKeys()).join() !== `name,email,${phoneKey},topic,details` || !(await focused('[data-index="2"] [data-move="1"]'))) throw new Error('move lost order or focus');
+      await click('[data-index="2"] [data-duplicate]');
+      if (!(await focused('[data-index="3"] [data-prop="label"]')) || (await questionKeys()).length !== 6) throw new Error('duplicate lost focus');
+      await click('[data-index="3"] [data-remove]');
+      if (!(await focused('[data-index="3"] [data-remove]')) || (await questionKeys()).join() !== `name,email,${phoneKey},topic,details`) throw new Error('delete lost focus');
+      await selectQuestion(phoneKey);
+      await click('[data-index="2"] [data-prop="required"]');
+      // Endings and a jump to one: the rule reads in plain words and appears in the outline.
+      await click('#add-ending');
+      if (!(await focused('[data-ending-prop="title"]'))) throw new Error('adding an ending did not focus its title');
+      await fill('[data-ending-prop="title"]', 'Thanks, {{name}}');
+      await click('#add-ending');
+      await fill('[data-ending-prop="title"]', 'Sales will call you');
+      await fill('[data-ending-prop="message"]', 'Expect a reply within a day.');
+      if ((await evaluate("document.querySelectorAll('[data-ending-index]').length")) !== 2 || !(await evaluate("document.querySelector('[data-ending-index=\"0\"]').innerText.includes('Default')"))) throw new Error('endings missing from the outline');
+      await selectQuestion('topic');
+      await click('[data-jump-add]');
+      if (!(await focused('[data-jump="0"] [data-jump-field]'))) throw new Error('adding a jump did not focus it');
+      const salesEnding = await evaluate("[...document.querySelectorAll('[data-jump-to] option')].find(option => option.textContent === 'Sales will call you').value");
+      await evaluate(`(() => { const select = document.querySelector('[data-jump-to]'); select.value = ${JSON.stringify(salesEnding)}; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      if (!(await focused('[data-jump="0"] [data-jump-to]')) || !(await evaluate("document.querySelector('[data-jump-sentence]').textContent.includes('Sales will call you')"))) throw new Error('jump target not applied');
+      if (!(await evaluate("document.querySelector('[data-question-key=\"topic\"]').innerText.includes('Logic')"))) throw new Error('jump not marked in the outline');
+      // Preview at both sizes, in the real renderer, stores nothing.
+      const responsesBefore = app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count;
+      await click('.mobile-switch [data-view="preview"]');
+      await click('[data-device="mobile"]');
+      if (await evaluate("document.querySelector('#preview').getBoundingClientRect().width > 375")) throw new Error('mobile preview is wider than a phone');
+      if ((await evaluate("document.querySelector('[data-device=\"mobile\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('device state not exposed');
+      await click('[data-device="desktop"]');
+      if (await evaluate("document.querySelector('#preview').getBoundingClientRect().width <= 375")) throw new Error('desktop preview did not widen');
+      await click('.mobile-switch [data-view="edit"]');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'contact form saved');
+      if (app.db.get('SELECT published_version FROM forms WHERE id = ?', id).published_version !== null) throw new Error('saving published the form');
+      await layoutCheck('form editor contact form');
+      // A wider layout viewport also widens innerWidth, which hides overflow from the width check.
+      await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const phoneWidth = await evaluate('window.innerWidth');
+      const canvasTop = await evaluate("document.querySelector('.question-canvas').getBoundingClientRect().top");
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      if (phoneWidth !== 375) throw new Error(`phone layout viewport grew to ${phoneWidth}px`);
+      if (canvasTop > 340) throw new Error(`the canvas starts ${canvasTop}px down on a phone`);
+      await click('#publish');
+      await waitFor("document.querySelector('#share-panel #share-link')", 'contact form published');
+      if (!(await focused('#share-heading')) || (await evaluate("getComputedStyle(document.querySelector('#share-panel')).display === 'none'"))) throw new Error('publishing did not land on the share surface');
+      const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
+      if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count !== responsesBefore) throw new Error('editing created a response');
+
+      // Respondent: keyboard only, one question at a time.
+      await open(`/f/${slug}?mode=conversational`, "document.querySelector('#form-root form')");
+      if (!(await waitFor("document.activeElement.id === 'q-name'", 'first question focused').then(() => true, () => false))) await evaluate("document.querySelector('#q-name').focus()");
+      await type('Mia');
+      await press('Enter', 'Enter');
+      await waitFor("document.activeElement.id === 'q-email'", 'email question after Enter');
+      await type('not an address');
+      await press('Enter', 'Enter');
+      await waitFor("document.querySelector('.field-error') && document.activeElement.id === 'q-email'", 'email validation keeps focus');
+      await evaluate("document.querySelector('#q-email').select()");
+      await type('mia@example.com');
+      await press('Enter', 'Enter');
+      await waitFor(`document.activeElement.id === 'q-${phoneKey}'`, 'phone question');
+      await click('[data-back]');
+      await waitFor("document.activeElement.id === 'q-email' && document.activeElement.value === 'mia@example.com'", 'back keeps the answer and focus');
+      await press('Enter', 'Enter');
+      await waitFor(`document.activeElement.id === 'q-${phoneKey}'`, 'phone again');
+      await type('+91 98765 43210');
+      await press('Enter', 'Enter');
+      await waitFor("document.querySelector('[name=topic]')", 'topic question');
+      // C leads on to a follow-up question; going back to A jumps to the ending and drops that answer.
+      await press('c', 'KeyC');
+      await waitFor("document.querySelector('#q-details')", 'letter key chose the option and moved on');
+      await type('A long story');
+      await click('[data-back]');
+      await waitFor("document.querySelector('[name=topic]')", 'back to topic');
+      await press('a', 'KeyA');
+      await waitFor("document.querySelector('[name=topic]:checked')?.value === 'new_project' && document.querySelector('#form-root [type=submit]').textContent.includes('Submit')", 'jump makes this the last question');
+      await press('Enter', 'Enter');
+      await waitFor("document.querySelector('.receipt')", 'receipt');
+      const receipt = await evaluate("document.querySelector('.receipt').innerText");
+      if (!receipt.includes('Sales will call you') || !receipt.includes('Expect a reply within a day.') || !receipt.includes('Receipt')) throw new Error('ending or receipt missing: ' + receipt);
+
+      // Host: the stored response, the inbox and the CSV agree, with no answer from the abandoned path.
+      const stored = JSON.parse(app.db.get('SELECT answers FROM responses WHERE form_id = ?', id).answers);
+      if (stored.details !== undefined || stored.name !== 'Mia' || stored[phoneKey] !== '+91 98765 43210' || stored.topic !== 'new_project') throw new Error('stored answers wrong: ' + JSON.stringify(stored));
+      await open(`/forms/${id}/responses`, "document.querySelector('table')");
+      if (!(await text()).includes('mia@example.com')) throw new Error('response not in the inbox');
+      const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${id}/responses.csv')).then(r => r.text())`);
+      if (!csv.includes('mia@example.com') || !csv.includes('Phone number') || csv.includes('A long story')) throw new Error('CSV wrong: ' + csv.slice(0, 300));
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('form themes: create, apply, preview on desktop and mobile, publish; later edits leave the published look intact', async () => {
+    const paint = selector => evaluate(`(() => { const style = getComputedStyle(document.querySelector(${JSON.stringify(selector)})); return { background: style.backgroundColor, font: style.fontFamily }; })()`);
+    const colour = hex => `rgb(${[1, 3, 5].map(at => parseInt(hex.slice(at, at + 2), 16)).join(', ')})`;
+    const setColour = (key, value) => fill(`#theme-${key}`, value);
+    const clickReal = async selector => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`); await click(selector); };
+    await open('/forms', "document.querySelector('#new-form')");
+    await click('#new-form');
+    await click('[data-template="blank"]');
+    await waitFor("document.querySelector('[data-question-key=\"name\"]')", 'theme form builder');
+    const id = await evaluate("location.pathname.split('/')[2]");
+    const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
+    const responses = () => app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count;
+    const liveDefinition = async () => (await (await fetch(`${base}/api/public/forms/${slug}`)).json()).definition;
+    try {
+      // The Design panel opens beside the canvas, with My themes and the Gallery.
+      await clickReal('#open-design');
+      await waitFor("document.querySelector('[data-theme-create]')", 'My themes');
+      if (!(await focused('#design-heading')) || (await evaluate("document.querySelector('#open-design').getAttribute('aria-expanded')")) !== 'true') throw new Error('Design did not open with focus on its heading');
+      if (!(await evaluate("(() => { const panel = document.querySelector('#design-panel').getBoundingClientRect(); const canvas = document.querySelector('.canvas-frame').getBoundingClientRect(); return panel.left >= canvas.right && canvas.width > 300; })()"))) throw new Error('the Design panel does not sit beside the canvas');
+      await click('#design-tab-gallery');
+      if ((await evaluate("document.querySelectorAll('[data-preset-apply]').length")) < 6 || !(await focused('#design-tab-gallery'))) throw new Error('Gallery has no presets, or lost focus');
+      if (!(await evaluate("(() => { const mini = document.querySelector('[data-preset-id=\"harbour\"] .theme-mini'); return getComputedStyle(mini).backgroundColor === 'rgb(16, 36, 58)' && getComputedStyle(mini.querySelector('.theme-mini-button')).backgroundColor === 'rgb(244, 185, 66)'; })()"))) throw new Error('Gallery card does not show its colours');
+      await layoutCheck('form design gallery');
+      // A preset applies at once to the canvas and the preview, without saving or publishing anything.
+      await click('[data-preset-id="harbour"] [data-preset-apply]');
+      if ((await paint('.canvas-frame')).background !== colour('#10243a')) throw new Error('preset did not reach the canvas');
+      if (!(await text()).includes('Unsaved changes')) throw new Error('applying a theme did not mark the draft unsaved');
+      // Create a theme: every change shows on the canvas at once; the draft is what changes, not anything live.
+      await click('#design-tab-mine');
+      await click('[data-theme-create]');
+      if (!(await focused('#theme-editor-heading'))) throw new Error('Create theme did not focus its form');
+      await fill('#theme-name', 'Acme brand');
+      await setColour('background', '#123456');
+      await setColour('question', '#fff8e7');
+      await setColour('answer', '#d9e8ff');
+      await setColour('button', '#ff7a00');
+      await setColour('button_text', '#111111');
+      await fill('#theme-font', 'serif');
+      const canvas = await paint('.canvas-frame');
+      if (canvas.background !== colour('#123456') || !/serif/i.test(canvas.font)) throw new Error('theme edits did not reach the canvas: ' + JSON.stringify(canvas));
+      if ((await evaluate("getComputedStyle(document.querySelector('.canvas-question')).color")) !== colour('#fff8e7') || (await evaluate("getComputedStyle(document.querySelector('.canvas-button')).backgroundColor")) !== colour('#ff7a00')) throw new Error('question text or button colour not on the canvas');
+      // A weak pair is named, not silently accepted.
+      await setColour('question', '#1a3c5e');
+      await waitFor("document.querySelector('[data-theme-warnings]').innerText.includes('Question text')", 'contrast warning');
+      await setColour('question', '#fff8e7');
+      if (await evaluate("document.querySelector('[data-theme-warnings]').innerText.trim().length > 0")) throw new Error('warning did not clear');
+      await layoutCheck('form theme editor', '#design-panel');
+      await click('[data-theme-form] [type="submit"]');
+      await waitFor("document.querySelector('[data-theme-apply]')", 'theme saved');
+      const saved = app.db.get("SELECT id FROM form_themes WHERE name = 'Acme brand'");
+      if (!saved) throw new Error('theme not stored for the workspace');
+      if (app.db.get('SELECT published_version FROM forms WHERE id = ?', id).published_version !== null) throw new Error('theme work published the form');
+      // Device view reshapes the canvas only; Preview is a separate run that stores nothing, at either size.
+      await click('[data-device="mobile"]');
+      const frame = await evaluate("(() => { const box = document.querySelector('.canvas-frame').getBoundingClientRect(); return { width: box.width, height: box.height, shown: getComputedStyle(document.querySelector('.builder-edit')).display !== 'none' }; })()");
+      if (frame.width > 415 || frame.height <= frame.width || !frame.shown) throw new Error('mobile device view did not reshape the canvas: ' + JSON.stringify(frame));
+      if ((await paint('.canvas-frame')).background !== colour('#123456')) throw new Error('theme lost in mobile device view');
+      await click('.mobile-switch [data-view="preview"]');
+      await waitFor("document.querySelector('#preview form')", 'preview shown');
+      const mobile = await evaluate("(() => { const box = document.querySelector('#preview').getBoundingClientRect(); return { width: box.width, background: getComputedStyle(document.querySelector('#preview')).backgroundColor, button: getComputedStyle(document.querySelector('#preview .btn-primary')).backgroundColor, question: getComputedStyle(document.querySelector('#preview .q-label')).color }; })()");
+      if (mobile.width > 375 || mobile.background !== colour('#123456') || mobile.button !== colour('#ff7a00') || mobile.question !== colour('#fff8e7')) throw new Error('mobile preview not themed: ' + JSON.stringify(mobile));
+      await click('[data-device="desktop"]');
+      const desktop = await evaluate("(() => { const box = document.querySelector('#preview').getBoundingClientRect(); return { width: box.width, background: getComputedStyle(document.querySelector('#preview')).backgroundColor }; })()");
+      if (desktop.width <= 375 || desktop.background !== colour('#123456')) throw new Error('desktop preview not themed: ' + JSON.stringify(desktop));
+      await fill('#preview #q-name', 'Preview person');
+      await fill('#preview #q-email', 'preview@example.com');
+      await evaluate("const o = document.querySelector('#preview [name=topic][value=support]'); o.checked = true; o.dispatchEvent(new Event('change', { bubbles: true }))");
+      await click('#preview [type="submit"]');
+      await waitFor("document.querySelector('#preview').innerText.includes('Preview complete')", 'preview run finished');
+      if (responses() !== 0) throw new Error('preview stored a response');
+      await click('.mobile-switch [data-view="edit"]');
+      await click('[data-design-close]');
+      if (!(await focused('#open-design')) || (await evaluate("getComputedStyle(document.querySelector('.question-settings')).display === 'none'"))) throw new Error('closing Design did not restore the inspector and focus');
+      // Save and publish: the respondent sees exactly this look.
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'themed draft saved');
+      await click('#publish');
+      await waitFor("document.querySelector('#share-panel #share-link')", 'themed form published');
+      const published = await liveDefinition();
+      if (published.theme?.background !== '#123456' || published.theme.source !== undefined) throw new Error('public form has the wrong theme payload: ' + JSON.stringify(published.theme));
+      const seePublic = async () => { await evaluate('delete document.body.dataset.dirty'); await open(`/f/${slug}`, "document.querySelector('#form-root form')"); return evaluate("(() => { const page = getComputedStyle(document.querySelector('.form-page')); return { background: page.backgroundColor, font: page.fontFamily, question: getComputedStyle(document.querySelector('#form-root .q-label')).color, button: getComputedStyle(document.querySelector('#form-root .btn-primary')).backgroundColor }; })()"); };
+      const before = await seePublic();
+      if (before.background !== colour('#123456') || before.question !== colour('#fff8e7') || before.button !== colour('#ff7a00') || !/serif/i.test(before.font)) throw new Error('published form not themed: ' + JSON.stringify(before));
+      await layoutCheck('themed public form');
+      // Later draft changes stay in the draft.
+      await open(`/forms/${id}`, "document.querySelector('#open-design')");
+      await click('#open-design');
+      await waitFor("document.querySelector('[data-theme-id] [data-theme-edit]')", 'theme listed');
+      await click('#design-tab-gallery');
+      await click('[data-preset-id="paper"] [data-preset-apply]');
+      if ((await paint('.canvas-frame')).background !== colour('#faf6ee')) throw new Error('second theme did not reach the draft canvas');
+      await click('[data-design-close]');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'draft ahead of live');
+      if (JSON.stringify(await seePublic()) !== JSON.stringify(before)) throw new Error('a saved draft changed the published look');
+      // Editing the reusable theme itself restyles nothing already saved or published.
+      await open(`/forms/${id}`, "document.querySelector('#open-design')");
+      await click('#open-design');
+      await waitFor("document.querySelector('[data-theme-id] [data-theme-edit]')", 'theme listed again');
+      await click(`[data-theme-id="${saved.id}"] [data-theme-edit]`);
+      await setColour('background', '#000000');
+      await click('[data-theme-form] [type="submit"]');
+      await waitFor(`document.querySelector('[data-theme-id="${saved.id}"]')`, 'theme edited');
+      await evaluate('delete document.body.dataset.dirty');
+      if (!JSON.parse(app.db.get('SELECT tokens FROM form_themes WHERE id = ?', saved.id).tokens).background.startsWith('#000000')) throw new Error('theme edit not stored');
+      if (JSON.stringify(await seePublic()) !== JSON.stringify(before) || (await liveDefinition()).theme.background !== '#123456') throw new Error('editing the reusable theme restyled the published form');
+      // Respondent can still submit the themed form.
+      await fill('#form-root #q-name', 'Themed person');
+      await fill('#form-root #q-email', 'themed@example.com');
+      await evaluate("const o = document.querySelector('#form-root [name=topic][value=support]'); o.checked = true; o.dispatchEvent(new Event('change', { bubbles: true }))");
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'themed receipt');
+      if (responses() !== 1) throw new Error('themed response not stored exactly once');
+      if ((await evaluate("getComputedStyle(document.querySelector('.form-page')).backgroundColor")) !== colour('#123456')) throw new Error('receipt lost the theme');
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('Contact Info page: picker, outline, keyboard reorder and collapse, one screen, invalid focus, Back, preview, branching, publish, inbox and CSV', async () => {
+    const press = async (name, code, vk) => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: name, code, windowsVirtualKeyCode: vk, text: name === 'Enter' ? '\r' : undefined }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: name, code, windowsVirtualKeyCode: vk }); };
+    const type = value => send('Input.insertText', { text: value });
+    const MEMBERS = ['first_name', 'last_name', 'phone', 'email', 'company'];
+    await open('/forms', "document.querySelector('#new-form')");
+    await click('#new-form');
+    await click('[data-template="blank"]');
+    await waitFor("document.querySelector('[data-question-key=\"topic\"]')", 'page form builder');
+    const id = await evaluate("location.pathname.split('/')[2]");
+    const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
+    const responses = () => app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count;
+    const memberKeys = () => evaluate("[...document.querySelectorAll('.question-row.is-member')].map(row => row.dataset.questionKey)");
+    // Selecting a question on a page follows its focus event, which an unfocused headless page does not fire.
+    await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    try {
+      // The starter's own name and email keep their keys; the preset never reuses one.
+      await selectQuestion('topic');
+      await click('#add-field');
+      await click('[data-add-type="contact_info"]');
+      await waitFor("document.querySelector('.question-row.is-page')", 'page in the outline');
+      const pageKey = await evaluate("document.querySelector('.question-row.is-page').dataset.questionKey");
+      const members = await memberKeys();
+      if (pageKey !== 'contact_info' || members.join() !== 'first_name,last_name,phone,email_2,company') throw new Error('unexpected keys: ' + pageKey + ' ' + members.join());
+      if (!(await focused('[data-prop="label"].canvas-question')) || (await evaluate('document.activeElement.value')) !== 'Contact Info') throw new Error('adding the page did not focus its title');
+      await waitFor("document.querySelector('#builder-live').innerText.includes('Contact Info page added with 5 questions')", 'page announced');
+      if ((await evaluate("document.querySelectorAll('.canvas-member').length")) !== 5) throw new Error('the canvas does not show the whole page');
+      await fill('.canvas-question', 'How can we reach you?');
+      await fill('.canvas-description', 'We only use this to reply.');
+      if (!(await evaluate("document.querySelector('.question-row.is-page').innerText.includes('How can we reach you?')"))) throw new Error('page title not in the outline');
+      if (!(await evaluate("document.querySelector('[data-inspector=\"logic\"]') && !document.querySelector('.question-settings [data-type]')"))) throw new Error('page settings show question settings');
+
+      // Each question is selected and set on its own, without losing the page view.
+      await evaluate("document.querySelector('.canvas-member[data-member] [data-prop=\"label\"]').focus()");
+      const firstAt = await evaluate("document.querySelector('[data-question-key=\"first_name\"]').dataset.questionRow");
+      if ((await evaluate(`document.querySelector('[data-question-index="${firstAt}"]').getAttribute('aria-pressed')`)) !== 'true' || (await evaluate("document.querySelector('.question-settings [data-prop=\"id\"]').value")) !== 'first_name') throw new Error('focusing a question on the page did not select it');
+      if (!(await focused('.canvas-member [data-prop="label"]')) || (await evaluate("document.querySelectorAll('.canvas-member').length")) !== 5) throw new Error('selecting a question lost its place on the page');
+      await selectQuestion('company');
+      const companyAt = await evaluate("document.querySelector('[data-question-key=\"company\"]').dataset.questionRow");
+      const companyMark = () => evaluate(`Boolean(document.querySelector('.canvas-member[data-member="${companyAt}"] .required-mark'))`);
+      if (await companyMark()) throw new Error('Company should start optional');
+      await click('.question-settings [data-prop="required"]');
+      if (!(await companyMark()) || !(await focused('.question-settings [data-prop="required"]')) || (await evaluate("document.querySelector('.canvas-member[data-member=\"' + document.querySelector('[data-question-key=\"phone\"]').dataset.questionRow + '\"] .required-mark') !== null"))) throw new Error('required did not apply to that question alone');
+      await click('.question-settings [data-prop="required"]');
+      if (await companyMark()) throw new Error('required did not clear');
+
+      // Keyboard reorder: within the page, then out and back; a page moves whole.
+      await selectQuestion('last_name');
+      await evaluate("document.querySelector('.canvas-tools [data-move=\"1\"]').focus()");
+      await press('Enter', 'Enter', 13);
+      if ((await memberKeys()).join() !== 'first_name,phone,last_name,email_2,company') throw new Error('keyboard move within the page failed: ' + (await memberKeys()).join());
+      if (!(await focused('.canvas-tools [data-move="1"]'))) throw new Error('focus lost after moving within the page');
+      await waitFor("document.querySelector('#builder-live').innerText.includes('Moved to position')", 'move announced');
+      await click('.canvas-tools [data-move="-1"]');
+      if ((await memberKeys()).join() !== 'first_name,last_name,phone,email_2,company') throw new Error('move back failed');
+      await selectQuestion('contact_info');
+      await click('.canvas-tools [data-move="-1"]');
+      const whole = await evaluate("[...document.querySelectorAll('[data-question-key]')].map(row => row.dataset.questionKey).join()");
+      if (whole !== 'name,email,contact_info,first_name,last_name,phone,email_2,company,topic,details') throw new Error('page did not move whole: ' + whole);
+
+      // Collapse from the keyboard; a hidden question hands its selection to the page.
+      await selectQuestion('phone');
+      await evaluate("document.querySelector('[data-page-toggle]').focus()");
+      await press('Enter', 'Enter', 13);
+      if ((await memberKeys()).length !== 0 || (await evaluate("document.querySelector('[data-page-toggle]').getAttribute('aria-expanded')")) !== 'false' || !(await focused('[data-page-toggle]'))) throw new Error('page did not collapse with focus kept');
+      if ((await evaluate("document.querySelector('.question-row.is-page button.question-select').getAttribute('aria-pressed')")) !== 'true') throw new Error('selection did not pass to the collapsed page');
+      await press('Enter', 'Enter', 13);
+      if ((await memberKeys()).length !== 5) throw new Error('page did not expand');
+
+      // Add while inside the page joins it; remove asks first, then a question goes on its own.
+      await selectQuestion('company');
+      await click('#add-field');
+      await click('[data-add-type="long_text"]');
+      if ((await memberKeys()).length !== 6) throw new Error('a question added inside the page did not join it');
+      await click('.canvas-tools [data-remove]');
+      if ((await memberKeys()).length !== 5 || !(await focused('.canvas-tools [data-remove]'))) throw new Error('removing a question lost focus or the page');
+
+      // Jumps: from the first question straight into the page, and from email past it.
+      const jump = async (key, value, target) => {
+        await selectQuestion(key);
+        await click('[data-jump-add]');
+        await fill('[data-jump="0"] [data-jump-op]', 'contains');
+        await fill('[data-jump="0"] [data-jump-value]', value);
+        await fill('[data-jump="0"] [data-jump-to]', target);
+      };
+      await jump('name', 'direct', 'group:contact_info');
+      await jump('email', 'skip.example', 'field:topic');
+      if (!(await evaluate("document.querySelector('[data-jump-sentence]').textContent.includes('What can we help with?')"))) throw new Error('jump past the page not described');
+      await selectQuestion('name');
+      if (!(await evaluate("document.querySelector('[data-jump-sentence]').textContent.includes('the page “How can we reach you?”')"))) throw new Error('jump into the page not described by its title');
+      await selectQuestion('email_2');
+      await layoutCheck('form editor contact info page');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'page saved');
+
+      // Preview in one-question-at-a-time mode: the page on one screen, invalid focus, Back keeps values, nothing stored.
+      await click('.mobile-switch [data-view="preview"]');
+      await evaluate("(() => { const select = document.querySelector('#preview-mode'); select.value = 'conversational'; select.dispatchEvent(new Event('change', { bubbles: true })); })()");
+      const advancePreview = async value => { await fill('#preview form input', value); await click('#preview [type="submit"]'); };
+      await advancePreview('Preview person');
+      await waitFor("document.querySelector('#preview #q-email')", 'preview email');
+      await advancePreview('preview@example.com');
+      await waitFor("document.querySelector('#preview .form-page-title')", 'preview page');
+      if ((await evaluate("document.querySelector('#preview .form-page-title').textContent")) !== 'How can we reach you?' || (await evaluate("document.querySelectorAll('#preview .question').length")) !== 5) throw new Error('preview does not show the whole page on one screen');
+      if (responses() !== 0) throw new Error('preview stored a response');
+      await click('.mobile-switch [data-view="edit"]');
+
+      await click('#publish');
+      await waitFor("document.querySelector('#share-panel #share-link')", 'page published');
+      await evaluate('delete document.body.dataset.dirty');
+
+      // Respondent, keyboard only.
+      await open(`/f/${slug}?mode=conversational`, "document.querySelector('#form-root form')");
+      await evaluate("document.querySelector('#q-name').focus()");
+      await type('Mia');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.activeElement.id === 'q-email'", 'email screen');
+      await type('mia@example.com');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('.form-page-title')", 'contact page screen');
+      if ((await evaluate("document.querySelectorAll('#form-root .question').length")) !== 5 || (await evaluate('document.activeElement.id')) !== 'q-first_name') throw new Error('the page is not one screen with focus on its first question');
+      if ((await evaluate("document.querySelector('#q-first_name').placeholder")) !== 'Asha') throw new Error('placeholder missing');
+      if (!(await evaluate("document.querySelector('.form-page-help').textContent === 'We only use this to reply.'"))) throw new Error('page description missing');
+      // Two required questions are empty: both named, focus on the first.
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelectorAll('.field-error').length === 2", 'both required questions flagged');
+      if ((await evaluate('document.activeElement.id')) !== 'q-first_name' || (await evaluate("document.activeElement.getAttribute('aria-invalid')")) !== 'true') throw new Error('focus is not on the first invalid question');
+      await type('Mia');
+      await evaluate("document.querySelector('#q-last_name').focus()");
+      await type('Rao');
+      await evaluate("document.querySelector('#q-phone').focus()");
+      await type('+91 98765 43210');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelectorAll('.field-error').length === 1 && document.activeElement.id === 'q-email_2'", 'focus on the one still invalid');
+      await type('not an address');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.activeElement.id === 'q-email_2' && document.querySelector('.field-error')?.textContent.includes('valid email')", 'invalid email flagged');
+      await evaluate("document.querySelector('#q-email_2').select()");
+      await type('mia.rao@example.com');
+      await evaluate("document.querySelector('#q-company').focus()");
+      await type('Acme');
+      // Back keeps every value on the page, typed or not yet submitted.
+      await click('[data-back]');
+      await waitFor("document.activeElement.id === 'q-email'", 'back to email');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('.form-page-title')", 'forward to the page');
+      const kept = await evaluate("['first_name', 'last_name', 'phone', 'email_2', 'company'].map(key => document.querySelector('#q-' + key).value)");
+      if (kept.join('|') !== 'Mia|Rao|+91 98765 43210|mia.rao@example.com|Acme') throw new Error('Back lost values: ' + kept.join('|'));
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('[name=topic]')", 'after the page');
+      await click('[name="topic"][value="support"]');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'receipt after the page');
+
+      // Host: each answer is under its own key, and the inbox and CSV agree.
+      const stored = JSON.parse(app.db.get('SELECT answers FROM responses WHERE form_id = ?', id).answers);
+      for (const [key, value] of Object.entries({ first_name: 'Mia', last_name: 'Rao', phone: '+91 98765 43210', email_2: 'mia.rao@example.com', company: 'Acme' })) if (stored[key] !== value) throw new Error(`stored ${key} wrong: ${JSON.stringify(stored)}`);
+      await open(`/forms/${id}/responses`, "document.querySelector('table')");
+      if (!(await text()).includes('mia.rao@example.com')) throw new Error('contact answer not in the inbox');
+      const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${id}/responses.csv')).then(r => r.text())`);
+      for (const column of ['First name', 'Last name', 'Phone number', 'Company']) if (!csv.includes(`"${column}"`)) throw new Error('CSV lacks column ' + column);
+      if (!csv.includes('"Acme"') || !csv.includes('"mia.rao@example.com"') || csv.includes('How can we reach you?')) throw new Error('CSV wrong: ' + csv.slice(0, 400));
+
+      // Past the page: its required questions are not asked, and typed-then-abandoned answers are not stored.
+      const answersOf = email => JSON.parse(app.db.get("SELECT answers FROM responses WHERE form_id = ? AND answers LIKE ?", id, `%${email}%`).answers);
+      await open(`/f/${slug}?mode=conversational`, "document.querySelector('#form-root form')");
+      await evaluate("document.querySelector('#q-name').focus()");
+      await type('Bo');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.activeElement.id === 'q-email'", 'email before the page');
+      await type('bo@normal.example');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('#q-first_name')", 'page reached on this path');
+      await evaluate("document.querySelector('#q-first_name').focus()");
+      await type('Abandoned');
+      await click('[data-back]');
+      await waitFor("document.activeElement.id === 'q-email'", 'back to change the earlier answer');
+      await evaluate("document.querySelector('#q-email').select()");
+      await type('bo@skip.example');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('[name=topic]')", 'jump past the page');
+      if (await evaluate("Boolean(document.querySelector('.form-page-title'))")) throw new Error('page shown on a path that skips it');
+      await click('[name="topic"][value="support"]');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'receipt past the page');
+      const past = answersOf('bo@skip.example');
+      if (past.first_name !== undefined || past.email_2 !== undefined || past.name !== 'Bo') throw new Error('skipped answers were stored: ' + JSON.stringify(past));
+
+      // Into the page, past the question before it.
+      await open(`/f/${slug}?mode=conversational`, "document.querySelector('#form-root form')");
+      await evaluate("document.querySelector('#q-name').focus()");
+      await type('direct line');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('.form-page-title')", 'jump into the page');
+      if (await evaluate("Boolean(document.querySelector('#q-email'))")) throw new Error('the skipped question is on this screen');
+      await evaluate("document.querySelector('#q-first_name').focus()");
+      await type('Di');
+      await evaluate("document.querySelector('#q-email_2').focus()");
+      await type('di@into.example');
+      await press('Enter', 'Enter', 13);
+      await waitFor("document.querySelector('[name=topic]')", 'after the page, reached by a jump');
+      await click('[name="topic"][value="support"]');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'receipt into the page');
+      const into = answersOf('di@into.example');
+      if (into.email !== undefined || into.first_name !== 'Di') throw new Error('into-the-page answers wrong: ' + JSON.stringify(into));
+    } finally { await send('Emulation.setFocusEmulationEnabled', { enabled: false }); await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('Workflow map: draws existing jumps, edits them in place, reports unreached items, and shares one set of rules with Content', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    const created = await formApi('POST', '/forms', { definition: { title: 'Mapped form', description: '', presentation: 'conversational', submit_label: 'Send', endings: [{ id: 'thanks', title: 'Thanks' }, { id: 'sales', title: 'Sales will call' }], fields: [
+      { id: 'kind', type: 'single_choice', label: 'Who is this for?', required: true, options: [{ id: 'home', label: 'Home' }, { id: 'office', label: 'Office' }] },
+      { id: 'size', type: 'short_text', label: 'Team size?', required: false },
+      { id: 'notes', type: 'long_text', label: 'Notes', required: false }
+    ], logic: [{ field: 'kind', rules: [{ when: { field: 'kind', op: 'equals', value: 'home' }, to: { type: 'field', id: 'notes' } }] }] } });
+    if (!created.id) throw new Error('map fixture not created: ' + JSON.stringify(created));
+    const arcs = () => evaluate("[...document.querySelectorAll('#workflow-arcs [data-arc]')].map(path => path.dataset.arc).join()");
+    try {
+      await open(`/forms/${created.id}`, "document.querySelector('#builder-index [data-section=\"workflow\"]')");
+      await click('#builder-index [data-section="workflow"]');
+      if (!(await focused('#workflow-heading')) || !(await evaluate("document.querySelector('#workflow-nodes').getClientRects().length > 0 && document.querySelector('.question-canvas').getClientRects().length === 0"))) throw new Error('Workflow is not its own surface');
+      if ((await arcs()) !== 'kind>notes') throw new Error('existing jump not drawn: ' + await arcs());
+      if (!(await evaluate("document.querySelector('[data-map-node=\"kind\"] .workflow-rules').innerText.includes('When “Who is this for?” is “Home”, go to “Notes”')"))) throw new Error('jump not written in words');
+      if (!(await evaluate("document.querySelector('#workflow-summary').innerText.includes('1 jump rule') && document.querySelector('[data-map-node=\"ending:sales\"]').classList.contains('is-unreached')"))) throw new Error('unreached ending not reported');
+      await layoutCheck('form workflow map', '#workflow-map');
+
+      // Select and edit from the map; focus stays with the work, and the picture follows.
+      await click('[data-map-select="2"]');
+      if (!(await focused('[data-map-select="2"]')) || (await evaluate("document.querySelector('[data-map-select=\"2\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('selecting a map item failed');
+      await click('#workflow-editor [data-jump-add]');
+      if (!(await focused('#workflow-editor [data-jump="0"] [data-jump-field]'))) throw new Error('adding a jump lost focus');
+      if (!(await text()).includes('Unsaved changes')) throw new Error('map edit did not mark the draft unsaved');
+      await fill('#workflow-editor [data-jump="0"] [data-jump-to]', 'ending:sales');
+      if (!(await focused('#workflow-editor [data-jump="0"] [data-jump-to]'))) throw new Error('changing the target lost focus');
+      if (!(await arcs()).includes('notes>ending:sales')) throw new Error('new jump not drawn: ' + await arcs());
+      if (await evaluate("document.querySelector('[data-map-node=\"ending:sales\"]').classList.contains('is-unreached')")) throw new Error('reached ending still reported as unreached');
+
+      // The same rule is there in Content, because there is only one.
+      await click('#builder-index [data-section="questions"]');
+      if (!(await evaluate("document.querySelector('[data-question-index=\"2\"]').getAttribute('aria-pressed') === 'true' && document.querySelector('.question-settings [data-jump-sentence]').textContent.includes('Sales will call')"))) throw new Error('Content does not show the jump made in Workflow');
+      await click('#builder-index [data-section="workflow"]');
+      await click('#workflow-editor [data-jump-remove]');
+      if (!(await focused('#workflow-editor [data-jump-add]')) || (await arcs()).includes('notes>')) throw new Error('removing the jump lost focus or left its arc');
+      await click('#workflow-editor [data-jump-add]');
+      await fill('#workflow-editor [data-jump="0"] [data-jump-to]', 'ending:sales');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'map edit saved');
+      const saved = JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', created.id).draft);
+      if (saved.logic.find(entry => entry.field === 'notes')?.rules[0].to.id !== 'sales') throw new Error('map edit not saved: ' + JSON.stringify(saved.logic));
+      if (app.db.get('SELECT published_version FROM forms WHERE id = ?', created.id).published_version !== null) throw new Error('editing the map published the form');
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('hide-choice rules: author in Workflow, preview, conflicts block publishing, Back recalculates, crafted requests, inbox and CSV', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    const created = await formApi('POST', '/forms', { definition: { title: 'Support request', description: '', presentation: 'conversational', submit_label: 'Send', endings: [{ id: 'thanks', title: 'Thanks' }, { id: 'sales', title: 'Sales will call' }], fields: [
+      { id: 'plan', type: 'single_choice', label: 'Which plan?', required: true, options: [{ id: 'free', label: 'Free plan' }, { id: 'team', label: 'Team plan' }, { id: 'closed', label: 'Closed account' }] },
+      { id: 'help', type: 'single_choice', label: 'How can we help?', required: true, options: [{ id: 'email', label: 'By email' }, { id: 'phone', label: 'Phone call' }, { id: 'visit', label: 'Site visit' }] },
+      { id: 'extras', type: 'multiple_choice', label: 'Extras', required: false, options: [{ id: 'sla', label: 'Fast SLA' }, { id: 'audit', label: 'Audit report' }, { id: 'guide', label: 'Setup guide' }] },
+      { id: 'details', type: 'page_break', label: 'Your details', grouped: true },
+      { id: 'who', type: 'short_text', label: 'Your name', required: true, group: 'details' },
+      { id: 'org', type: 'short_text', label: 'Company', required: false, group: 'details' },
+      { id: 'notes', type: 'long_text', label: 'Notes', required: false }
+    ], logic: [{ field: 'help', rules: [{ when: { field: 'help', op: 'equals', value: 'phone' }, to: { type: 'ending', id: 'sales' } }] }] } });
+    if (!created.id) throw new Error('hide-rule fixture not created: ' + JSON.stringify(created));
+    const editor = '#workflow-editor';
+    const notice = "document.querySelector('#builder-notice').innerText";
+    const hasText = (selector, words) => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].some(node => node.textContent.includes(${JSON.stringify(words)}))`);
+    const mouse = (type, x, y, buttons) => send('Input.dispatchMouseEvent', { type, x, y, buttons, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
+    const row = index => evaluate(`(() => { const row = document.querySelector('[data-question-row="${index}"]'); row.scrollIntoView({ block: 'center' }); const box = row.getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2, height: box.height }; })()`);
+    try {
+      // Authoring: Workflow, Logic, on a standalone question.
+      await open(`/forms/${created.id}`, "document.querySelector('#builder-index [data-section=\"workflow\"]')");
+      await click('#builder-index [data-section="workflow"]');
+      await waitFor(`document.querySelector('[data-map-select="1"]')`, 'map rows');
+      await click('[data-map-select="1"]');
+      await click(`${editor} [data-cr-add]`);
+      if (!(await focused(`${editor} [data-choice-rule="0"] [data-cr-field]`))) throw new Error('adding a hide rule lost focus');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="email"]`);
+      if (!(await hasText(`${editor} [data-cr-conflict]`, 'at least one choice')) || (await evaluate(`document.querySelector('.toast')?.textContent.includes('at least one choice') || false`))) throw new Error('an empty rule should say so on its row, without a toast');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="phone"]`);
+      if (!(await focused(`${editor} [data-choice-rule="0"] [data-cr-hide="phone"]`))) throw new Error('choosing a choice lost focus');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="visit"]`);
+      if (!(await hasText(`${editor} [data-cr-sentence]`, 'When “Which plan?” is “Free plan”, hide “Phone call” and “Site visit”.'))) throw new Error('rule not described in words');
+      await click(`${editor} [data-cr-add]`);
+      await fill(`${editor} [data-choice-rule="1"] [data-cr-value]`, 'closed');
+      for (const id of ['phone', 'visit']) await click(`${editor} [data-choice-rule="1"] [data-cr-hide="${id}"]`);
+      if (!(await hasText(`${editor} [data-cr-sentence]`, 'hide every choice, so this question is skipped'))) throw new Error('hiding all not explained');
+      await layoutCheck('form hide-choice rules', editor);
+      await click('[data-map-select="2"]');
+      await click(`${editor} [data-cr-add]`);
+      await fill(`${editor} [data-choice-rule="0"] [data-cr-field]`, 'plan');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="sla"]`);
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="audit"]`);
+      if (!(await hasText('[data-map-node="extras"] [data-map-hides]', 'hide “Audit report”'))) throw new Error('rule not on the map, or wrong choice');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="sla"]`);
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="audit"]`);
+      if (!(await hasText('#workflow-summary', '3 hide-choice rules'))) throw new Error('summary does not count hide rules');
+      // A question on a multi-question page says it is unsupported and offers no rule.
+      await click('[data-map-select="4"]');
+      if (await evaluate(`Boolean(document.querySelector('${editor} [data-cr-add]'))`) || !(await evaluate(`document.querySelector('${editor}').textContent.length > 0`))) throw new Error('a text question on a page offered a hide rule');
+
+      // Preview uses the same evaluator, on one classic page, and recalculates as answers change.
+      await click('#builder-index [data-section="questions"]');
+      await fill('#preview-mode', 'classic');
+      await waitFor("document.querySelector('#preview [name=plan]')", 'classic preview');
+      await click('#preview [name="plan"][value="team"]');
+      await click('#preview [name="help"][value="visit"]');
+      await click('#preview [name="plan"][value="free"]');
+      await waitFor("document.querySelectorAll('#preview [name=help]').length === 1", 'preview hides two choices');
+      if (await evaluate("document.querySelector('#preview [name=help]:checked') !== null")) throw new Error('preview kept a hidden selection');
+      await click('#preview [name="plan"][value="closed"]');
+      await waitFor("!document.querySelector('#preview [name=help]') && document.querySelector('#preview [name=extras]')", 'preview skips the question');
+
+      // Moving the rule-bearing question onto the page keeps the rule, says so, and blocks publishing.
+      await click('[data-question-index="1"]');
+      const from = await row(1);
+      const to = await row(4);
+      const y = to.y + to.height / 2 - 1;
+      await mouse('mouseMoved', from.x, from.y, 0);
+      await mouse('mousePressed', from.x, from.y, 1);
+      await mouse('mouseMoved', from.x, from.y + 10, 1);
+      await mouse('mouseMoved', to.x, y, 1);
+      await mouse('mouseReleased', to.x, y, 0);
+      await waitFor("document.querySelector('[data-question-row=\"4\"]').dataset.questionKey === 'help'", 'dragged onto the page');
+      await waitFor("document.querySelector('.toast')?.textContent.includes('multi-question page')", 'conflict shown as a toast');
+      if (!(await hasText('.question-settings [data-cr-conflict]:not([hidden])', 'multi-question page'))) throw new Error('conflict not shown beside the question');
+      await click('#publish');
+      await waitFor(`${notice}.includes('Not published') && ${notice}.includes('multi-question page')`, 'publish refused');
+      if (app.db.get('SELECT published_version FROM forms WHERE id = ?', created.id).published_version !== null) throw new Error('published with a conflict');
+      const kept = JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', created.id).draft);
+      if (kept.choice_rules.find(entry => entry.field === 'help')?.rules.length !== 2) throw new Error('the conflicting rule was not kept in the draft');
+      await waitFor("document.querySelector('#readiness-body').textContent.includes('multi-question page') && document.querySelector('[data-goto=\"workflow\"]')", 'readiness reports it and links to Workflow');
+      await click('.question-settings [data-open-workflow]');
+      if (!(await focused('#workflow-editor-heading'))) throw new Error('Edit in Workflow did not open the rules');
+      await click('#builder-index [data-section="questions"]');
+      await click('[data-goto="workflow"]');
+      if (!(await focused('#workflow-heading'))) throw new Error('the readiness link did not open Workflow');
+      if (!(await hasText('[data-map-node="help"] [data-map-conflict]', 'multi-question page')) || !(await hasText('#workflow-summary', '2 hide-choice conflicts'))) throw new Error('map does not show the conflict: ' + await evaluate("document.querySelector('[data-map-node=\"help\"]')?.innerText + ' | ' + document.querySelector('#workflow-summary').innerText + ' | ' + document.querySelector('.builder-page').dataset.surface"));
+      if (await evaluate(`Boolean(document.querySelector('${editor} [data-cr-add]'))`)) throw new Error('a new rule was offered on a page');
+      if (!(await hasText(editor, 'not supported on a question inside a multi-question page'))) throw new Error('editor does not explain the restriction');
+      await click('#builder-index [data-section="questions"]');
+      await click('.canvas-tools [data-move="-1"]');
+      await click('.canvas-tools [data-move="-1"]');
+      await click('.canvas-tools [data-move="-1"]');
+      await waitFor("document.querySelector('[data-question-key=\"help\"]').dataset.questionRow === '1' && !document.querySelector('[data-question-key=\"help\"]').classList.contains('is-member')", 'moved off the page');
+
+      // Removing a choice a rule hides: same story, and repaired in Workflow.
+      await click('[data-question-index="1"]');
+      await click('.question-canvas [data-remove-option="2"]');
+      await waitFor("document.querySelector('.toast')?.textContent.includes('no longer in this question')", 'removed choice shown as a toast');
+      await click('#publish');
+      await waitFor(`${notice}.includes('Not published') && ${notice}.includes('no longer in this question')`, 'publish refused after removing a choice');
+      await click('#builder-index [data-section="workflow"]');
+      await waitFor(`document.querySelector('${editor} [data-choice-rule="0"] [data-cr-hide="visit"]')`, 'the removed choice can be cleared');
+      for (const position of [0, 1]) await click(`${editor} [data-choice-rule="${position}"] [data-cr-hide="visit"]`);
+      await click('#publish');
+      await waitFor(`${notice}.includes('Version 1 is live')`, 'published once repaired');
+      const live = JSON.parse(app.db.get('SELECT definition FROM form_versions WHERE form_id = ? AND version = 1', created.id).definition);
+      if (JSON.stringify(live.choice_rules.find(entry => entry.field === 'help').rules.map(rule => rule.hide)) !== '[["phone"],["email","phone"]]') throw new Error('unexpected published rules: ' + JSON.stringify(live.choice_rules));
+
+      const slug = created.slug;
+      const start = () => open(`/f/${slug}`, "document.querySelector('#form-root [name=plan]')");
+      const next = () => click('#form-root [type="submit"]');
+      const finish = async () => { // The page and the last question, then the receipt.
+        await waitFor("document.querySelector('#q-who')", 'details page');
+        await fill('#q-who', 'Asha');
+        await next();
+        await waitFor("document.querySelector('#q-notes')", 'notes');
+        await next();
+        await waitFor("document.querySelector('.receipt')", 'receipt');
+      };
+      const latest = () => JSON.parse(app.db.get('SELECT answers FROM responses WHERE form_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', created.id).answers);
+      const choices = name => evaluate(`[...document.querySelectorAll('#form-root [name=${name}]')].map(input => input.value).join()`);
+
+      // Partial hiding with Back and a changed answer: a required question asks again.
+      await start();
+      await click('#form-root [name="plan"][value="team"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=help]')", 'help question');
+      if ((await choices('help')) !== 'email,phone') throw new Error('nothing should be hidden yet: ' + await choices('help'));
+      await click('#form-root [name="help"][value="phone"]');
+      await click('[data-back]');
+      await waitFor("document.querySelector('#form-root [name=plan]:checked')?.value === 'team'", 'back to plan');
+      await click('#form-root [name="plan"][value="free"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=help]')", 'help question again');
+      if ((await choices('help')) !== 'email') throw new Error('phone still offered: ' + await choices('help'));
+      if (await evaluate("document.querySelector('#form-root [name=help]:checked') !== null")) throw new Error('hidden choice stayed selected');
+      await next();
+      await waitFor("document.querySelector('#form-root .field-error')?.textContent.includes('Choose an option')", 'still required with a choice left');
+      await click('#form-root [name="help"][value="email"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=extras]')", 'extras');
+      await next();
+      await finish();
+      if (JSON.stringify(latest()) !== '{"plan":"free","help":"email","who":"Asha"}') throw new Error('unexpected answers: ' + JSON.stringify(latest()));
+      if (!(await evaluate("document.querySelector('.receipt').innerText.includes('Thanks')"))) throw new Error('wrong ending after a hidden jump choice');
+      await layoutCheck('hide-choice receipt');
+
+      // Multi-select and full hiding: the question is skipped; Back makes it reappear and drops the hidden choice.
+      await start();
+      await click('#form-root [name="plan"][value="closed"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=extras]')", 'required question skipped');
+      if (await evaluate("Boolean(document.querySelector('#form-root [name=help]'))")) throw new Error('fully hidden question shown');
+      await click('#form-root [name="extras"][value="sla"]');
+      await click('#form-root [name="extras"][value="guide"]');
+      await click('[data-back]');
+      await waitFor("document.querySelector('#form-root [name=plan]:checked')?.value === 'closed'", 'back past the skipped question');
+      await click('#form-root [name="plan"][value="free"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=help]')", 'the question reappears');
+      await click('#form-root [name="help"][value="email"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=extras]')", 'extras again');
+      if ((await choices('extras')) !== 'audit,guide') throw new Error('sla still offered: ' + await choices('extras'));
+      if (await evaluate("[...document.querySelectorAll('#form-root [name=extras]:checked')].map(input => input.value).join()") !== 'guide') throw new Error('multi-select lost the visible choice');
+      await next();
+      await finish();
+      if (JSON.stringify(latest()) !== '{"plan":"free","help":"email","extras":["guide"],"who":"Asha"}') throw new Error('unexpected answers: ' + JSON.stringify(latest()));
+
+      // Fully hidden through to a stored, blank answer.
+      await start();
+      await click('#form-root [name="plan"][value="closed"]');
+      await next();
+      await waitFor("document.querySelector('#form-root [name=extras]')", 'skipped again');
+      await next();
+      await finish();
+      if (JSON.stringify(latest()) !== '{"plan":"closed","who":"Asha"}') throw new Error('unexpected answers: ' + JSON.stringify(latest()));
+
+      // A crafted request: the same page, no form.
+      const post = answers => evaluate(`fetch('/api/public/forms/${slug}/responses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(JSON.stringify({ answers }))} }).then(async r => ({ status: r.status, body: await r.json() }))`);
+      const required = await post({ plan: 'free', help: 'phone', who: 'Crafted' });
+      if (required.status !== 400 || !required.body.error.errors.help) throw new Error('crafted hidden choice accepted: ' + JSON.stringify(required));
+      const jump = await post({ plan: 'closed', help: 'phone', who: 'Crafted' });
+      if (jump.status !== 201 || jump.body.ending?.id !== 'thanks') throw new Error('crafted hidden choice used its jump: ' + JSON.stringify(jump));
+      const extra = await post({ plan: 'free', help: 'email', extras: ['sla', 'guide'], who: 'Crafted' });
+      if (extra.status !== 201) throw new Error('crafted multi-select refused: ' + JSON.stringify(extra));
+      const stored = app.db.all('SELECT answers FROM responses WHERE form_id = ?', created.id).map(item => JSON.parse(item.answers));
+      if (stored.length !== 5 || stored.some(item => item.help === 'phone' || item.extras?.includes('sla'))) throw new Error('a hidden choice was stored: ' + JSON.stringify(stored));
+
+      // Inbox and CSV show what was stored.
+      await open(`/forms/${created.id}/responses`, "document.querySelector('table')");
+      await layoutCheck('hide-choice inbox');
+      await waitFor("document.querySelectorAll('[data-view-response]').length === 5", 'five responses in the inbox');
+      await click('[data-view-response]');
+      await waitFor("document.querySelector('#detail-title')", 'response detail');
+      const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${created.id}/responses.csv')).then(r => r.text())`);
+      if (typeof csv !== 'string' || !csv.includes('By email') || !csv.includes('Setup guide') || csv.includes('Phone call') || csv.includes('Fast SLA')) throw new Error('CSV does not match what was stored: ' + csv);
+
+      // Classic, one page: Enter commits a typed answer that hides the selected choice on this very screen.
+      const typed = await formApi('POST', '/forms', { definition: { title: 'Access code', description: '', presentation: 'classic', submit_label: 'Send', fields: [
+        { id: 'code', type: 'short_text', label: 'Access code', required: false },
+        { id: 'level', type: 'single_choice', label: 'Level', required: true, options: [{ id: 'basic', label: 'Basic' }, { id: 'vip', label: 'VIP lounge' }] },
+        { id: 'tail', type: 'single_choice', label: 'Extra', required: true, options: [{ id: 'only', label: 'Only one' }] }
+      ], choice_rules: [{ field: 'level', rules: [{ when: { field: 'code', op: 'equals', value: 'no vip' }, hide: ['vip'] }] }, { field: 'tail', rules: [{ when: { field: 'code', op: 'contains', value: 'skip' }, hide: ['only'] }] }] } });
+      await formApi('POST', `/forms/${typed.id}/publish`, {});
+      await open(`/f/${typed.slug}`, "document.querySelector('#q-code')");
+      await click('#form-root [name="level"][value="vip"]');
+      await click('#form-root [name="tail"][value="only"]');
+      await evaluate("document.querySelector('#q-code').focus()");
+      await send('Input.insertText', { text: '  no   vip ' });
+      const enter = async () => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }); };
+      await enter();
+      await waitFor("document.querySelectorAll('#form-root [name=level]').length === 1 && !document.querySelector('#form-root [name=level]:checked')", 'the changed choices are shown before moving on');
+      if (await evaluate("Boolean(document.querySelector('.receipt'))") || !(await focused('#q-code'))) throw new Error('moved on without showing the change, or lost focus');
+      await click('#form-root [name="level"][value="basic"]');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'receipt on the classic form');
+      const classic = JSON.parse(app.db.get('SELECT answers FROM responses WHERE form_id = ?', typed.id).answers);
+      if (JSON.stringify(classic) !== '{"code":"no vip","level":"basic","tail":"only"}') throw new Error('unexpected classic answers: ' + JSON.stringify(classic));
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('URL parameters: declare in Workflow, drive a hidden choice and a jump, preview samples, partner and default links, enforcement, attribution in the inbox and CSV', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    const created = await formApi('POST', '/forms', { definition: { title: 'Partner enquiry', description: '', presentation: 'classic', submit_label: 'Send', endings: [{ id: 'thanks', title: 'Thanks' }, { id: 'offer', title: 'Spring offer' }], fields: [
+      { id: 'help', type: 'single_choice', label: 'How can we help?', required: true, options: [{ id: 'email', label: 'By email' }, { id: 'phone', label: 'Phone call' }, { id: 'visit', label: 'Site visit' }] },
+      { id: 'notes', type: 'long_text', label: 'Notes', required: false }
+    ] } });
+    if (!created.id) throw new Error('URL parameter fixture not created: ' + JSON.stringify(created));
+    const panel = '#url-params';
+    const editor = '#workflow-editor';
+    const hasText = (selector, words) => evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].some(node => node.textContent.includes(${JSON.stringify(words)}))`);
+    const responseCount = () => app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', created.id).count;
+    const addParam = async key => {
+      await fill(`${panel} #url-param-key`, key);
+      await click(`${panel} [data-url-add]`);
+    };
+    try {
+      await open(`/forms/${created.id}`, "document.querySelector('#builder-index [data-section=\"workflow\"]')");
+      await click('#builder-index [data-section="workflow"]');
+      await waitFor(`document.querySelector('${panel} #url-param-key')`, 'URL parameters section under Workflow');
+      await fill(`${panel} #url-param-key`, 'Bad Name');
+      await click(`${panel} [data-url-add]`);
+      if (!(await hasText('#url-param-message', 'lowercase letters')) || !(await focused(`${panel} #url-param-key`))) throw new Error('an invalid name was not explained');
+      await fill(`${panel} #url-param-key`, 'mode');
+      await click(`${panel} [data-url-add]`);
+      if (!(await hasText('#url-param-message', 'used by form links'))) throw new Error('a reserved name was not refused');
+      await addParam('utm_source');
+      if (!(await focused(`${panel} #url-param-key`))) throw new Error('adding a parameter lost focus');
+      await addParam('campaign');
+      await click(`${panel} [data-url-record="utm_source"]`);
+      if (!(await focused(`${panel} [data-url-record="utm_source"]`)) || !(await evaluate(`document.querySelector('${panel} [data-url-record="utm_source"]').checked && !document.querySelector('${panel} [data-url-record="campaign"]').checked`))) throw new Error('opt-in not kept');
+
+      // A declared parameter hides one choice, chosen in the same rule editor as earlier answers.
+      await click('[data-map-select="0"]');
+      await click(`${editor} [data-cr-add]`);
+      if (!(await evaluate(`document.querySelector('${editor} [data-cr-field]').value === 'param:utm_source'`))) throw new Error('a first question should start from a URL parameter');
+      await fill(`${editor} [data-choice-rule="0"] [data-cr-value]`, 'partner');
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="email"]`);
+      await click(`${editor} [data-choice-rule="0"] [data-cr-hide="visit"]`);
+      if (!(await hasText(`${editor} [data-cr-sentence]`, 'When the link’s utm_source is “partner”, hide “Site visit”.'))) throw new Error('rule not in words: ' + await evaluate(`document.querySelector('${editor} [data-cr-sentence]').textContent`));
+      if (!(await hasText('[data-map-node="help"] [data-map-hides]', 'utm_source'))) throw new Error('rule not on the map');
+      // And drives a jump.
+      await click(`${editor} [data-jump-add]`);
+      await fill(`${editor} [data-jump="0"] [data-jump-field]`, 'param:campaign');
+      await fill(`${editor} [data-jump="0"] [data-jump-value]`, 'spring');
+      await fill(`${editor} [data-jump="0"] [data-jump-to]`, 'ending:offer');
+      if (!(await hasText(`${editor} [data-jump-sentence]`, 'When the link’s campaign is “spring”, go to the ending “Spring offer”.'))) throw new Error('jump not in words');
+      await layoutCheck('form URL parameters', panel);
+
+      // The example link uses the value a rule looks for, and a parameter in use cannot be removed.
+      if (!(await evaluate(`document.querySelector('#url-param-link').value.endsWith('/f/${created.slug}?utm_source=partner&campaign=spring')`))) throw new Error('example link wrong: ' + await evaluate("document.querySelector('#url-param-link').value"));
+      await click(`${panel} [data-url-copy]`);
+      await waitFor("document.querySelector('#url-param-copied').textContent.length > 0", 'copy outcome reported');
+      await click(`${panel} [data-url-remove="utm_source"]`);
+      if (!(await hasText('#url-param-message', 'still in use')) || !(await evaluate(`Boolean(document.querySelector('${panel} [data-url-param="utm_source"]'))`))) throw new Error('removed a parameter a rule uses');
+
+      // Preview takes sample values and records nothing.
+      await click('#builder-index [data-section="questions"]');
+      await waitFor("document.querySelector('[data-preview-param=\"utm_source\"]')", 'sample inputs in Preview');
+      const previewChoices = () => evaluate("[...document.querySelectorAll('#preview [name=help]')].map(input => input.value).join()");
+      if ((await previewChoices()) !== 'email,phone,visit') throw new Error('preview default wrong: ' + await previewChoices());
+      await fill('[data-preview-param="utm_source"]', 'partner');
+      if ((await previewChoices()) !== 'email,phone') throw new Error('preview with partner wrong: ' + await previewChoices());
+      await fill('[data-preview-param="utm_source"]', 'other');
+      if ((await previewChoices()) !== 'email,phone,visit') throw new Error('preview with another value wrong: ' + await previewChoices());
+      await layoutCheck('form preview samples', '#builder-preview');
+      await fill('[data-preview-param="campaign"]', 'spring');
+      await click('#preview [name="help"][value="email"]');
+      await click('#preview [type="submit"]');
+      await waitFor("document.querySelector('#preview').innerText.includes('Spring offer')", 'preview follows the jump');
+      if (responseCount() !== 0) throw new Error('preview recorded a response');
+
+      await click('#publish');
+      await waitFor("document.querySelector('#builder-notice').innerText.includes('Version 1 is live')", 'published with URL parameters');
+      if ((await evaluate("document.querySelector('#builder-notice').innerText")).includes('utm_source')) throw new Error('unexpected notice');
+
+      const slug = created.slug;
+      const choices = () => evaluate("[...document.querySelectorAll('#form-root [name=help]')].map(input => input.value).join()");
+      const visit = query => open(`/f/${slug}${query}`, "document.querySelector('#form-root [name=help]')");
+      const send1 = async value => {
+        await click(`#form-root [name="help"][value="${value}"]`);
+        await click('#form-root [type="submit"]');
+        await waitFor("document.querySelector('.receipt')", 'receipt');
+      };
+      const newest = () => app.db.get('SELECT answers, attribution FROM responses WHERE form_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', created.id);
+
+      // Partner link, with an undeclared key and a declared one not opted in.
+      await visit('?utm_source=partner&utm_medium=undeclared_value&campaign=autumn_value');
+      if ((await choices()) !== 'email,phone') throw new Error('partner link wrong: ' + await choices());
+      await send1('phone');
+      let row = newest();
+      if (row.answers !== '{"help":"phone"}' || row.attribution !== '{"utm_source":"partner"}') throw new Error('partner response wrong: ' + JSON.stringify(row));
+      if (!(await evaluate("document.querySelector('.receipt').innerText.includes('Thanks')"))) throw new Error('partner link took the wrong ending');
+
+      // Default link: the same form offers and accepts the choice.
+      await visit('');
+      if ((await choices()) !== 'email,phone,visit') throw new Error('default link wrong: ' + await choices());
+      await send1('visit');
+      row = newest();
+      if (row.answers !== '{"help":"visit"}' || row.attribution !== null) throw new Error('default response wrong: ' + JSON.stringify(row));
+
+      // Empty, duplicate, oversized and undeclared values on a real link.
+      for (const [query, expected] of [['?utm_source=', 'email,phone,visit'], ['?utm_source=partner&utm_source=other', 'email,phone'], ['?utm_source=other&utm_source=partner', 'email,phone,visit'], [`?utm_source=${'a'.repeat(201)}`, 'email,phone,visit'], ['?UTM_SOURCE=partner&source=partner', 'email,phone,visit'], ['?mode=conversational&utm_source=partner', 'email,phone']]) {
+        await visit(query);
+        if ((await choices()) !== expected) throw new Error(`link ${query.slice(0, 40)} wrong: ` + await choices());
+      }
+
+      // A parameter chooses the jump; the server returns the same ending.
+      await visit('?campaign=spring');
+      await send1('email');
+      if (!(await evaluate("document.querySelector('.receipt').innerText.includes('Spring offer')"))) throw new Error('jump on a parameter did not reach its ending');
+      if (newest().attribution !== null) throw new Error('a parameter not opted in was stored');
+
+      // A crafted request: the server applies the same rule to what it is told, and stores no more than a link could.
+      const post = body => evaluate(`fetch('/api/public/forms/${slug}/responses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(JSON.stringify(body))} }).then(async r => ({ status: r.status, body: await r.json() }))`);
+      const before = responseCount();
+      const refused = await post({ answers: { help: 'visit' }, url_params: { utm_source: 'partner' } });
+      if (refused.status !== 400 || !refused.body.error.errors.help || responseCount() !== before) throw new Error('hidden choice accepted: ' + JSON.stringify(refused));
+      const jumped = await post({ answers: { help: 'email', notes: 'dropped on the skipped path' }, url_params: { campaign: 'spring', evil: 'undeclared_value' } });
+      if (jumped.status !== 201 || jumped.body.ending?.id !== 'offer') throw new Error('crafted jump wrong: ' + JSON.stringify(jumped));
+
+      // Markup in a value stays text in the inbox.
+      await visit(`?utm_source=${encodeURIComponent('<img src=x onerror=alert(1)>')}`);
+      if ((await choices()) !== 'email,phone,visit') throw new Error('markup value wrong: ' + await choices());
+      await send1('email');
+
+      const every = JSON.stringify(app.db.all('SELECT answers, attribution FROM responses WHERE form_id = ?', created.id));
+      if (every.includes('undeclared_value') || every.includes('autumn_value') || every.includes('spring')) throw new Error('a value not opted in was stored: ' + every);
+
+      // Inbox and CSV: only opted-in attribution, labelled apart from the answers.
+      await open(`/forms/${created.id}/responses`, "document.querySelector('table')");
+      if ((await evaluate("[...document.querySelectorAll('[data-attribution-column]')].map(th => th.textContent).join()")) !== 'Attribution: utm_source') throw new Error('attribution columns wrong');
+      if (!(await hasText('#responses td', 'partner')) || !(await hasText('#responses td', '<img src=x onerror=alert(1)>')) || (await evaluate("document.querySelectorAll('#responses td img').length")) !== 0) throw new Error('attribution not shown as text');
+      await layoutCheck('form attribution inbox');
+      const partnerRow = app.db.get("SELECT id FROM responses WHERE form_id = ? AND attribution LIKE '%partner%'", created.id).id;
+      await click(`[data-view-response="${partnerRow}"]`);
+      await waitFor("document.querySelector('[data-attribution]')", 'attribution in the response detail');
+      if (!(await hasText('#response-detail', 'treat these as unverified')) || !(await hasText('[data-attribution]', 'utm_source')) || (await hasText('.response-answers:not([data-attribution])', 'utm_source'))) throw new Error('detail does not separate attribution from answers');
+      await layoutCheck('form attribution detail');
+      const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${created.id}/responses.csv')).then(r => r.text())`);
+      if (!csv.split('\r\n')[0].endsWith('"Attribution: utm_source"') || !csv.includes('"partner"')) throw new Error('CSV attribution wrong: ' + csv);
+      for (const absent of ['campaign', 'spring', 'autumn_value', 'undeclared_value', 'utm_medium']) if (csv.includes(absent)) throw new Error('CSV holds ' + absent);
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('evaluation policy: "yes " in preview, public form and server; an old version stays as it was, a new one is consistent, an open page follows its version', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    // Publishes, then removes the stamp from the stored row, which is exactly what a version published before the policy looks like.
+    const legacyForm = async definition => {
+      const created = await formApi('POST', '/forms', { definition });
+      if (!created.id) throw new Error('policy fixture not created: ' + JSON.stringify(created));
+      await formApi('POST', `/forms/${created.id}/publish`, {});
+      const stored = JSON.parse(app.db.get('SELECT definition FROM form_versions WHERE form_id = ? AND version = 1', created.id).definition);
+      if (stored.evaluation_policy !== 'normalized_v1') throw new Error('a new publish was not stamped: ' + JSON.stringify(stored));
+      if ('evaluation_policy' in JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', created.id).draft)) throw new Error('the draft holds the policy');
+      delete stored.evaluation_policy;
+      const text = JSON.stringify(stored);
+      app.db.run('UPDATE form_versions SET definition = ? WHERE form_id = ? AND version = 1', text, created.id);
+      return { ...created, oldText: text };
+    };
+    const versionText = (id, version) => app.db.get('SELECT definition FROM form_versions WHERE form_id = ? AND version = ?', id, version).definition;
+    const rowsOf = id => app.db.all('SELECT form_version, answers FROM responses WHERE form_id = ? ORDER BY created_at, rowid', id);
+    const post = (slug, body) => evaluate(`fetch('/api/public/forms/${slug}/responses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(JSON.stringify({ evaluator: 2, ...body }))} }).then(async r => ({ status: r.status, body: await r.json() }))`);
+    const plain = await legacyForm({ title: 'Typed rule', description: '', presentation: 'classic', submit_label: 'Send', fields: [
+      { id: 'code', type: 'short_text', label: 'Do you have a code?', required: false },
+      { id: 'more', type: 'short_text', label: 'Which code?', required: true, show_if: { field: 'code', op: 'equals', value: 'yes' } }
+    ] });
+    try {
+      // The old version: the public form and the server keep what it always did.
+      await open(`/f/${plain.slug}`, "document.querySelector('#q-code')");
+      await fill('#q-code', 'yes ');
+      if (await evaluate("Boolean(document.querySelector('#q-more'))")) throw new Error('old version showed the follow-up for "yes "');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'old version accepted without the follow-up');
+      const oldStored = rowsOf(plain.id);
+      if (oldStored.length !== 1 || oldStored[0].form_version !== 1 || oldStored[0].answers !== '{"code":"yes"}') throw new Error('old response wrong: ' + JSON.stringify(oldStored));
+      const oldServer = await post(plain.slug, { answers: { code: 'yes ' } });
+      if (oldServer.status !== 201) throw new Error('old version server path changed: ' + JSON.stringify(oldServer));
+      const oldExact = await post(plain.slug, { answers: { code: 'yes' } });
+      if (oldExact.status !== 400 || !oldExact.body.error.errors.more) throw new Error('old version exact path changed: ' + JSON.stringify(oldExact));
+
+      // Preview shows the next publish, while the live version is untouched.
+      await open(`/forms/${plain.id}`, "document.querySelector('#preview #q-code')");
+      await waitFor("document.querySelector('[data-preview-policy]')", 'preview says it shows the next publish');
+      await fill('#preview #q-code', 'yes ');
+      await waitFor("document.querySelector('#preview #q-more')", 'preview shows the follow-up for "yes "');
+      await waitFor("document.querySelector('#readiness-body').textContent.includes('compares typed answers exactly as typed')", 'readiness explains the live version');
+      if (versionText(plain.id, 1) !== plain.oldText || rowsOf(plain.id).length !== 2) throw new Error('preview changed the live version or recorded something');
+
+      // A page opened on the old version keeps following it after a republish.
+      await open(`/f/${plain.slug}`, "document.querySelector('#q-code')");
+      const republished = await formApi('POST', `/forms/${plain.id}/publish`, {});
+      if (republished.published_version !== 2 || republished.has_unpublished_changes || republished.legacy_text_comparison) throw new Error('republish state wrong: ' + JSON.stringify(republished));
+      await fill('#q-code', 'yes ');
+      if (await evaluate("Boolean(document.querySelector('#q-more'))")) throw new Error('an open old page changed behaviour');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'open old page accepted');
+      if (rowsOf(plain.id).at(-1).form_version !== 1) throw new Error('open old page was not judged by its version');
+
+      // The new version: "yes " and "yes" mean the same everywhere.
+      await open(`/f/${plain.slug}`, "document.querySelector('#q-code')");
+      await fill('#q-code', 'yes ');
+      await waitFor("document.querySelector('#q-more')", 'new version shows the follow-up');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('#form-root .field-error')", 'new version requires the follow-up');
+      await fill('#q-more', 'ABC');
+      await click('#form-root [type="submit"]');
+      await waitFor("document.querySelector('.receipt')", 'new version accepted');
+      const newest = rowsOf(plain.id).at(-1);
+      if (newest.form_version !== 2 || newest.answers !== '{"code":"yes","more":"ABC"}') throw new Error('new response wrong: ' + JSON.stringify(newest));
+      const newServer = await post(plain.slug, { answers: { code: 'yes ' } });
+      if (newServer.status !== 400 || !newServer.body.error.errors.more) throw new Error('new version server path wrong: ' + JSON.stringify(newServer));
+      const pinned = await post(plain.slug, { answers: { code: 'yes ' }, version: 1 });
+      if (pinned.status !== 201 || pinned.body.version !== 1) throw new Error('a response on the old version did not follow it: ' + JSON.stringify(pinned));
+      if (versionText(plain.id, 1) !== plain.oldText) throw new Error('an old version was rewritten');
+      if (rowsOf(plain.id)[0].answers !== '{"code":"yes"}') throw new Error('a historical response was rewritten');
+
+      // Hide rules and URL parameters, through the Publish button with no edits, and a jump and an ending.
+      const mixed = await legacyForm({ title: 'Typed rule with hide rules', description: '', presentation: 'classic', submit_label: 'Send', url_params: [{ key: 'ref' }], fields: [
+        { id: 'code', type: 'short_text', label: 'Do you have a code?', required: false },
+        { id: 'pick', type: 'single_choice', label: 'Pick one', required: true, options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }] }
+      ], choice_rules: [{ field: 'pick', rules: [{ when: { field: 'code', op: 'equals', value: 'Yes ' }, hide: ['b'] }, { when: { param: 'ref', op: 'equals', value: 'partner' }, hide: ['c'] }] }] });
+      const picks = root => evaluate(`[...document.querySelectorAll('${root} [name=pick]')].map(input => input.value).join()`);
+      await open(`/forms/${mixed.id}`, "document.querySelector('#preview #q-code')");
+      await fill('#preview #q-code', 'Yes');
+      await waitFor("document.querySelectorAll('#preview [name=pick]').length === 2", 'preview tidies a rule value too');
+      await layoutCheck('form preview next publish', '#builder-preview');
+      await click('#publish');
+      await waitFor("document.querySelector('dialog button[value=ok]')", 'an unedited old version can be republished');
+      await click('dialog button[value=ok]');
+      await waitFor("document.querySelector('#builder-notice').innerText.includes('Version 2 is live')", 'version 2 live');
+      if (JSON.parse(versionText(mixed.id, 2)).evaluation_policy !== 'normalized_v1' || versionText(mixed.id, 1) !== mixed.oldText) throw new Error('republish stamped the wrong version');
+      await click('#publish');
+      await waitFor("document.querySelector('#builder-notice').innerText.includes('already live')", 'nothing further to publish');
+      await open(`/f/${mixed.slug}?ref=%20partner%20`, "document.querySelector('#q-code')");
+      await fill('#q-code', ' Yes  ');
+      await waitFor("[...document.querySelectorAll('#form-root [name=pick]')].map(input => input.value).join() === 'a'", 'hide rules read the tidied answer and the tidied link value');
+      await open(`/f/${mixed.slug}?ref=Partner`, "document.querySelector('#q-code')");
+      await fill('#q-code', 'yes');
+      if ((await picks('#form-root')) !== 'a,b,c') throw new Error('capitals must stay significant for typed rules and link values: ' + await picks('#form-root'));
+    } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
+  await step('a server on another version wants a question this path skipped: it is shown, answered and accepted', async () => {
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    const created = await formApi('POST', '/forms', { definition: { title: 'Skipped by a jump', description: '', presentation: 'classic', submit_label: 'Send', endings: [{ id: 'done', title: 'Done' }], fields: [
+      { id: 'kind', type: 'single_choice', label: 'Kind', required: true, options: [{ id: 'home', label: 'Home' }, { id: 'office', label: 'Office' }] },
+      { id: 'size', type: 'short_text', label: 'Team size', required: true }
+    ], logic: [{ field: 'kind', rules: [{ when: { field: 'kind', op: 'equals', value: 'home' }, to: { type: 'ending', id: 'done' } }] }] } });
+    await formApi('POST', `/forms/${created.id}/publish`, {});
+    await open(`/f/${created.slug}`, "document.querySelector('[name=kind]')");
+    await click('[name="kind"][value="home"]');
+    if (await evaluate("Boolean(document.querySelector('#q-size'))")) throw new Error('the jump should skip this question');
+    // Stands in for a previous backend, which does not know jumps.
+    await evaluate(`(() => { const real = window.fetch; window.fetch = (url, init) => { if (String(url).endsWith('/responses') && !JSON.parse(init.body).answers.size) return Promise.resolve(new Response(JSON.stringify({ error: { code: 'validation_failed', message: 'Please check the highlighted answers.', errors: { size: 'This question is required.' } } }), { status: 400, headers: { 'Content-Type': 'application/json' } })); return real(url, init); }; })()`);
+    await click('#form-root [type="submit"]');
+    await waitFor("document.querySelector('#q-size') && document.querySelector('[data-field=size] .field-error')", 'the question the server wants, with its error');
+    await fill('#q-size', '3');
+    await click('#form-root [type="submit"]');
+    await waitFor("document.querySelector('.receipt')", 'accepted once answered');
+    // An error naming nothing in this form still says something.
+    const next = await formApi('POST', '/forms', { definition: { title: 'Unknown question', description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'one', type: 'short_text', label: 'One', required: false }] } });
+    await formApi('POST', `/forms/${next.id}/publish`, {});
+    await open(`/f/${next.slug}`, "document.querySelector('#q-one')");
+    await evaluate(`(() => { window.fetch = () => Promise.resolve(new Response(JSON.stringify({ error: { code: 'validation_failed', message: 'x', errors: { other: 'Required.' } } }), { status: 400, headers: { 'Content-Type': 'application/json' } })); })()`);
+    await click('#form-root [type="submit"]');
+    await waitFor("document.querySelector('#form-root [data-form-status]').innerText.includes('could not accept these answers')", 'a message rather than nothing');
+    if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', next.id).count !== 0) throw new Error('nothing should be stored');
+  });
   await step('responses inbox, detail and CSV', async () => {
     await open('/forms', "document.querySelector('.list')");
     await click(`a[href="/forms/${formId}/responses"]`);
@@ -690,9 +1760,10 @@ try {
     if (!after.includes("only Meet's confirmation means an appointment exists") || !after.includes('The receipt means the response was received, nothing more')) throw new Error('booking offer wording: ' + after);
     if (!(await evaluate("Boolean(document.querySelector('#ready-after').closest('details').querySelector('a[href^=\"/meet/event-types/\"]'))"))) throw new Error('no link to the booking page readiness');
     if (!(await evaluate("Boolean(document.querySelector('#share-panel #share-link') && document.querySelector('#share-panel #embed') && !document.querySelector('#readiness #share-link') && document.querySelector('#readiness [data-goto=share]'))"))) throw new Error('share link and embed not in the share panel, or readiness does not point to it');
+    await click('#builder-index [data-section="share"]');
     await layoutCheck('forms readiness (live)');
     // Real Tab key presses reach every control in the card with a visible focus indicator.
-    await evaluate("document.querySelector('#delete-form').focus()");
+    await evaluate("document.querySelector('#builder-index [data-section=\"share\"]').focus()");
     const stops = [];
     for (let index = 0; index < 40; index++) {
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
@@ -1598,7 +2669,8 @@ try {
     const type = await request('POST', '/event-types', { title: 'Team readiness verification', kind: 'collective', timezone: 'Asia/Kolkata', published: false, hosts: [{ user_id: host }, { user_id: peer }], use_host_schedules: true, locations: [{ type: 'zoom' }] });
     if (!type.id) throw new Error('team fixture was not created: ' + JSON.stringify(type));
     const sentinel = 'DO_NOT_SHOW_PRIVATE_CALENDAR';
-    app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now());
+    // Marked as just synced: otherwise the background worker fetches this address and overwrites the status under test.
+    app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, last_synced_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now(), app.now());
     const effects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM busy_blocks) AS blocks, (SELECT COUNT(*) FROM outbox) AS outbox'));
     const before = effects();
     const ready = "document.querySelector('[data-host-readiness]')";

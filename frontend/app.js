@@ -143,6 +143,7 @@ export async function render() {
   if (currentPath === '/' && product !== 'suite' && session.user) return navigate(PRODUCT_INFO[product].dashboard, { replace: true });
   document.body.classList.toggle('auth-page', !session.user && /^\/(account|login|signup)$/.test(currentPath));
   clearShell();
+  document.body.classList.remove('form-editor');
   const shell = Boolean(session.user && isAppRoute(currentPath));
   document.body.classList.toggle('app-shell', shell);
   if (shell) renderShell({ product, current: currentSection(product, currentPath, query), links: { dashboard: boot.links, home: { suite: boot.links.suite, ...boot.landings } }, onWorkspaceChange: render });

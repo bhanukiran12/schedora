@@ -14,11 +14,16 @@ const VALUE_OPS = ['equals', 'not_equals', 'contains'];
 export const typeChoices = field => field.type === 'page_break' ? [] : [...TEXT_TYPES, ...CHOICE_TYPES];
 
 /** Display rules and saved routing rules that read this question's answer. */
-export function dependentRules(fieldId, fields, routing) {
+export function dependentRules(fieldId, fields, routing, choiceRules = null) {
   const rules = [];
   fields.forEach((field, index) => {
     if (field.show_if?.field === fieldId) rules.push({ where: 'display', index, name: field.type === 'page_break' ? `The page break at position ${index + 1}` : `The question “${field.label || 'Untitled'}”`, condition: field.show_if });
   });
+  for (const entry of choiceRules || []) {
+    entry.rules.forEach((rule, index) => {
+      if (rule.when?.field === fieldId) rules.push({ where: 'choice', index, name: `Hide-choice rule ${index + 1} on “${fields.find(field => field.id === entry.field)?.label || 'Untitled question'}”`, condition: rule.when });
+    });
+  }
   (routing?.rules || []).forEach((rule, index) => {
     if (rule.condition?.field === fieldId) rules.push({ where: 'routing', index, name: `Saved routing rule ${index + 1}`, condition: rule.condition });
   });
@@ -38,10 +43,10 @@ const describe = (rule, fields) => `${rule.name}: ${rule.where === 'display' ? '
  * `next` is the converted question (for apply/confirm); the input is never modified. newKey(prefix)
  * makes a fresh key for placeholder options.
  */
-export function planTypeChange({ field, to, fields, routing = null, locked = new Set(), newKey }) {
+export function planTypeChange({ field, to, fields, routing = null, choiceRules = null, locked = new Set(), newKey }) {
   const from = field.type;
   if (to === from) return { kind: 'none' };
-  const rules = dependentRules(field.id, fields, routing);
+  const rules = dependentRules(field.id, fields, routing, choiceRules);
   const valueRules = rules.filter(rule => VALUE_OPS.includes(rule.condition.op));
   if (locked.has(field.id) && !publishedTypeChangeAllowed(from, to)) {
     return {
