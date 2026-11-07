@@ -88,15 +88,25 @@ export const THEME_FONTS = {
   mono: { label: 'Typewriter', stack: 'ui-monospace, Consolas, "Courier New", monospace' }
 };
 export const THEME_COLORS = ['background', 'question', 'answer', 'button', 'button_text'];
-export const THEME_TOKENS = ['font', ...THEME_COLORS];
+// Text sizes are named steps, never lengths, and each layout turns a step into its own size. They are
+// optional: a theme without them uses the standard sizes, so every theme saved before them is unchanged.
+export const THEME_SIZES = { small: 'Small', medium: 'Standard', large: 'Large' };
+export const THEME_SIZE_TOKENS = ['question_size', 'description_size', 'answer_size'];
+export const THEME_TOKENS = ['font', ...THEME_COLORS, ...THEME_SIZE_TOKENS];
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const THEME_SOURCE = /^(preset|workspace):[A-Za-z0-9_-]{1,64}$/;
 
-export function themeProblems(theme) {
+// A form's own theme may hold typography only, with no colours at all: the default style with another
+// font or text sizes. It is never a workspace theme, which always needs every colour.
+export const isTypographyOnly = theme => Boolean(theme) && THEME_COLORS.every(key => theme[key] == null) && theme.source == null;
+
+export function themeProblems(theme, { typographyOnly = false } = {}) {
   const problems = [];
   if (typeof theme?.name !== 'string' || !theme.name.trim() || theme.name.length > 60) problems.push('Give the theme a name of up to 60 characters.');
   if (!Object.hasOwn(THEME_FONTS, theme?.font ?? '')) problems.push('Choose one of the listed theme fonts.');
-  for (const key of THEME_COLORS) if (typeof theme?.[key] !== 'string' || !HEX_COLOR.test(theme[key])) problems.push(`The theme's ${key.replace('_', ' ')} must be a colour like #1a2b3c.`);
+  const coloursOptional = typographyOnly && isTypographyOnly(theme);
+  if (!coloursOptional) for (const key of THEME_COLORS) if (typeof theme?.[key] !== 'string' || !HEX_COLOR.test(theme[key])) problems.push(`The theme's ${key.replace('_', ' ')} must be a colour like #1a2b3c.`);
+  for (const key of THEME_SIZE_TOKENS) if (theme?.[key] != null && !Object.hasOwn(THEME_SIZES, theme[key])) problems.push(`The theme's ${key.replace('_', ' ')} must be small, medium or large.`);
   if (theme?.source != null && (typeof theme.source !== 'string' || !THEME_SOURCE.test(theme.source))) problems.push('The theme source is not valid.');
   return problems;
 }
@@ -633,12 +643,17 @@ export function pruneLogic(definition) {
   return removed;
 }
 
+// Description limits, in characters. Page and question descriptions share one limit; the form's own
+// description is separate. Titles and answers have their own limits, which these do not change.
+export const DESCRIPTION_LIMITS = { form: 2000, page: 3000, question: 3000 };
+const count = number => number.toLocaleString('en-US');
+
 // Structural validation of a form definition. Returns a list of problems (empty when valid).
 export function definitionProblems(definition) {
   const problems = [];
   if (!definition || typeof definition !== 'object') return ['Form definition is missing.'];
   if (typeof definition.title !== 'string' || !definition.title.trim() || definition.title.length > 150) problems.push('Give the form a title of up to 150 characters.');
-  if (typeof (definition.description ?? '') !== 'string' || (definition.description ?? '').length > 2000) problems.push('Keep the description under 2000 characters.');
+  if (typeof (definition.description ?? '') !== 'string' || (definition.description ?? '').length > DESCRIPTION_LIMITS.form) problems.push(`Keep the form description to ${count(DESCRIPTION_LIMITS.form)} characters or fewer.`);
   if (!['classic', 'conversational'].includes(definition.presentation)) problems.push('Choose classic or conversational presentation.');
   if (!Array.isArray(definition.fields) || definition.fields.length > 100) return [...problems, 'A form can have up to 100 items.'];
   const seen = new Map();
@@ -649,7 +664,10 @@ export function definitionProblems(definition) {
     else if (seen.has(field.id)) problems.push(`${name} reuses the id "${field.id}".`);
     if (!FIELD_TYPES[field.type]) problems.push(`${name} has an unsupported type.`);
     if (field.type !== 'page_break' && (typeof field.label !== 'string' || !field.label.trim() || field.label.length > 300)) problems.push(`${name} needs a question of up to 300 characters.`);
-    if (field.help != null && (typeof field.help !== 'string' || field.help.length > 500)) problems.push(`${name} help text must be under 500 characters.`);
+    if (field.help != null) {
+      const limit = field.type === 'page_break' ? DESCRIPTION_LIMITS.page : DESCRIPTION_LIMITS.question;
+      if (typeof field.help !== 'string' || field.help.length > limit) problems.push(`${name} ${field.type === 'page_break' ? 'page description' : 'description'} must be ${count(limit)} characters or fewer.`);
+    }
     if (field.required != null && typeof field.required !== 'boolean') problems.push(`${name} required must be true or false.`);
     problems.push(...mediaProblems(field, name));
     if (field.type?.endsWith('_choice')) {
@@ -677,7 +695,7 @@ export function definitionProblems(definition) {
   problems.push(...logicProblems(definition));
   problems.push(...choiceRuleShapeProblems(definition));
   problems.push(...urlParamProblems(definition));
-  if (definition.theme != null) problems.push(...(typeof definition.theme === 'object' && !Array.isArray(definition.theme) ? themeProblems(definition.theme) : ['Theme is invalid.']));
+  if (definition.theme != null) problems.push(...(typeof definition.theme === 'object' && !Array.isArray(definition.theme) ? themeProblems(definition.theme, { typographyOnly: true }) : ['Theme is invalid.']));
   return problems;
 }
 

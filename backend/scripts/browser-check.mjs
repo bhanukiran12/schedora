@@ -949,6 +949,167 @@ try {
       if ((await evaluate("getComputedStyle(document.querySelector('.form-page')).backgroundColor")) !== colour('#123456')) throw new Error('receipt lost the theme');
     } finally { await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
   });
+  await step('form typography on a blank draft: default style, no workspace theme, Preview matches the published form in both layouts at desktop and phone width, other forms unaffected; 3,000-character descriptions keep line breaks and fold by keyboard', async () => {
+    const LONG = ('Record one video with camera and screen sharing on.\nPart 1: introduce yourself, explain the objective, demo the screens and name the technologies.\nPart 2: explain one question from each section, in your own words, with examples.\n').repeat(20).slice(0, 2999) + '.';
+    const sizes = scope => evaluate(`(() => { const root = document.querySelector(${JSON.stringify(scope)}); const size = selector => { const el = root.querySelector(selector); return el ? getComputedStyle(el).fontSize : null; };
+      return { title: size('h1'), question: size('.q-label'), description: size('.q-help'), answer: size('input:not([type=radio], [type=checkbox]), textarea'), button: size('.btn-primary'), font: getComputedStyle(root.querySelector('.q-label')).fontFamily.split(',')[0] }; })()`);
+    const themeRows = () => app.db.get('SELECT COUNT(*) AS count FROM form_themes').count;
+    const viewport = (width, mobile) => send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile });
+    const key = async (keyName, code, keyCode) => {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, code, windowsVirtualKeyCode: keyCode, ...(keyName === 'Enter' ? { text: '\r' } : keyName === ' ' ? { text: ' ' } : {}) });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, code, windowsVirtualKeyCode: keyCode });
+    };
+    // Another published form, to show this one's typography reaches no other form.
+    const other = await (async () => {
+      const me = await evaluate("fetch('/api/me').then(r => r.json())");
+      const definition = { title: 'Unrelated form', presentation: 'classic', fields: [{ id: 'q', type: 'short_text', label: 'Unrelated question', required: false, help: 'Short help.' }] };
+      const call = (method, path, body) => evaluate(`fetch(${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': ${JSON.stringify(me.csrf_token)} }, body: ${JSON.stringify(JSON.stringify(body))} }).then(r => r.json())`);
+      const created = await call('POST', `/api/workspaces/${me.workspaces[0].id}/forms`, { definition });
+      await call('POST', `/api/workspaces/${me.workspaces[0].id}/forms/${created.id}/publish`, {});
+      return app.db.get('SELECT id, slug FROM forms WHERE id = ?', created.id);
+    })();
+    const otherState = () => JSON.stringify([app.db.get('SELECT draft, published_version FROM forms WHERE id = ?', other.id), app.db.all('SELECT version, definition FROM form_versions WHERE form_id = ?', other.id)]);
+    const otherBefore = otherState();
+    await open(`/f/${other.slug}`, "document.querySelector('#form-root .q-label')");
+    const otherLook = await sizes('#form-root');
+
+    await open('/forms', "document.querySelector('#new-form')");
+    await click('#new-form');
+    await click('[data-template="blank"]');
+    await waitFor("document.querySelector('#fh-0')", 'typography form builder');
+    const id = await evaluate("location.pathname.split('/')[2]");
+    const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
+    const themesBefore = themeRows();
+    try {
+      // A 3,000-character question description, with line breaks, is counted against the shared limit.
+      if ((await evaluate("document.querySelector('#fh-0').maxLength")) !== 3000) throw new Error('question description limit is not 3,000 in the builder');
+      await fill('#fh-0', LONG);
+      if (!(await evaluate("document.querySelector('#fh-0-count').textContent")).startsWith('3,000 / 3,000')) throw new Error('character count does not show the limit');
+      if ((await evaluate("document.querySelector('#fh-0').getAttribute('aria-describedby')")) !== 'fh-0-count') throw new Error('count is not linked to its description');
+      const enter = await evaluate("(() => { const area = document.querySelector('#fh-0'); const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }); area.dispatchEvent(event); return event.defaultPrevented; })()");
+      if (enter) throw new Error('Enter is still blocked in a description');
+      if ((await evaluate("document.querySelector('#f-description')?.maxLength ?? 2000")) !== 2000) throw new Error('the form description limit changed');
+
+      // A blank draft has no theme: typography starts from the default style.
+      await click('#open-design');
+      await waitFor("document.querySelector('#draft-question_size')", 'typography on a draft without a theme');
+      if ((await evaluate("[document.querySelector('#draft-font').value, document.querySelector('#draft-question_size').value].join()")) !== 'system,medium') throw new Error('typography does not start from the default style');
+      if (!(await evaluate("document.querySelector('[data-design-current]').innerText")).includes('default style')) throw new Error('the panel does not say the draft uses the default style');
+      const canvasBefore = await evaluate("({ size: parseFloat(getComputedStyle(document.querySelector('.canvas-question')).fontSize), background: getComputedStyle(document.querySelector('.canvas-frame')).backgroundColor })");
+      await fill('#draft-question_size', 'large');
+      await fill('#draft-description_size', 'small');
+      await fill('#draft-answer_size', 'large');
+      await fill('#draft-font', 'rounded');
+      const canvasAfter = await evaluate("({ size: parseFloat(getComputedStyle(document.querySelector('.canvas-question')).fontSize), background: getComputedStyle(document.querySelector('.canvas-frame')).backgroundColor, font: getComputedStyle(document.querySelector('.canvas-question')).fontFamily, themed: document.querySelector('.canvas-frame').hasAttribute('data-themed') })");
+      if (!(canvasAfter.size > canvasBefore.size * 1.1) || !/rounded|Trebuchet/i.test(canvasAfter.font)) throw new Error('typography did not reach the canvas: ' + JSON.stringify(canvasAfter));
+      if (canvasAfter.background !== canvasBefore.background || canvasAfter.themed) throw new Error('typography changed the default colours: ' + JSON.stringify([canvasBefore, canvasAfter]));
+      if (!(await evaluate("document.querySelector('[data-design-current]').innerText")).includes('its own typography')) throw new Error('the panel does not say the draft has its own typography');
+      if (!(await text()).includes('Unsaved changes')) throw new Error('typography did not mark the draft unsaved');
+      await layoutCheck('form design typography', '#design-panel');
+      await click('[data-design-close]');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'typography draft saved');
+      const stored = JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', id).draft);
+      if (stored.fields[0].help !== LONG) throw new Error('the long description was not saved exactly, line breaks included');
+      if (JSON.stringify(stored.theme) !== JSON.stringify({ name: 'Default style', font: 'rounded', question_size: 'large', description_size: 'small', answer_size: 'large' })) throw new Error('draft typography not stored as the default style: ' + JSON.stringify(stored.theme));
+      if (themeRows() !== themesBefore) throw new Error('draft typography created or changed a workspace theme');
+
+      // Reopen: the same text and settings come back.
+      await evaluate('delete document.body.dataset.dirty');
+      await open(`/forms/${id}`, "document.querySelector('#fh-0')");
+      if ((await evaluate("document.querySelector('#fh-0').value")) !== LONG) throw new Error('reopened description differs');
+      await click('#open-design');
+      await waitFor("document.querySelector('#draft-question_size')", 'reopened typography');
+      if ((await evaluate("['font', 'question_size', 'description_size', 'answer_size'].map(key => document.querySelector('#draft-' + key).value).join()")) !== 'rounded,large,small,large') throw new Error('reopened typography differs');
+      await click('[data-design-close]');
+
+      // Preview at phone and desktop size, in both layouts; the published form must match each.
+      const preview = {};
+      for (const mode of ['classic', 'conversational']) {
+        await fill('#preview-mode', mode);
+        await click('.mobile-switch [data-view="preview"]');
+        for (const device of ['mobile', 'desktop']) {
+          await click(`[data-device="${device}"]`);
+          await waitFor("document.querySelector('#preview .q-label')", 'preview shown');
+          preview[`${mode}/${device}`] = await sizes('#preview');
+        }
+        await click('.mobile-switch [data-view="edit"]');
+      }
+      if (app.db.get('SELECT published_version FROM forms WHERE id = ?', id).published_version !== null) throw new Error('previewing published the form');
+      await click('#publish');
+      await waitFor("document.querySelector('#share-panel #share-link')", 'typography form published');
+      await evaluate('delete document.body.dataset.dirty');
+      const published = {};
+      for (const mode of ['classic', 'conversational']) {
+        for (const [device, width] of [['mobile', 375], ['desktop', 1280]]) {
+          await viewport(width, width < 768);
+          await open(`/f/${slug}?mode=${mode}`, "document.querySelector('#form-root .q-label')");
+          published[`${mode}/${device}`] = await sizes('#form-root');
+        }
+      }
+      await viewport(1280, false);
+      for (const key of Object.keys(preview)) if (JSON.stringify(preview[key]) !== JSON.stringify(published[key])) throw new Error(`Preview and published form differ (${key}): ${JSON.stringify(preview[key])} vs ${JSON.stringify(published[key])}`);
+      // Large questions and answers, small descriptions, against Classic's standard 18px, 16px and 15px.
+      const desktop = published['classic/desktop'];
+      if (desktop.question !== '20.7px' || desktop.answer !== '18.4px' || desktop.description !== '13.125px' || !/rounded|Trebuchet/i.test(desktop.font)) throw new Error('typography not applied on the published form: ' + JSON.stringify(desktop));
+      if (await evaluate("document.querySelector('.form-page').hasAttribute('data-themed')")) throw new Error('the published default style gained theme colours');
+      if ((await (await fetch(`${base}/api/public/forms/${slug}`)).json()).definition.theme.source !== undefined) throw new Error('the public payload reveals a theme source');
+      await open(`/f/${slug}?mode=classic`, "document.querySelector('#form-root .q-label')");
+      await layoutCheck('long description public form');
+
+      // The long description: folded, line breaks kept, and the button works from the keyboard.
+      await open(`/f/${slug}?mode=classic`, "document.querySelector('[data-desc-toggle=\"q:name\"]')");
+      const state = () => evaluate("(() => { const text = document.querySelector('#q-name-help'); const button = document.querySelector('[data-desc-toggle=\"q:name\"]'); return { folded: text.classList.contains('is-folded'), height: text.clientHeight, full: text.textContent.length, breaks: getComputedStyle(text).whiteSpace, expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls'), label: button.textContent, type: button.type, focused: document.activeElement === button }; })()");
+      const folded = await state();
+      if (!folded.folded || folded.full !== 3000 || folded.breaks !== 'pre-line' || folded.expanded !== 'false' || folded.controls !== 'q-name-help' || folded.type !== 'button' || folded.label !== 'Show full description') throw new Error('long description not folded correctly: ' + JSON.stringify(folded));
+      // Reached with Tab from the field before it, then opened with Enter and closed with Space.
+      await evaluate('document.activeElement?.blur()');
+      for (let presses = 0; presses < 40 && !(await state()).focused; presses++) await key('Tab', 'Tab', 9);
+      if (!(await state()).focused) throw new Error('Show full description is not reachable with Tab');
+      await key('Enter', 'Enter', 13);
+      const opened = await state();
+      if (opened.folded || opened.expanded !== 'true' || opened.label !== 'Show less' || opened.height < folded.height * 3 || !opened.focused) throw new Error('Enter did not open the description, or focus moved: ' + JSON.stringify(opened));
+      if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count !== 0) throw new Error('Enter on the button submitted the form');
+      await key(' ', 'Space', 32);
+      const closed = await state();
+      if (!closed.folded || closed.expanded !== 'false' || closed.label !== 'Show full description' || !closed.focused) throw new Error('Space did not close the description: ' + JSON.stringify(closed));
+      await key('Enter', 'Enter', 13);
+      await fill('#form-root #q-name', 'Typography person');
+      if ((await state()).expanded !== 'true') throw new Error('an opened description closed again on redraw');
+      // Conversational: the same control on a one-question screen, and Enter on it does not move on.
+      await open(`/f/${slug}?mode=conversational`, "document.querySelector('[data-desc-toggle=\"q:name\"]')");
+      await evaluate("document.querySelector('[data-desc-toggle=\"q:name\"]').focus()");
+      await key('Enter', 'Enter', 13);
+      const conversational = await evaluate("({ expanded: document.querySelector('[data-desc-toggle=\"q:name\"]')?.getAttribute('aria-expanded'), still: !!document.querySelector('#q-name') })");
+      if (conversational.expanded !== 'true' || !conversational.still) throw new Error('conversational fold control failed: ' + JSON.stringify(conversational));
+
+      // Nothing reached the other form, and a later draft change stays in the draft until published.
+      if (otherState() !== otherBefore) throw new Error('publishing this form changed another form');
+      await open(`/f/${other.slug}`, "document.querySelector('#form-root .q-label')");
+      if (JSON.stringify(await sizes('#form-root')) !== JSON.stringify(otherLook)) throw new Error('another published form changed its typography');
+      await open(`/forms/${id}`, "document.querySelector('#open-design')");
+      await click('#open-design');
+      await waitFor("document.querySelector('#draft-question_size')", 'typography again');
+      await fill('#draft-question_size', 'small');
+      await click('[data-design-close]');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'draft ahead of live');
+      await evaluate('delete document.body.dataset.dirty');
+      await open(`/f/${slug}?mode=classic`, "document.querySelector('#form-root .q-label')");
+      if ((await sizes('#form-root')).question !== '20.7px') throw new Error('a saved draft changed the published typography');
+      // Back at the default style's values, the draft holds no theme at all.
+      await open(`/forms/${id}`, "document.querySelector('#open-design')");
+      await click('#open-design');
+      await waitFor("document.querySelector('[data-theme-clear]')", 'reset typography');
+      await click('[data-theme-clear]');
+      if (await evaluate("!!document.querySelector('[data-theme-clear]') || document.querySelector('#draft-font').value !== 'system'")) throw new Error('Reset typography did not return to the default style');
+      await click('[data-design-close]');
+      await click('#save');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'reset saved');
+      if ('theme' in JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', id).draft)) throw new Error('a reset draft still stores a theme');
+      if (themeRows() !== themesBefore) throw new Error('a workspace theme was created');
+    } finally { await viewport(1280, false).catch(() => {}); await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
+  });
   await step('Contact Info page: picker, outline, keyboard reorder and collapse, one screen, invalid focus, Back, preview, branching, publish, inbox and CSV', async () => {
     const press = async (name, code, vk) => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: name, code, windowsVirtualKeyCode: vk, text: name === 'Enter' ? '\r' : undefined }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: name, code, windowsVirtualKeyCode: vk }); };
     const type = value => send('Input.insertText', { text: value });
@@ -2599,8 +2760,14 @@ try {
     await click('#live-meet-form button[type=submit]');
     await waitFor("document.querySelector('#live-forms-form')", 'live form step');
     await fill('#live-form-title', 'Live Onboarding Form');
+    // Onboarding uses the shared 2,000-character form description limit, line breaks included.
+    if ((await evaluate("document.querySelector('#live-form-description').maxLength")) !== 2000) throw new Error('onboarding form description is not limited to 2,000');
+    const onboardingDescription = ('Tell us what you need.\nWe reply within a day.\n').repeat(50).slice(0, 1999) + '.';
+    await fill('#live-form-description', onboardingDescription);
     await click('#live-forms-form button[type=submit]');
     await waitFor("document.querySelector('#live-flow-form')", 'live flow step');
+    const onboardingForm = app.db.all('SELECT draft FROM forms').map(row => JSON.parse(row.draft)).find(draft => draft.title === 'Live Onboarding Form');
+    if (onboardingForm?.description !== onboardingDescription) throw new Error('onboarding did not save a 2,000-character description exactly');
     await fill('#live-flow-name', 'Live Onboarding Flow');
     await click('#live-flow-form button[type=submit]');
     await waitFor("document.querySelector('#live-ready-meet') && document.querySelector('#live-ready-forms') && document.querySelector('#live-ready-flow')", 'live readiness review');

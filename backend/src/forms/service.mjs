@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail, HttpError } from '../http.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
-import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
+import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { assertDefinitionAssets, recordVersionAssets } from './assets.mjs';
 import { assertSessionClaim, recordSessionSubmission, verifyTicket } from '../video/session.mjs';
@@ -77,6 +77,7 @@ const normalizeTheme = theme => {
   const clean = pick(theme, ['name', 'source', ...THEME_TOKENS]);
   if (typeof clean.name === 'string') clean.name = clean.name.trim();
   for (const key of THEME_TOKENS) if (typeof clean[key] === 'string') clean[key] = clean[key].toLowerCase();
+  for (const key of THEME_SIZE_TOKENS) if (clean[key] === 'medium') delete clean[key]; // Standard is the default, not stored
   return clean;
 };
 // Empty lists are not stored, so a form without logic keeps its existing JSON.

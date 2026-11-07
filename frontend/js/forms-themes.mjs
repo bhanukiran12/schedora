@@ -1,7 +1,7 @@
 // Form appearance: Schedora's preset gallery, and how a theme reaches the page. Pure, apart from setting
 // custom properties on the element it is given. A form holds its own copy of a theme, so nothing here
 // looks a theme up at render time, and only values the shared validator accepts reach the page.
-import { THEME_COLORS, THEME_FONTS, THEME_TOKENS, themeProblems } from '../shared/forms-logic.mjs';
+import { THEME_COLORS, THEME_FONTS, THEME_SIZE_TOKENS, THEME_TOKENS, isTypographyOnly, themeProblems } from '../shared/forms-logic.mjs';
 
 export const THEME_PRESETS = [
   { id: 'schedora', name: 'Schedora', font: 'system', background: '#ffffff', question: '#2a1a4f', answer: '#4b3d6b', button: '#5b3aa0', button_text: '#ffffff' },
@@ -18,19 +18,39 @@ export const presetById = id => THEME_PRESETS.find(preset => preset.id === id);
 // A new theme starts from something readable that is clearly not yet the author's own.
 export const STARTER_TOKENS = { font: 'system', background: '#ffffff', question: '#1f1f1f', answer: '#3d3d3d', button: '#5b3aa0', button_text: '#ffffff' };
 
-export const tokensOf = theme => Object.fromEntries(THEME_TOKENS.map(key => [key, theme[key]]));
+// A size left at Standard is not written, so a theme nobody resized keeps exactly the values it had.
+export const tokensOf = theme => Object.fromEntries(THEME_TOKENS.filter(key => !THEME_SIZE_TOKENS.includes(key) || (theme[key] != null && theme[key] !== 'medium')).map(key => [key, theme[key]]));
+
+// How much each step scales a layout's own size. Answers never drop below 16px on phones (see app.css).
+export const SIZE_SCALE = { small: 0.875, medium: 1, large: 1.15 };
+const SCALE_NAMES = { question_size: '--t-question-scale', description_size: '--t-description-scale', answer_size: '--t-answer-scale' };
 
 /** The draft's own copy of a theme. `source` records where it came from, for the Design panel only. */
 export const themeCopy = (theme, source) => ({ name: theme.name, ...(source ? { source } : {}), ...tokensOf(theme) });
 
 const CSS_NAMES = { background: '--t-background', question: '--t-question', answer: '--t-answer', button: '--t-button', button_text: '--t-button-text' };
 
+// The default style, as typography. A draft without a theme starts here; changing its font or sizes
+// stores a typography-only theme on that draft alone (never a workspace theme), and returning to these
+// values removes it again, so the draft is exactly as it was.
+export const DEFAULT_STYLE_NAME = 'Default style';
+export const DEFAULT_TYPOGRAPHY = { font: 'system' };
+export function defaultStyleWith(typography) {
+  const theme = { name: DEFAULT_STYLE_NAME, font: typography.font || DEFAULT_TYPOGRAPHY.font };
+  for (const key of THEME_SIZE_TOKENS) if (typography[key] && typography[key] !== 'medium') theme[key] = typography[key];
+  return Object.keys(theme).length === 2 && theme.font === DEFAULT_TYPOGRAPHY.font ? null : theme;
+}
+
 /** Shows a theme on an element, or clears it. Anything the validator would refuse is not applied. */
 export function applyTheme(element, theme) {
-  for (const name of [...Object.values(CSS_NAMES), '--t-font']) element.style.removeProperty(name);
+  for (const name of [...Object.values(CSS_NAMES), ...Object.values(SCALE_NAMES), '--t-font']) element.style.removeProperty(name);
   delete element.dataset.themed;
-  if (!theme || themeProblems(theme).length) return;
-  for (const key of THEME_COLORS) element.style.setProperty(CSS_NAMES[key], theme[key]);
+  delete element.dataset.typography;
+  if (!theme || themeProblems(theme, { typographyOnly: true }).length) return;
   element.style.setProperty('--t-font', THEME_FONTS[theme.font].stack);
+  for (const key of THEME_SIZE_TOKENS) if (theme[key] && theme[key] !== 'medium') element.style.setProperty(SCALE_NAMES[key], String(SIZE_SCALE[theme[key]]));
+  // Typography only: the default colours, including dark mode, stay exactly as they are.
+  if (isTypographyOnly(theme)) { element.dataset.typography = '1'; return; }
+  for (const key of THEME_COLORS) element.style.setProperty(CSS_NAMES[key], theme[key]);
   element.dataset.themed = '1';
 }

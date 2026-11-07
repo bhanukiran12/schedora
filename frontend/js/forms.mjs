@@ -17,7 +17,7 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
 import { blockEnd, canMove, contactInfoBlock, dropIsNoop, dropItem, duplicateBlock, isHead, moveItem, outlineMarks } from './forms-groups.mjs';
-import { CLIENT_EVALUATOR, CONDITION_OPS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 import { TYPE_KIND, formIcon } from './forms-icons.mjs';
 import { designPanel } from './forms-design.mjs';
 import { logicMapModel } from './forms-logicmap.mjs';
@@ -78,7 +78,7 @@ function inputFor(field, value, labelText, assetUrl = publicAssetUrl) {
   const describedBy = field.help ? `${id}-help` : '';
   const common = raw(`id="${id}" name="${field.id}" ${field.required ? 'aria-required="true"' : ''} ${describedBy ? `aria-describedby="${describedBy}"` : ''}`);
   const label = html`<label for="${id}" class="q-label">${labelText}${field.required ? html` <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden">(required)</span>` : ''}</label>`;
-  const help = field.help ? html`<span class="hint" id="${id}-help">${field.help}</span>` : '';
+  const help = field.help ? html`<div class="hint q-help" id="${id}-help" data-desc="q:${field.id}">${field.help}</div>` : '';
   const hint = field.placeholder ? html`placeholder="${field.placeholder}"` : '';
   switch (field.type) {
     case 'long_text': return html`${label}${help}<textarea ${common} ${hint} maxlength="5000">${value || ''}</textarea>`;
@@ -97,6 +97,58 @@ function inputFor(field, value, labelText, assetUrl = publicAssetUrl) {
   }
 }
 
+// A description's character count, from the shared limit. It is linked to its field, and only speaks
+// up near the limit, so typing is not interrupted by a running count.
+const countText = (length, limit) => `${length.toLocaleString('en-US')} / ${limit.toLocaleString('en-US')} characters`;
+const limitAttributes = (id, limit) => raw(`maxlength="${limit}" data-limit="${limit}" aria-describedby="${id}-count"`);
+const characterCount = (id, value, limit, always = false) => html`<span class="char-count${always ? ' is-always' : ''}${(value || '').length >= limit * 0.9 ? ' is-near' : ''}" id="${id}-count">${countText((value || '').length, limit)}</span>`;
+function refreshCount(area) {
+  const node = document.getElementById(`${area.id}-count`);
+  if (!node) return;
+  const limit = Number(area.dataset.limit);
+  const near = area.value.length >= limit * 0.9;
+  node.textContent = countText(area.value.length, limit);
+  node.classList.toggle('is-near', near);
+  node.setAttribute('aria-live', near ? 'polite' : 'off');
+}
+if (typeof document !== 'undefined') document.addEventListener('input', event => { if (event.target?.dataset?.limit) refreshCount(event.target); });
+
+// Long descriptions open folded to a few lines with a button to read the rest, so the answer and the
+// button stay near the question. The whole text stays in the page, and is what assistive technology
+// reads. A description that turns out to fit is left as it is.
+const FORM_DESCRIPTION = 'form';
+const FOLD_CHARACTERS = 280;
+const FOLD_BREAKS = 3;
+const isLong = text => text.length > FOLD_CHARACTERS || (text.match(/\n/g) || []).length > FOLD_BREAKS;
+function foldDescriptions(root, expanded) {
+  for (const text of $$('[data-desc]', root)) {
+    if (!isLong(text.textContent)) continue;
+    const key = text.dataset.desc;
+    const open = expanded.has(key);
+    text.classList.toggle('is-folded', !open);
+    // Measured only when laid out: a hidden preview keeps the button rather than guessing.
+    if (!open && text.clientHeight && text.scrollHeight <= text.clientHeight + 1) { text.classList.remove('is-folded'); continue; }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn-link desc-toggle';
+    button.dataset.descToggle = key;
+    button.setAttribute('aria-controls', text.id);
+    text.after(button);
+    showFold(text, button, open);
+  }
+}
+function showFold(text, button, open) {
+  text.classList.toggle('is-folded', !open);
+  button.setAttribute('aria-expanded', String(open));
+  button.textContent = open ? 'Show less' : 'Show full description';
+}
+function toggleDescription(root, button, expanded) {
+  const key = button.dataset.descToggle;
+  const text = root.querySelector(`#${CSS.escape(button.getAttribute('aria-controls'))}`);
+  if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+  showFold(text, button, expanded.has(key));
+}
+
 function readAnswer(form, field) {
   if (field.type === 'multiple_choice') return $$(`[name="${field.id}"]:checked`, form).map(input => input.value);
   if (field.type === 'single_choice') return $(`[name="${field.id}"]:checked`, form)?.value || '';
@@ -109,7 +161,11 @@ function readAnswer(form, field) {
 export { inputFor, readAnswer };
 export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit, describeError, answers: initial = {}, banner = '', assetUrl = publicAssetUrl, embedVideo = true, urlParams = null } = {}) {
   applyTheme(container.closest('.form-page') || container, definition.theme);
+  // Text sizes follow the width the form is given, not the window, so a phone-sized preview in the
+  // builder shows exactly what a phone shows.
+  container.classList.add('form-scope');
   const loadedVideos = new Set(); // videos the respondent chose to load stay loaded across redraws
+  const expanded = new Set(); // long descriptions the respondent opened stay open across redraws
   const answers = { ...initial };
   let position = 0; // page index (classic) or question index (conversational)
   let errors = {};
@@ -150,14 +206,14 @@ export function renderForm(container, definition, { mode = definition.presentati
     // Replacing a focused input that was just edited fires its change event during the replacement.
     drawing = true;
     mount(container, html`<form class="public-form ${conversational ? 'conversational' : ''}" novalidate>
-      ${position === 0 || !conversational ? html`<h1 ${raw(preview ? 'aria-level="2" role="heading"' : '')}>${definition.title}</h1>${definition.description && position === 0 ? html`<p>${definition.description}</p>` : ''}` : ''}
+      ${position === 0 || !conversational ? html`<h1 ${raw(preview ? 'aria-level="2" role="heading"' : '')}>${definition.title}</h1>${definition.description && position === 0 ? html`<p class="form-description" id="form-description" data-desc="${FORM_DESCRIPTION}">${definition.description}</p>` : ''}` : ''}
       ${message ? html`<div data-form-banner>${message}</div>` : ''}
       ${total > 1 ? html`<div class="progress" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span style-width="${progress}"></span></div>
         <p class="muted">${conversational ? `Question ${position + 1} of ${total}` : `Page ${position + 1} of ${total}`}</p>` : ''}
       ${pageErrors.length > 1 ? html`<div class="notice notice-bad error-summary" tabindex="-1" data-error-summary><p><strong>Check ${pageErrors.length} answers before continuing:</strong></p>
         <ul>${pageErrors.map(field => html`<li><a href="#q-${field.id}" data-jump="${field.id}">${pipe(field.label, definition, answers) || 'Question'}: ${errors[field.id]}</a></li>`)}</ul></div>` : ''}
       ${!conversational && fields.some(field => field.required) ? html`<p class="muted"><span class="required-mark" aria-hidden="true">*</span> Required</p>` : ''}
-      ${page ? html`<div class="form-page-head${entered ? ` q-enter-${entered}` : ''}">${conversational ? html`<span class="question-number">${position + 1} →</span>` : ''}<h2 class="form-page-title">${pipe(page.label, definition, answers)}</h2>${page.help ? html`<p class="form-page-help">${pipe(page.help, definition, answers)}</p>` : ''}</div>` : ''}
+      ${page ? html`<div class="form-page-head${entered ? ` q-enter-${entered}` : ''}">${conversational ? html`<span class="question-number">${position + 1} →</span>` : ''}<h2 class="form-page-title">${pipe(page.label, definition, answers)}</h2>${page.help ? html`<p class="form-page-help" id="page-${page.id}-help" data-desc="page:${page.id}">${pipe(page.help, definition, answers)}</p>` : ''}</div>` : ''}
       ${fields.length ? fields.map(field => html`<div class="question${entered ? ` q-enter-${entered}` : ''}" data-field="${field.id}">${conversational && !page ? html`<span class="question-number">${position + 1} →</span>` : ''}
         ${mediaFor(field, assetUrl, loadedVideos, pipe(field.label, definition, answers), embedVideo)}${inputFor(field, answers[field.id], pipe(field.label, definition, answers), assetUrl)}
         ${errors[field.id] ? html`<div class="field-error" id="q-${field.id}-error">${errors[field.id]}</div>` : ''}</div>`) : html`<p class="muted">This form has no questions yet.</p>`}
@@ -174,6 +230,7 @@ export function renderForm(container, definition, { mode = definition.presentati
     $$('[style-width]', container).forEach(bar => { bar.style.width = bar.getAttribute('style-width') + '%'; bar.removeAttribute('style-width'); });
     watchImages(container);
     const form = $('form', container);
+    foldDescriptions(form, expanded);
     for (const field of fields) {
       if (errors[field.id]) $$(`[name="${field.id}"]`, form).forEach(input => { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), `q-${field.id}-error`].filter(Boolean).join(' ')); });
     }
@@ -186,6 +243,8 @@ export function renderForm(container, definition, { mode = definition.presentati
     else if (focusId !== null && (conversational || pageErrors.length || entered)) (form.querySelector('[aria-invalid="true"]') || form.querySelector('input, textarea'))?.focus();
 
     form.addEventListener('click', event => {
+      const fold = event.target.closest('[data-desc-toggle]');
+      if (fold) { toggleDescription(form, fold, expanded); return; }
       const load = event.target.closest('[data-load-video]');
       if (load) {
         const field = definition.fields.find(item => item.id === load.dataset.loadVideo);
@@ -690,7 +749,7 @@ export async function builder(ctx) {
   const renderSettings = () => mount($('#settings'), html`<div class="card card-plain"><h2 id="settings-heading" tabindex="-1">Form details</h2>
     <div class="form-details"><div>
     <label for="f-title">Form title</label><input id="f-title" data-setting="title" maxlength="150" value="${draft.title}">
-    <label for="f-description">Description</label><textarea id="f-description" data-setting="description" maxlength="2000">${draft.description || ''}</textarea></div><div>
+    <label for="f-description">Description</label><textarea id="f-description" data-setting="description" ${limitAttributes('f-description', DESCRIPTION_LIMITS.form)}>${draft.description || ''}</textarea>${characterCount('f-description', draft.description, DESCRIPTION_LIMITS.form, true)}</div><div>
     <fieldset><legend class="label" id="presentation-legend" tabindex="-1">Presentation</legend>
       <label class="check"><input type="radio" name="presentation" value="classic" data-setting="presentation" ${draft.presentation === 'classic' ? raw('checked') : ''}> Classic: questions grouped into pages</label>
       <label class="check"><input type="radio" name="presentation" value="conversational" data-setting="presentation" ${draft.presentation === 'conversational' ? raw('checked') : ''}> Conversational: one question at a time</label></fieldset>
@@ -1000,7 +1059,7 @@ export async function builder(ctx) {
         <div class="canvas-question-row${selected === headAt ? ' is-selected' : ''}" data-index="${headAt}" data-member="${headAt}">
           <span class="canvas-number">${marks[headAt]}</span>
           <div><label class="visually-hidden" for="fl-${headAt}">Page title</label><textarea id="fl-${headAt}" class="canvas-question" data-prop="label" rows="1" maxlength="150" placeholder="Page title">${head.label}</textarea>
-            <label class="visually-hidden" for="fh-${headAt}">Page description (optional)</label><textarea id="fh-${headAt}" class="canvas-description" data-prop="help" rows="1" maxlength="500" placeholder="Description (optional)">${head.help || ''}</textarea></div></div>
+            <label class="visually-hidden" for="fh-${headAt}">Page description (optional)</label><textarea id="fh-${headAt}" class="canvas-description" data-prop="help" rows="1" ${limitAttributes(`fh-${headAt}`, DESCRIPTION_LIMITS.page)} placeholder="Description (optional)">${head.help || ''}</textarea>${characterCount(`fh-${headAt}`, head.help, DESCRIPTION_LIMITS.page)}</div></div>
         ${members.map(([field, index]) => html`<div class="canvas-member${selected === index ? ' is-selected' : ''}" data-index="${index}" data-member="${index}">
           <div class="canvas-member-head"><label class="visually-hidden" for="fl-${index}">Question ${marks[index]}</label><textarea id="fl-${index}" class="canvas-member-label" data-prop="label" rows="1" maxlength="300" placeholder="Your question here">${field.label}</textarea>${field.required ? html`<span class="required-mark" aria-hidden="true">*</span>` : ''}</div>
           ${answerArea(field, index, `question ${marks[index]}`)}</div>`)}
@@ -1029,7 +1088,7 @@ export async function builder(ctx) {
           <div class="canvas-question-row">
             <span class="canvas-number">${number}</span>
             <div><label class="visually-hidden" for="fl-${index}">Question</label><textarea id="fl-${index}" class="canvas-question" data-prop="label" rows="1" maxlength="300" placeholder="Your question here" aria-describedby="fl-${index}-hint">${field.label}</textarea>
-              <label class="visually-hidden" for="fh-${index}">Description (optional)</label><textarea id="fh-${index}" class="canvas-description" data-prop="help" rows="1" maxlength="500" placeholder="Description (optional)">${field.help || ''}</textarea></div>
+              <label class="visually-hidden" for="fh-${index}">Description (optional)</label><textarea id="fh-${index}" class="canvas-description" data-prop="help" rows="1" ${limitAttributes(`fh-${index}`, DESCRIPTION_LIMITS.question)} placeholder="Description (optional)">${field.help || ''}</textarea>${characterCount(`fh-${index}`, field.help, DESCRIPTION_LIMITS.question)}</div>
             ${field.media?.type === 'image' ? html`<img class="canvas-media" src="${workspaceAssetUrl(field.media.asset)}" alt="">` : field.media?.type === 'video' ? html`<p class="canvas-note">${VIDEO_PROVIDERS[field.media.provider]} video placeholder</p>` : ''}
             <div class="canvas-answer-area">${answerArea(field, index, name)}<span class="canvas-button" aria-hidden="true">OK</span></div>
           </div>`}</div></div>
@@ -1696,7 +1755,8 @@ export async function builder(ctx) {
   });
   showDevice('desktop');
   // Enter finishes editing a title rather than breaking it across lines; the respondent sees one line of wording.
-  fieldsRoot.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target.matches('.canvas-question, .canvas-description, .canvas-member-label')) event.preventDefault(); });
+  // Titles stay on one line; descriptions keep the line breaks the author types.
+  fieldsRoot.addEventListener('keydown', event => { if (event.key === 'Enter' && event.target.matches('.canvas-question, .canvas-member-label')) event.preventDefault(); });
   fieldsRoot.addEventListener('click', event => {
     const section = event.target.closest('[data-inspector]');
     if (!section) return;

@@ -11,7 +11,7 @@ import { assessFormReadiness } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
 import { FORM_TEMPLATES } from './forms-templates.mjs';
 import { FLOW_STARTERS } from './flow-starters.mjs';
-import { definitionProblems, visibleFields } from '/shared/forms-logic.mjs';
+import { DESCRIPTION_LIMITS, definitionProblems, visibleFields } from '/shared/forms-logic.mjs';
 
 const DAYS = [['1', 'Mon'], ['2', 'Tue'], ['3', 'Wed'], ['4', 'Thu'], ['5', 'Fri'], ['6', 'Sat'], ['0', 'Sun']];
 const minToClock = minutes => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
@@ -310,8 +310,8 @@ export async function liveOnboarding(ctx) {
       <label for="live-form-title">Form title</label>
       <input id="live-form-title" name="title" required maxlength="120" value="${existingForm?.draft?.title || FORM_TEMPLATES[0].definition.title}">
 
-      <label for="live-form-description">Description</label>
-      <textarea id="live-form-description" name="description" maxlength="500">${existingForm?.draft?.description || FORM_TEMPLATES[0].definition.description}</textarea>
+      <label for="live-form-description">Description</label><span class="hint" id="live-form-description-hint">Up to ${DESCRIPTION_LIMITS.form.toLocaleString('en-US')} characters. Line breaks are kept.</span>
+      <textarea id="live-form-description" name="description" maxlength="${DESCRIPTION_LIMITS.form}" aria-describedby="live-form-description-hint">${existingForm?.draft?.description || FORM_TEMPLATES[0].definition.description}</textarea>
 
       <label for="live-form-presentation">Presentation style</label>
       <select id="live-form-presentation" name="presentation">

@@ -3,11 +3,20 @@
 // nothing reaches respondents until the form is published, and saving a reusable theme changes no
 // other form. Form templates, which hold questions, are a separate thing and are not touched here.
 import { $, $$, api, ask, html, mount, raw, toast, wsPath } from './core.mjs';
-import { THEME_COLORS, THEME_FONTS, themeWarnings } from '../shared/forms-logic.mjs';
-import { STARTER_TOKENS, THEME_PRESETS, applyTheme, themeCopy, tokensOf } from './forms-themes.mjs';
+import { THEME_COLORS, THEME_FONTS, THEME_SIZES, THEME_SIZE_TOKENS, isTypographyOnly, themeWarnings } from '../shared/forms-logic.mjs';
+import { DEFAULT_TYPOGRAPHY, STARTER_TOKENS, THEME_PRESETS, applyTheme, defaultStyleWith, themeCopy, tokensOf } from './forms-themes.mjs';
 
 const COLOR_LABELS = { background: 'Background', question: 'Question text', answer: 'Answer text', button: 'Button', button_text: 'Button text' };
+const SIZE_LABELS = { question_size: 'Question size', description_size: 'Description size', answer_size: 'Answer size' };
 const sameLook = (a, b) => JSON.stringify(tokensOf(a)) === JSON.stringify(tokensOf(b));
+
+// Font and text sizes. The same controls appear in the theme editor and, for this draft's own copy,
+// on the Design panel itself; `prefix` keeps their ids apart.
+const typographyControls = (tokens, prefix) => html`<div class="theme-typography" role="group" aria-labelledby="${prefix}-typography-heading">
+  <p class="theme-group-heading" id="${prefix}-typography-heading">Typography</p>
+  <label for="${prefix}-font">Font family</label><select id="${prefix}-font" data-token="font">${Object.entries(THEME_FONTS).map(([key, font]) => html`<option value="${key}" ${key === tokens.font ? raw('selected') : ''}>${font.label}</option>`)}</select>
+  ${THEME_SIZE_TOKENS.map(key => html`<label for="${prefix}-${key}">${SIZE_LABELS[key]}</label><select id="${prefix}-${key}" data-token="${key}">${Object.entries(THEME_SIZES).map(([size, label]) => html`<option value="${size}" ${size === (tokens[key] || 'medium') ? raw('selected') : ''}>${label}</option>`)}</select>`)}
+</div>`;
 
 export function designPanel({ root, opener, getTheme, setTheme, announce }) {
   let tab = 'mine';
@@ -20,14 +29,25 @@ export function designPanel({ root, opener, getTheme, setTheme, announce }) {
 
   const currentLine = () => {
     const theme = getTheme();
-    return html`<p class="design-current" data-design-current>${theme ? html`This draft uses <strong>${theme.name}</strong>. <button class="btn-link" type="button" data-theme-clear>Remove theme</button>` : 'This draft uses the standard look.'}</p>`;
+    if (!theme) return html`<p class="design-current" data-design-current>This draft uses the default style.</p>`;
+    if (isTypographyOnly(theme)) return html`<p class="design-current" data-design-current>This draft uses the default style with its own typography. <button class="btn-link" type="button" data-theme-clear>Reset typography</button></p>`;
+    return html`<p class="design-current" data-design-current>This draft uses <strong>${theme.name}</strong>. <button class="btn-link" type="button" data-theme-clear>Remove theme</button></p>`;
+  };
+  // Typography for this draft alone. With a theme it changes the draft's own copy, never the saved theme;
+  // without one it starts from the default style and keeps the change on this draft only.
+  const draftTypography = () => {
+    const theme = getTheme();
+    const note = theme && !isTypographyOnly(theme)
+      ? 'Changes apply to this draft only. The saved theme, other forms and the published form are not changed until you publish.'
+      : 'Starts from the default style. Changes apply to this draft only: no workspace theme is created, and the published form is not changed until you publish.';
+    return html`<section class="design-typography" data-draft-typography>${typographyControls(theme || DEFAULT_TYPOGRAPHY, 'draft')}<p class="hint">${note}</p></section>`;
   };
 
   const themeCard = theme => {
     const applied = getTheme()?.source === `workspace:${theme.id}`;
     const current = applied && sameLook(getTheme(), theme);
     return html`<li class="theme-card" data-theme-id="${theme.id}">${miniature(theme)}<p class="theme-card-name">${theme.name}${current ? html` <span class="theme-card-state">In use</span>` : ''}</p>
-      ${applied && !current ? html`<p class="hint">This draft keeps an earlier copy. Apply again to take these changes.</p>` : ''}
+      ${applied && !current ? html`<p class="hint">This draft's copy differs from this theme. Apply again to use the theme as saved.</p>` : ''}
       <div class="theme-card-actions"><button class="btn btn-small" type="button" data-theme-apply ${current ? raw('disabled') : ''}>${applied ? 'Apply again' : 'Apply'}<span class="visually-hidden"> ${theme.name}</span></button>
         <button class="btn btn-small" type="button" data-theme-edit>Edit<span class="visually-hidden"> ${theme.name}</span></button>
         <button class="btn btn-small" type="button" data-theme-duplicate>Duplicate<span class="visually-hidden"> ${theme.name}</span></button>
@@ -45,7 +65,8 @@ export function designPanel({ root, opener, getTheme, setTheme, announce }) {
     return html`<form class="theme-editor" novalidate data-theme-form>
       <h3 id="theme-editor-heading" tabindex="-1">${editing.id ? 'Edit theme' : 'Create theme'}</h3>
       <label for="theme-name">Theme name</label><input id="theme-name" maxlength="60" value="${editing.name}">
-      <label for="theme-font">Typography</label><select id="theme-font" data-token="font">${Object.entries(THEME_FONTS).map(([key, font]) => html`<option value="${key}" ${key === editing.tokens.font ? raw('selected') : ''}>${font.label}</option>`)}</select>
+      ${typographyControls(editing.tokens, 'theme')}
+      <p class="theme-group-heading">Colours</p>
       <div class="theme-colors">${THEME_COLORS.map(key => html`<div class="theme-color"><label for="theme-${key}">${COLOR_LABELS[key]}</label><input id="theme-${key}" type="color" data-token="${key}" value="${editing.tokens[key]}"></div>`)}</div>
       <div data-theme-warnings role="status">${warnings.map(warning => html`<p class="hint theme-warning">${warning.text}</p>`)}</div>
       ${editing.error ? html`<p class="field-error" role="alert">${editing.error}</p>` : ''}
@@ -55,7 +76,7 @@ export function designPanel({ root, opener, getTheme, setTheme, announce }) {
 
   const draw = focus => {
     mount(root, html`<div class="design-head"><h2 id="design-heading" tabindex="-1">Design</h2><button class="btn btn-small" type="button" data-design-close>Close<span class="visually-hidden"> Design</span></button></div>
-      ${editing ? editor() : html`${currentLine()}
+      ${editing ? editor() : html`${currentLine()}${draftTypography()}
         <div class="design-tabs" role="tablist" aria-label="Themes"><button role="tab" type="button" id="design-tab-mine" data-design-tab="mine" aria-selected="${String(tab === 'mine')}" aria-controls="design-tabpanel" ${tab === 'mine' ? '' : raw('tabindex="-1"')}>My themes</button><button role="tab" type="button" id="design-tab-gallery" data-design-tab="gallery" aria-selected="${String(tab === 'gallery')}" aria-controls="design-tabpanel" ${tab === 'gallery' ? '' : raw('tabindex="-1"')}>Gallery</button></div>
         <div id="design-tabpanel" role="tabpanel" aria-labelledby="design-tab-${tab}">${tab === 'gallery' ? html`<ul class="theme-grid">${THEME_PRESETS.map(presetCard)}</ul>`
           : html`<button class="btn btn-small theme-create" type="button" data-theme-create>Create theme</button>
@@ -91,7 +112,25 @@ export function designPanel({ root, opener, getTheme, setTheme, announce }) {
     return created;
   };
 
+  // Selects report through change; both events land here so every browser updates at once.
+  const draftToken = event => {
+    if (editing || !event.target.closest('[data-draft-typography]') || !event.target.dataset.token) return false;
+    const { token } = event.target.dataset;
+    const current = getTheme() || DEFAULT_TYPOGRAPHY;
+    if ((current[token] || 'medium') === event.target.value) return true; // the second of input and change
+    const next = { ...current, [token]: event.target.value };
+    for (const key of THEME_SIZE_TOKENS) if (!next[key] || next[key] === 'medium') delete next[key];
+    // The default style holds typography only, and back at its own values it leaves the draft as it was.
+    const theme = !getTheme() || isTypographyOnly(getTheme()) ? defaultStyleWith(next) : next;
+    const hadTheme = Boolean(getTheme());
+    setTheme(theme);
+    if (Boolean(theme) !== hadTheme) draw(`#${event.target.id}`); // the current line and note change too
+    announce('Typography changed on this draft. Save the draft to keep this change.');
+    return true;
+  };
+  root.addEventListener('change', draftToken);
   root.addEventListener('input', event => {
+    if (draftToken(event)) return;
     if (!editing) return;
     if (event.target.id === 'theme-name') editing.name = event.target.value;
     else if (event.target.dataset.token) editing.tokens[event.target.dataset.token] = event.target.value;
@@ -125,8 +164,9 @@ export function designPanel({ root, opener, getTheme, setTheme, announce }) {
     if (dataset.designClose !== undefined) return close();
     if (dataset.designTab) { tab = dataset.designTab; return draw(`#design-tab-${tab}`); }
     if (dataset.themeRetry !== undefined) return load();
-    if (dataset.themeClear !== undefined) { setTheme(null); announce('Theme removed from this draft. Save the draft to keep this change.'); return draw('[data-design-current]'); }
-    if (dataset.themeCreate !== undefined) return startEditing({ id: null, name: 'My theme', tokens: tokensOf(getTheme() || STARTER_TOKENS), revision: null });
+    if (dataset.themeClear !== undefined) { const typography = isTypographyOnly(getTheme()); setTheme(null); announce(typography ? 'Typography reset to the default style. Save the draft to keep this change.' : 'Theme removed from this draft. Save the draft to keep this change.'); return draw('#draft-font'); }
+    // A new theme keeps the draft's typography; colours come from the starter when the draft has none.
+    if (dataset.themeCreate !== undefined) return startEditing({ id: null, name: 'My theme', tokens: { ...tokensOf(STARTER_TOKENS), ...Object.fromEntries(Object.entries(tokensOf(getTheme() || STARTER_TOKENS)).filter(([, value]) => value != null)) }, revision: null });
     if (dataset.themeCancel !== undefined) { const back = editing.before; setTheme(back, true); return stopEditing('[data-theme-create]'); }
     const preset = THEME_PRESETS.find(item => item.id === button.closest('[data-preset-id]')?.dataset.presetId);
     if (dataset.presetApply !== undefined) {

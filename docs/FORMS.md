@@ -248,6 +248,53 @@ The editor shows one surface at a time, chosen in the top bar, without changing 
 
 Only a named font stack and `#rrggbb` colours are accepted, by the shared validator on save, on publish and again before the page uses them. So a theme cannot carry CSS or a URL, and no font is loaded from elsewhere. Reusable themes live in `form_themes` (workspace-scoped, `forms.manage`, 50 per workspace, `409 theme_conflict` on a stale edit), via `/api/workspaces/:ws/form-themes`. Migration `016_form_themes.sql` and `postgres_v15_form_themes` are additive.
 
+### Typography (7 November, local only)
+
+**Default scale.** One stylesheet block (`app.css`, "Form typography") sets every size for the published form, the builder's Preview, template previews and embeds. Sizes follow the width the form is given, through a container query on the element `renderForm` draws into, so the phone-sized Preview shows exactly what a phone shows. Earlier, Preview's phone frame used desktop sizes and a 26px title of its own.
+
+| Text | Classic, desktop | Classic, phone | Conversational, desktop | Conversational, phone |
+|---|---|---|---|---|
+| Form title | 40px, 650 | 28px | 40px | 28px |
+| Form description | 17px, muted | 16px | 17px | 16px |
+| Page title | 24px, 600 | 21px | 24px | 21px |
+| Question title | 18px, 600 | 17px | 30px, 600 | 22px |
+| Description | 15px, muted, 1.55 line height | 15px | 18px | 15px |
+| Answer | 16px | 16px | 22px | 18px |
+| Choice | 16px, 400 | 16px | 19px | 16px |
+| Button | 16px, 600 | 16px | 17px | 17px |
+| Space between questions | 32px | 26px | one per screen | one per screen |
+
+Conversational sizes scale between the phone and desktop values with the form's width.
+
+**Controls.** A theme now holds three optional text sizes besides its font: `question_size`, `description_size` and `answer_size`, each `small` (×0.875), `medium` (Standard) or `large` (×1.15). The same steps scale the canvas, Preview and the published form, in both layouts. Answers never drop below 16px on a phone, where smaller text makes the browser zoom into the field. The theme editor has Font family and the three sizes. The Design panel also shows them for the draft's own copy of its theme: a change there affects this draft only, not the saved workspace theme, and reaches respondents only when published. A draft with no theme starts from the **default style** (Clean sans, Standard sizes). Changing its font or sizes stores a typography-only theme on that draft, `{ name: "Default style", font, …sizes }` with no colours, so the default colours and dark mode are unchanged. No workspace theme is created, and *Reset typography* (or choosing the default values again) removes it so the draft is exactly as before. Typography-only themes are accepted only on a form; a workspace theme still needs every colour.
+
+**Compatibility.** Standard is never stored, so a theme or form nobody resized keeps exactly the JSON it had. Sizes are validated by the shared validator; the previous release ignores them, so a rolled-back server shows standard sizes and drops them on the next save. The previous release refuses a typography-only theme (it requires colours): after a rollback such a form shows the default style, and its draft cannot be saved until the typography is reset. Authoring is frozen on the rollback build in any case. No font family was added: the previous release refuses an unknown font and would drop the whole theme on rollback.
+
+### Description limits (7 November, local only)
+
+| Description | Before | Now | Where |
+|---|---|---|---|
+| Form description | 2,000 | **2,000, unchanged** | `definition.description` |
+| Page description (multi-question page) | 500 | **3,000** | `help` on a grouped `page_break` |
+| Question description | 500 | **3,000** | `help` on a question |
+
+The limits are one shared constant, `DESCRIPTION_LIMITS`, used by the server, the builder's `maxlength` and its character counts. Titles (150), question labels (300), placeholders (100) and every answer limit are unchanged. Onboarding's quick form now uses the same 2,000-character form description limit (it was capped at 500 in its own field).
+
+- **Line breaks** typed into a description are kept: the builder no longer blocks Enter in descriptions (titles stay one line), the server keeps inner line breaks, and the form shows them.
+- **Character counts** sit under each description, linked to it, and are announced only from 90% of the limit.
+- **Long descriptions** (over 280 characters or three line breaks) open folded, to six lines in Classic, five in Classic on a phone and four in Conversational, with *Show full description*. The button names the text it controls and states whether it is open; the whole text stays in the page for assistive technology, and an opened description stays open while the respondent answers. Text that fits is not folded.
+- **Rollback:** the previous release refuses page or question descriptions over 500 characters when a draft is saved or published. It validates only on save and publish, so forms already published are still served as stored, with their long descriptions.
+
+### Release notes: typography and description limits
+
+Branch `codex/forms-typography`, on top of `1bbb67e`. Production has run `1bbb67e` since 7 November (Render deployment at 10:13 UTC). That deployment came from a push to `main` that was not part of this change, so "the previous release" above means `1bbb67e`.
+
+- **No migration and no environment change.** Stored forms, versions and workspace themes are untouched. Standard sizes are never written.
+- **Deploy the backend before the frontend.** A new frontend on the old backend would let authors save a typography-only draft or a description over 500 characters, and the old backend refuses both with a 400. A tab opened earlier, running the old frontend against the new backend, keeps the old 500-character limits and shows typography-only forms in the default style. It loses nothing.
+- **What respondents see:** the new default type scale applies to every form, already-published ones included, as soon as the frontend is deployed. Their stored definitions do not change.
+- **Rollback:** the rollback build is `1bbb67e` with `FORMS_AUTHORING_FREEZE=true`. **Keep authoring frozen on it:** it cannot save descriptions over 500 characters or typography-only drafts, and it drops text sizes from any theme it saves. Published versions are served as stored, with long descriptions shown in full and typography-only forms in the default style. Roll forward to restore everything.
+- **Release rehearsal:** CI still rehearses the upgrade from `e3b6b5d`, with rollback to `a412507` (`REHEARSAL_BASELINE` in `ci.yml`). It does not yet rehearse `1bbb67e` to this branch. Moving the baseline means rewriting the rehearsal's checks, which assume a backend that predates themes, so it is a separate task before this branch is released.
+
 ### Multi-question pages and Contact Info (5 November, local only)
 
 A page stays flat in the definition: a titled page break (`grouped: true`, `label`, optional `help`) followed directly by questions carrying `group: <its id>`. Every question therefore keeps its own key, answer, CSV column, Flow placeholder and logic. The page title is never an answer or a column. Existing page breaks, forms and published versions are unchanged, and no group key is stored on them.

@@ -3,7 +3,7 @@
 // a saved or published form looks.
 import { randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
-import { THEME_TOKENS, themeProblems } from '../shared/forms-logic.mjs';
+import { THEME_SIZE_TOKENS, THEME_TOKENS, themeProblems } from '../shared/forms-logic.mjs';
 import { assertAuthoringOpen } from './freeze.mjs';
 
 export const MAX_THEMES = 50;
@@ -14,6 +14,8 @@ const view = row => ({ id: row.id, name: row.name, ...JSON.parse(row.tokens), re
 function themeFrom(body) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
   const tokens = Object.fromEntries(THEME_TOKENS.map(key => [key, typeof body?.[key] === 'string' ? body[key].toLowerCase() : body?.[key]]));
+  // A size left at Standard is not stored, so a theme nobody resized is saved exactly as before.
+  for (const key of THEME_SIZE_TOKENS) if (tokens[key] == null || tokens[key] === 'medium') delete tokens[key];
   const problems = themeProblems({ name, ...tokens });
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'theme', problems });
   return { name, tokens };

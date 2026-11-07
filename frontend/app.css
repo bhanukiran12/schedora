@@ -198,7 +198,6 @@ tr:last-child td { border-bottom: 0; }
 .public-form { max-width: 680px; margin: 0 auto; }
 .conversational { min-height: 52vh; display: flex; flex-direction: column; justify-content: center; }
 .conversational .question-number { color: var(--accent); font-weight: 700; }
-.conversational .q-label { font-size: clamp(22px, 3vw, 28px); font-weight: 650; line-height: 1.3; }
 .kbd-hint { font-size: 13px; color: var(--muted); }
 .embed-code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; min-height: 70px; }
 .error-summary ul { margin: 8px 0 0; padding-left: 20px; }
@@ -361,8 +360,6 @@ dialog.card { max-width: min(520px, calc(100vw - 32px)); width: 100%; color: var
 dialog::backdrop { background: #0008; }
 .key-input { width: 170px; min-height: 36px; padding: 6px 10px; font-size: 14px; }
 .day { width: 100%; max-width: 46px; justify-self: center; }
-.builder-preview h1 { font-size: 26px; }
-.question + .question { margin-top: 10px; }
 .conversational .question + .question { margin-top: 0; }
 
 /* ---- Meet platform ---- */
@@ -849,15 +846,15 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 .canvas-question-row { display: grid; grid-template-columns: max(19px, 2.8cqw) minmax(0, 1fr); gap: 2px 0; align-items: start; }
 .canvas-number { display: grid; place-items: center; width: 15px; height: 15px; margin-top: .55em; border-radius: 3px; background: var(--forms); color: #fff; font-size: 10px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .canvas-question, .canvas-description { display: block; width: 100%; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; resize: none; field-sizing: content; overflow: hidden; min-height: 0; height: auto; color: var(--ink); font: inherit; }
-.canvas-question { font-size: clamp(18px, 2.92cqw, 28px); font-weight: 400; line-height: 1.3; }
-.canvas-description { margin-top: 6px; color: var(--muted); font-size: clamp(13px, 1.95cqw, 18px); font-style: italic; line-height: 1.4; }
-.builder[data-device="mobile"] .canvas-question { font-size: 22px; }
-.builder[data-device="mobile"] .canvas-description { font-size: 15px; }
+.canvas-question { font-size: calc(clamp(18px, 2.92cqw, 28px) * var(--t-question-scale, 1)); font-weight: 400; line-height: 1.3; }
+.canvas-description { margin-top: 6px; color: var(--muted); font-size: calc(clamp(13px, 1.95cqw, 18px) * var(--t-description-scale, 1)); font-style: italic; line-height: 1.4; overflow-wrap: anywhere; }
+.builder[data-device="mobile"] .canvas-question { font-size: calc(22px * var(--t-question-scale, 1)); }
+.builder[data-device="mobile"] .canvas-description { font-size: calc(15px * var(--t-description-scale, 1)); }
 .canvas-question::placeholder, .canvas-description::placeholder, .canvas-option::placeholder { color: #767676; }
 .canvas-question:hover, .canvas-description:hover, .canvas-option:hover { background: #efefef; }
 .canvas-answer-area { grid-column: 2; margin-top: 3.2cqw; }
-.canvas-answer { padding: 6px 0; border-bottom: 1px solid var(--line-strong); color: #a6a6a6; font-size: clamp(18px, 2.92cqw, 28px); line-height: 1.3; }
-.builder[data-device="mobile"] .canvas-answer { font-size: 22px; }
+.canvas-answer { padding: 6px 0; border-bottom: 1px solid var(--line-strong); color: #a6a6a6; font-size: calc(clamp(18px, 2.92cqw, 28px) * var(--t-answer-scale, 1)); line-height: 1.3; }
+.builder[data-device="mobile"] .canvas-answer { font-size: calc(22px * var(--t-answer-scale, 1)); }
 .canvas-media { display: block; max-width: 100%; max-height: 200px; margin: 12px 0 0; border-radius: var(--radius-sm); grid-column: 2; }
 .canvas-note { grid-column: 2; margin: 12px 0 0; color: var(--muted); font-size: 13px; }
 .canvas-options { display: grid; gap: 6px; max-width: 420px; margin: 0; padding: 0; border: 0; }
@@ -960,8 +957,9 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
   .canvas-tools { right: 0; }
   .canvas-body { padding: 24px 16px; }
   .canvas-question-row { grid-template-columns: 24px minmax(0, 1fr); }
-  .canvas-question, .canvas-answer { font-size: 20px; }
-  .canvas-description { font-size: 15px; }
+  .canvas-question { font-size: calc(20px * var(--t-question-scale, 1)); }
+  .canvas-answer { font-size: calc(20px * var(--t-answer-scale, 1)); }
+  .canvas-description { font-size: calc(15px * var(--t-description-scale, 1)); }
 }
 @media (max-width: 760px) { .form-details { grid-template-columns: minmax(0, 1fr); } }
 /* Fingers need the full target size on phones. */
@@ -978,7 +976,7 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 .canvas-member.is-selected::before { content: ""; position: absolute; inset: 0 auto 0 -8px; width: 2px; border-radius: 2px; background: var(--forms); }
 .canvas-member-head { display: flex; gap: 4px; align-items: start; }
 @supports (field-sizing: content) { .canvas-member-head .canvas-member-label { flex: 0 1 auto; width: auto; min-width: 2ch; max-width: 100%; } }
-.canvas-member-label { display: block; flex: 1; width: 100%; min-height: 0; height: auto; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; resize: none; field-sizing: content; overflow: hidden; color: var(--ink); font: inherit; font-size: clamp(13px, 2.05cqw, 16px); line-height: 1.4; }
+.canvas-member-label { display: block; flex: 1; width: 100%; min-height: 0; height: auto; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; resize: none; field-sizing: content; overflow: hidden; color: var(--ink); font: inherit; font-size: calc(clamp(13px, 2.05cqw, 16px) * var(--t-question-scale, 1)); line-height: 1.4; }
 .canvas-member-label:hover { background: #efefef; }
 .canvas-member .canvas-answer { margin-top: 2px; }
 .canvas-page-button { margin-inline-start: max(19px, 2.8cqw); }
@@ -986,7 +984,7 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 [data-themed] .canvas-member-label:hover { background: color-mix(in srgb, var(--t-answer) 12%, transparent); }
 .inspector-note { padding-block: 8px; }
 .form-page-head { margin-bottom: 16px; }
-.form-page-title { margin: 0 0 4px; font-size: 26px; font-weight: 500; }
+.form-page-title { margin: 0 0 4px; }
 .form-page-help { margin: 0; color: var(--muted); }
 @media (prefers-reduced-motion: no-preference) {
   .form-page-head.q-enter-forward { animation: question-forward .22s ease-out; }
@@ -1166,3 +1164,70 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 .enquiry-detail { margin: 8px 0 0 34px; }
 .enquiry-detail > summary { cursor: pointer; font-weight: 650; min-height: 32px; }
 @media (max-width: 560px) { .enquiry-head { flex-wrap: wrap; } .enquiry-state { flex-basis: 100%; margin-left: 34px; } .enquiry-detail { margin-left: 0; } }
+
+/* ---- Form typography (docs/FORMS.md, "Typography") ----
+   One scale for the published form, the builder's Preview, templates and embeds. Sizes follow the width
+   the form is given, through a container query, so the phone-sized Preview matches a phone exactly.
+   A theme's size steps multiply these through --t-question-scale, --t-description-scale and --t-answer-scale. */
+.form-scope { container-type: inline-size; }
+.public-form {
+  --f-title: clamp(28px, 5.2cqi, 40px);
+  --f-intro: 17px;
+  --f-page: 24px;
+  --f-question: 18px;
+  --f-description: 15px;
+  --f-answer: 16px;
+  --f-choice: 16px;
+  --f-button: 16px;
+  --f-gap: 32px;
+  --f-fold: 6;
+  --q-scale: var(--t-question-scale, 1);
+  --d-scale: var(--t-description-scale, 1);
+  --a-scale: var(--t-answer-scale, 1);
+}
+/* One question at a time: a larger question, a description that reads as its companion, and answers
+   big enough to feel like the point of the screen, without pushing the button out of view. */
+.public-form.conversational {
+  --f-question: clamp(22px, 3.9cqi, 30px);
+  --f-description: clamp(15px, 2.4cqi, 18px);
+  --f-answer: clamp(18px, 2.9cqi, 22px);
+  --f-choice: clamp(16px, 2.6cqi, 19px);
+  --f-button: 17px;
+  --f-fold: 4;
+}
+.public-form h1 { margin: 0 0 12px; font-size: var(--f-title); font-weight: 650; line-height: 1.15; letter-spacing: -0.015em; overflow-wrap: anywhere; }
+.public-form .form-description { margin: 0 0 20px; max-width: 65ch; color: var(--muted); font-size: calc(var(--f-intro) * var(--d-scale)); line-height: 1.55; }
+.public-form .form-page-title { font-size: calc(var(--f-page) * var(--q-scale)); font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.public-form .q-label { display: block; margin: 0 0 4px; font-size: calc(var(--f-question) * var(--q-scale)); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.public-form legend.q-label { padding: 0; }
+.public-form.conversational .q-label { margin-bottom: 8px; line-height: 1.25; }
+.public-form :is(.q-help, .form-page-help) { display: block; margin: 0 0 10px; max-width: 68ch; color: var(--muted); font-size: calc(var(--f-description) * var(--d-scale)); font-weight: 400; line-height: 1.55; }
+/* Descriptions keep the author's line breaks, and long words or links wrap instead of widening the page. */
+.public-form :is(.form-description, .form-page-help, .q-help) { white-space: pre-line; overflow-wrap: anywhere; }
+.public-form :is(input:not([type="radio"], [type="checkbox"]), textarea, select) { font-size: calc(var(--f-answer) * var(--a-scale)); }
+.public-form .choice-text { font-size: calc(var(--f-choice) * var(--a-scale)); font-weight: 400; }
+.public-form .actions .btn { font-size: var(--f-button); }
+.public-form .question + .question { margin-top: var(--f-gap); }
+.public-form.conversational .question + .question { margin-top: 0; }
+.public-form .is-folded { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--f-fold); line-clamp: var(--f-fold); overflow: hidden; }
+.public-form .desc-toggle { display: inline-block; margin: -4px 0 12px; font-size: 14px; }
+@container (max-width: 560px) {
+  .public-form { --f-intro: 16px; --f-page: 21px; --f-question: 17px; --f-gap: 26px; --f-fold: 5; }
+  .public-form.conversational { --f-fold: 4; }
+  /* Below 16px, phones zoom into a field when it is focused. */
+  .public-form :is(input:not([type="radio"], [type="checkbox"]), textarea, select) { font-size: max(16px, calc(var(--f-answer) * var(--a-scale))); }
+}
+
+/* Character counts under descriptions: always shown in settings, and on the canvas while typing or near the limit. */
+.char-count { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; }
+.canvas-question-row .char-count:not(.is-near) { display: none; }
+.canvas-question-row .canvas-description:focus + .char-count { display: block; }
+.char-count.is-near { color: var(--warn); }
+.design-typography { display: grid; gap: 4px; padding: 8px 0; border-block: 1px solid var(--line); }
+.design-typography label, .theme-typography label { margin: 6px 0 2px; }
+.design-typography select { width: 100%; min-height: 32px; padding: 4px 8px; font-size: 13px; background: var(--surface); }
+.theme-typography { display: grid; gap: 2px; }
+.theme-group-heading { margin: 8px 0 0; font-weight: 600; }
+/* The default style with the author's own font: typography only, so colours and dark mode are untouched. */
+[data-typography] { font-family: var(--t-font); }
+[data-typography] :is(input, textarea, select, button) { font-family: inherit; }
