@@ -17,7 +17,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://schedora-api.onrender.com/api/:path*"
+      "destination": "https://staging-backend-not-set.invalid/api/:path*"
     },
     {
       "source": "/:path*",
