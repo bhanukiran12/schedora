@@ -127,14 +127,17 @@ await new Promise(done => socket.addEventListener('open', done, { once: true }))
 let nextId = 0;
 const pending = new Map();
 const pageErrors = [];
+const browserLog = []; // the latest browser messages, for a timeout to report
 socket.addEventListener('message', ({ data }) => {
   const message = JSON.parse(data);
   if (message.id && pending.has(message.id)) { const { resolve: ok, reject } = pending.get(message.id); pending.delete(message.id); message.error ? reject(new Error(message.error.message)) : ok(message.result); }
+  if (message.method === 'Log.entryAdded') { browserLog.push(`${message.params.entry.level}: ${message.params.entry.text} ${message.params.entry.url || ''}`.slice(0, 200)); browserLog.splice(0, browserLog.length - 6); }
   if (message.method === 'Runtime.exceptionThrown') pageErrors.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
 });
 const send = (method, params = {}) => new Promise((ok, reject) => { const id = ++nextId; pending.set(id, { resolve: ok, reject }); socket.send(JSON.stringify({ id, method, params })); });
 await send('Page.enable');
 await send('Runtime.enable');
+await send('Log.enable');
 const evaluate = async expression => {
   const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
@@ -147,7 +150,9 @@ async function waitFor(expression, label, timeout = 10000) {
     try { if (await evaluate(`Boolean(${expression})`)) return true; } catch { /* navigating */ }
     await sleep(100);
   }
-  throw new Error('timed out waiting for ' + label);
+  // Says what the page was doing, because CI logs are not public and an annotation is all there may be.
+  const seen = await evaluate("JSON.stringify({ url: location.href, ready: document.readyState, text: (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) })").catch(error => 'page unreadable: ' + error.message);
+  throw new Error(`timed out waiting for ${label} after ${timeout} ms :: ${seen} :: log: ${browserLog.join(' | ') || 'none'}`);
 }
 const open = async (path, ready) => { await send('Page.navigate', { url: base + path }); await waitFor(`document.readyState === 'complete' && ${ready}`, path); };
 const fill = (selector, value) => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error('missing ${selector}'); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
