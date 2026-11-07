@@ -201,12 +201,84 @@ Deleting a workspace and deleting an account are **separate operations from auth
 
 No test data was submitted anywhere for these staging gates, and Vercel previews were not used.
 
-### Staging setup, when available
+### CI failure on `47d9617`, resolved
 
-1. **Render:** a new service, not a change to `schedora-api`, on a disposable PostgreSQL. Set `RELEASE_ENVIRONMENT=staging`, its own `APP_ENCRYPTION_KEY`, `BILLING_MODE=open`, `EMAIL_PROVIDER=outbox`, `SMS_PROVIDER=outbox`, no `COOKIE_DOMAIN`, `BASE_URL` and `ALLOWED_ORIGINS` for the staging frontend, and no production secrets.
-2. **Vercel:** a new project on a branch whose `frontend/vercel.json` rewrites `/api` to the staging service. Existing previews forward to production and must not be used.
-3. **Before submitting anything:** `npm run staging-preflight -- --frontend <url> --backend <url>` must exit 0. Then confirm in the Render dashboard that `DATABASE_URL` is the disposable database, which that script cannot see.
-4. **Rehearse:** snapshot, upgrade from `e3b6b5d`, backend then frontend, an old open tab, conditional choices, attribution, publishing, freeze, rollback build, roll forward, recovery.
+The PostgreSQL rehearsal failed intermittently with `timed out waiting for service worker page`. The cause was the test rig: it picked a port at random from 4000 to 4089, and Chrome refuses port 4045 as unsafe, so about 1 run in 90 could not load the page. A temporary CI probe reproduced it twice in 18 rounds, both times on `http://localhost:4045`. The rig now uses 4100 to 4189, which contains no such port. No product code was involved.
+
+### Staging setup
+
+Create new services only. Do not change `schedora-api`, `schedora` or `schedora-frontend`. Each staging service follows one dedicated branch, so moving between builds is a push to that branch, and only the freeze setting needs the dashboard.
+
+**1. Render PostgreSQL:** New → Postgres. Name `schedora-staging-db`, region Singapore, Free plan is fine. Copy its **External Database URL**.
+
+**2. Render web service:** New → Web Service, on this repository.
+
+| Setting | Value |
+|---|---|
+| Name | `schedora-api-staging` |
+| Branch | `staging/backend` |
+| Root directory | `backend` |
+| Build command | `npm ci --omit=dev && npm run check && npm run sync-shared -- --check` |
+| Start command | `npm start` |
+| Health check path | `/api/health` |
+| Auto-deploy | On commit |
+
+| Environment variable | Value |
+|---|---|
+| `RELEASE_ENVIRONMENT` | `staging` |
+| `DATABASE_URL` | The External Database URL from step 1. **Never the Supabase one** |
+| `NODE_ENV` | `production` |
+| `NODE_VERSION` | `24` |
+| `RELEASE_MODE` | `evaluation` |
+| `HOST` | `0.0.0.0` |
+| `SERVE_FRONTEND` | `false` |
+| `TRUST_PROXY` | `true` |
+| `TRUST_PROXY_HOPS` | `2` |
+| `PRODUCT_DOMAIN` | `staging.invalid` (deliberately not a real domain, so links and redirects cannot lead to production) |
+| `BASE_URL` | The Vercel staging address from step 3 |
+| `ALLOWED_ORIGINS` | The same address |
+| `BILLING_MODE` | `open` |
+| `BILLING_PROVIDER` | `none` |
+| `EMAIL_PROVIDER` | `outbox` |
+| `SMS_PROVIDER` | `outbox` |
+| `ALLOW_TEST_PAYMENTS` | `true` |
+| `MEET_VIDEO_PROVIDER` | `none` |
+| `MEET_VIDEO_ENABLED` | `false` |
+| `APP_ENCRYPTION_KEY` | Generate a new value in Render. **Never copy production's** |
+| `LOG_LEVEL` | `info` |
+| `FORMS_AUTHORING_FREEZE` | `false` to begin with; the rehearsal says when to change it |
+
+Do not set `COOKIE_DOMAIN`, and do not copy any provider keys from production: Google, Razorpay, LiveKit, email or AI.
+
+The database connection always verifies TLS. If the service fails to start on a certificate error, send me the error. Do not turn verification off; `DATABASE_CA_CERT` is the supported setting.
+
+**3. Vercel:** Add New → Project, on this repository.
+
+| Setting | Value |
+|---|---|
+| Project name | `schedora-forms-staging` |
+| Root directory | `frontend` |
+| Framework preset | Other, with no build command |
+| Production branch | `staging/frontend` (Settings → Git, after creating) |
+
+Use the project's stable `*.vercel.app` production address, never a preview address. It must stay the same across the rollout so a tab left open is meaningful. The project's `/api` target is set by that branch's `vercel.json`, which I push once I know the Render address.
+
+**What to send back:** the Render service URL, the Vercel production URL, confirmation that `DATABASE_URL` is `schedora-staging-db`, and how you want to handle the freeze setting at each pause. No passwords or connection strings: those stay in the dashboards.
+
+### Staging rehearsal order
+
+The staging services never hold the production database or secrets. Plain `e3b6b5d` cannot be identified by the preflight, because it has no `RELEASE_ENVIRONMENT` support. So the "previous release" here is `a412507` with the freeze off: `e3b6b5d` plus only the freeze, the deployment name and test fixes.
+
+| Step | `staging/backend` and `staging/frontend` | `FORMS_AUTHORING_FREEZE` | Checks |
+|---|---|---|---|
+| 1 | `a412507`, empty database | `false` | `staging-preflight` must pass and the database be confirmed before anything else. Synthetic forms and responses |
+| 2 | Snapshot | `false` | A copy of the database in Render, or `pg_dump` |
+| 3 | Backend to the release, frontend still `a412507` | `false` | Upgrade; a tab left open; `"yes "`; conditional choices; attribution |
+| 4 | Frontend to the release | `false` | Publishing; attribution; draft with newer settings |
+| 5 | Freeze the release | `true` | Direct and UI writes refused; public submissions work |
+| 6 | Backend and frontend to `a412507` | **Delete the variable** | Starts frozen with no override; public submissions; drafts intact |
+| 7 | Backend and frontend to the release | `false` | Drafts identical; authoring resumes; attribution back |
+| 8 | Restore the snapshot to a second database | | Recovery works on its own. Say if this needs a further database |
 
 ### Remaining before release
 

@@ -507,7 +507,8 @@ async function cachedSection() {
   heading('Cached clients: the service worker across a rollout');
   const S = 'cached';
   await freshDatabase('rh_cached');
-  const EDGE = PORT + 100;
+  // Chrome refuses some ports outright, including 4045 and 4190. This range of 4100 to 4189 contains none.
+  const EDGE = PORT + 200;
   const edge = await startEdge(EDGE);
   edge.frontend = oldFrontend;
   await startServer(oldBackend, oldFrontend, 'rh_cached');

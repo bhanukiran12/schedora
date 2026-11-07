@@ -54,6 +54,15 @@ test('refuses a frontend forwarding to another staging-looking backend', async (
   } finally { one.server.close(); two.server.close(); }
 });
 
+test('refuses a staging backend left on the production domain', async () => {
+  const defaulted = await serve({ deployment: 'staging', productDomain: 'schedora.in' });
+  try {
+    const result = await run(defaulted.url, defaulted.url);
+    assert.equal(result.status, 1);
+    assert.match(result.output, /FAIL {2}the backend does not use the production domain/);
+  } finally { defaulted.server.close(); }
+});
+
 test('refuses production addresses and an unreachable service', () => {
   const production = spawnSync(process.execPath, [script, '--frontend', 'https://forms.schedora.in', '--backend', 'https://schedora-api.onrender.com'], { encoding: 'utf8', timeout: 1000 });
   // It may be stopped by the timeout before finishing its reads; the address checks are printed first.

@@ -32,6 +32,8 @@ check('the frontend\'s API says it is staging', viaFrontend.body?.deployment ===
 check('the backend says it is staging', direct.body?.deployment === 'staging', `deployment=${direct.body?.deployment ?? 'none'}: set RELEASE_ENVIRONMENT=staging`);
 check('the frontend\'s API and the backend report the same configuration', viaFrontend.text && viaFrontend.text === direct.text, 'they differ, so the frontend may be forwarding somewhere else');
 
+check('the backend does not use the production domain', viaFrontend.body?.productDomain && viaFrontend.body.productDomain !== 'schedora.in', 'set PRODUCT_DOMAIN=staging.invalid, or links lead to production');
+
 const health = await read(`${frontend}/api/health`);
 check('health is ok through the frontend', health.body?.status === 'ok', health.text.slice(0, 120));
 check('staging stores data in PostgreSQL', health.body?.storage === 'postgres', `storage=${health.body?.storage ?? 'unknown'}`);
