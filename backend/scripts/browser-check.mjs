@@ -1873,6 +1873,9 @@ try {
     const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return { status: r.status, body: await r.json().catch(() => null) }; })()`);
     const issuer = 'https://idp.browser-check.test';
     const realProvider = app.fetchProvider;
+    // Respondent sign-in is off by default (FORMS_RESPONDENT_SIGNIN); this step needs it on.
+    const realSwitch = app.config.respondentSignin;
+    app.config.respondentSignin = true;
     app.fetchProvider = async url => new Response(JSON.stringify(url.endsWith('/.well-known/openid-configuration') ? { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` } : { keys: [] }), { headers: { 'Content-Type': 'application/json' } });
     try {
       if ((await formApi('PUT', '/sso', { issuer, client_id: 'browser-check', client_secret: 'browser-check-secret', email_domain: 'example.com' })).status !== 200) throw new Error('could not configure SSO');
@@ -1890,7 +1893,7 @@ try {
       if (await evaluate("Boolean(document.querySelector('#embed'))")) throw new Error('Share offers embed code for a sign-in-only form');
       await formApi('DELETE', `/forms/${protectedForm.id}`);
       app.db.run('DELETE FROM sso_configs WHERE issuer = ?', issuer); // test configuration only; later steps sign in with passwords
-    } finally { app.fetchProvider = realProvider; }
+    } finally { app.fetchProvider = realProvider; app.config.respondentSignin = realSwitch; }
   });
   await step('route a response to Meet and book through the handoff', async () => {
     await open(`/forms/${formId}`, "document.querySelector('#routing details')");

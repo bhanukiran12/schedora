@@ -165,6 +165,7 @@ export function isRespondentCallback(app, request, query) {
 }
 
 export async function startRespondentSso(app, workspaceId, slug, search = '') {
+  if (app.config.respondentSignin !== true) fail(503, 'signin_unavailable', 'Sign-in for respondents is switched off.');
   const config = app.db.get('SELECT * FROM sso_configs WHERE workspace_id = ? AND enabled = 1', workspaceId);
   if (!config) fail(404, 'signin_unavailable', 'Sign-in is not available for this form right now.');
   const metadata = await discover(app, config.issuer);
@@ -185,6 +186,8 @@ export async function finishRespondentSso(app, request, query) {
   try {
     flow = readFlow(app, request, query, RESPONDENT_FLOW_COOKIE);
     if (flow.purpose !== 'respondent') fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+    // A flow started before the switch went off creates no session.
+    if (app.config.respondentSignin !== true) fail(503, 'signin_unavailable', 'Sign-in for respondents is switched off.');
     const { claims, email, issuer } = await verifiedSignIn(app, flow, query);
     return { ok: true, clear, workspaceId: flow.ws, slug: flow.slug, search: flow.search || '', identity: { issuer, subject: String(claims.sub || ''), email, name: String(claims.name || '').slice(0, 100) || null } };
   } catch (error) {

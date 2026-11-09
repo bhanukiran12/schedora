@@ -37,6 +37,10 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Local development serves the static frontend from ../frontend; on Render the API runs alone.
     // Set before a rollback, so authors stop while this backend is still running.
     formsAuthoringFrozen: env.FORMS_AUTHORING_FREEZE ? env.FORMS_AUTHORING_FREEZE === 'true' : false,
+    // Respondent sign-in for Forms (docs/FORMS.md, "Respondent sign-in"). Off unless set to exactly
+    // "enabled". While off, sign-in-only forms refuse everyone and cannot be set or published; workspace
+    // member single sign-on is not affected.
+    respondentSignin: env.FORMS_RESPONDENT_SIGNIN === 'enabled',
     // Names a non-production deployment, so a check can see where a frontend really sends its requests.
     deployment: env.RELEASE_ENVIRONMENT || '',
     serveFrontend: env.SERVE_FRONTEND ? env.SERVE_FRONTEND === 'true' : !production,
@@ -125,6 +129,7 @@ export function publicConfig(config) {
     productDomain: config.productDomain,
     ...(config.deployment ? { deployment: config.deployment } : {}),
     ...(config.formsAuthoringFrozen ? { formsAuthoringFrozen: true } : {}),
+    respondentSignin: Boolean(config.respondentSignin),
     analytics: config.analytics,
     googleSignIn: Boolean((config.googleSignIn?.clientId ? config.googleSignIn.clientId && config.googleSignIn.clientSecret : config.google.clientId && config.google.clientSecret) && (!config.production || config.encryptionKey)),
     billingMode: config.billingMode,

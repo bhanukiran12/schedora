@@ -247,6 +247,7 @@ Create new services only. Do not change `schedora-api`, `schedora` or `schedora-
 | `APP_ENCRYPTION_KEY` | Generate a new value in Render. **Never copy production's** |
 | `LOG_LEVEL` | `info` |
 | `FORMS_AUTHORING_FREEZE` | `false` to begin with; the rehearsal says when to change it |
+| `FORMS_RESPONDENT_SIGNIN` | Leave unset (off). Set to `enabled` only after the Forms release gates for respondent sign-in pass (`docs/FORMS_PRODUCT_CHECKLIST.md`). |
 
 Do not set `COOKIE_DOMAIN`, and do not copy any provider keys from production: Google, Razorpay, LiveKit, email or AI.
 

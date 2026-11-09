@@ -42,6 +42,10 @@ export function endRespondentSession(app, request) {
   return `${RESPONDENT_COOKIE}=${cookieScope(app)}; Max-Age=0`;
 }
 
+/** Whether respondent sign-in is switched on for this deployment (FORMS_RESPONDENT_SIGNIN=enabled). */
+export const respondentSigninEnabled = app => app.config.respondentSignin === true;
+const SWITCHED_OFF = 'This form only accepts people who sign in, and sign-in for respondents is switched off. Nothing was shown or submitted. Contact the form owner.';
+
 const signinAvailable = (app, workspaceId) => app.db.get('SELECT issuer, email_domain FROM sso_configs WHERE workspace_id = ? AND enabled = 1', workspaceId) || null;
 
 /** What the builder may show about sign-in for this workspace. Never the client id or secret. */
@@ -59,6 +63,8 @@ export function signinProvider(app, workspaceId) {
  */
 export function assertFormAccess(app, request, form) {
   if ((form.access || 'public') !== 'signin') return null;
+  // Switched off: a sign-in-only form fails closed for everyone, whatever session the request carries.
+  if (!respondentSigninEnabled(app)) fail(503, 'signin_unavailable', SWITCHED_OFF, { workspace_name: form.workspace_name, reason: 'switched_off' });
   if (!signinAvailable(app, form.workspace_id)) fail(503, 'signin_unavailable', 'This form needs you to sign in, and sign-in is not available right now. Nothing was submitted. Contact the form owner.', { workspace_name: form.workspace_name });
   const respondent = respondentFor(app, request, form.workspace_id);
   if (!respondent) fail(401, 'signin_required', 'Sign in to answer this form.', { workspace_name: form.workspace_name, signin_url: `/api/public/forms/${form.slug}/signin` });
@@ -71,6 +77,7 @@ export function setFormAccess(app, workspaceId, id, body) {
   const access = body?.access;
   if (!FORM_ACCESS.includes(access)) fail(400, 'validation_failed', 'Choose who can respond: anyone with the link, or only people who sign in.', { field: 'access' });
   getForm(app, workspaceId, id);
+  if (access === 'signin' && !respondentSigninEnabled(app)) fail(400, 'respondent_signin_disabled', 'Sign-in for respondents is switched off on this Schedora deployment, so a form cannot require it. Anyone with the link can still respond.', { field: 'access' });
   if (access === 'signin' && !signinAvailable(app, workspaceId)) fail(400, 'signin_unavailable', 'Set up single sign-on for this workspace first (Account & settings → Single sign-on). Respondents sign in with the same identity provider.', { field: 'access' });
   app.db.run('UPDATE forms SET access = ?, updated_at = ? WHERE id = ? AND workspace_id = ?', access, app.now(), id, workspaceId);
   return getForm(app, workspaceId, id);

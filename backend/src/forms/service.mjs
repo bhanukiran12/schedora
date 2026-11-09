@@ -217,6 +217,8 @@ function validatePublish(app, workspaceId, form) {
   const definition = normalizeDefinition(form.draft);
   assertDefinitionAssets(app, workspaceId, definition);
   if (!definition.fields.some(field => field.type !== 'page_break')) fail(400, 'validation_failed', 'Add at least one question before publishing.', { field: 'definition' });
+  // A sign-in-only form is never published while respondent sign-in is switched off (forms/respondents.mjs).
+  if (form.access === 'signin' && app.config.respondentSignin !== true) fail(400, 'validation_failed', 'This form requires respondents to sign in, and sign-in for respondents is switched off on this deployment. Change Settings → Who can respond to anyone with the link, then publish.', { field: 'access' });
   // A published key never comes back as an incompatible type, so earlier answers keep their meaning.
   const published = new Map();
   for (const version of app.db.all('SELECT definition FROM form_versions WHERE form_id = ? ORDER BY version', form.id)) for (const field of JSON.parse(version.definition).fields) published.set(field.id, field.type);

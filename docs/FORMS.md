@@ -896,3 +896,21 @@ A scratchpad journey used a host page served from `localhost`, a different site 
 - the ending inspector at phone and desktop widths
 
 There was no overflow at 320, 375, 768 or 1280 px.
+
+## Respondent sign-in switch (9 November 2026)
+
+Respondent sign-in is behind a deployment switch: **`FORMS_RESPONDENT_SIGNIN`**. It is **off unless the value is exactly `enabled`**, and it stays off until the release gates below pass. Workspace member single sign-on is not affected either way. `/api/config` reports `respondentSignin` so the builder can show the state.
+
+While it is off:
+- **Opening and submitting.** A sign-in-only form refuses everyone with `503 signin_unavailable` (`reason: switched_off`), before any question is revealed or anything stored. This includes direct API calls and requests carrying a respondent session that was valid before the switch went off. The respondent page shows the server's message.
+- **Starting sign-in.** `GET /api/public/forms/:slug/signin` returns to the form with the reason and never redirects to the provider. A sign-in flow already in progress finishes without creating a session.
+- **Authors.** `PUT …/access` with `signin` is refused (`400 respondent_signin_disabled`). Publishing a sign-in-only form is refused, and *publish-check* reports it. Switching a form back to *Anyone with the link* always works and reopens it.
+- **Builder.** *Who can respond* shows the sign-in option as unavailable. On a form already marked sign-in-only, it says the form refuses every respondent and how to reopen it. Share says nobody can respond.
+- **Public forms** are unchanged.
+
+**Rollback.** With the switch off, no form can become sign-in-only. A rollback to `1bbb67e`, which ignores `forms.access`, can therefore expose no protected form, as long as the switch stayed off since this release went out. If it was ever on, follow the rollback hazard under "Respondent sign-in" first.
+
+**Evidence (local):**
+- `backend/test/forms-respondent-switch.test.mjs` (4 tests, also in the PostgreSQL CI job) covers: the default and exact-value parsing, refusal with and without a valid respondent session, no stored response, no sign-in flow, authors refused, publish refused, public forms working, reopening, and member SSO unchanged.
+- Each of the four checks was removed in turn, and the tests failed every time. The two `sso.mjs` checks were removed together in one run; the finish-side check is not tested on its own.
+- `forms-respondent-signin.test.mjs` runs with the switch on.

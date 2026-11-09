@@ -773,7 +773,7 @@ export async function builder(ctx) {
     const attribute = value => value.replace(/[&"<>]/g, char => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[char]);
     const embedCode = mode => `<iframe src="${url}?embed=1${mode ? '&mode=' + mode : ''}" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0;max-width:100%"></iframe>`;
     mount($('#share-panel'), html`${heading}
-      <p class="hint">${form.access === 'signin' ? `Respondents must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they see any question. Change this under Settings → Who can respond.` : 'Anyone with this link can open the live form and respond without signing in.'}</p>
+      <p class="hint">${form.access === 'signin' && !boot.respondentSignin ? 'Nobody can respond right now: this form requires sign-in, and sign-in for respondents is switched off on this deployment. Change Settings → Who can respond to reopen it.' : form.access === 'signin' ? `Respondents must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they see any question. Change this under Settings → Who can respond.` : 'Anyone with this link can open the live form and respond without signing in.'}</p>
       <label for="share-link">Respondent link</label>
       <div class="share-row"><input id="share-link" readonly value="${url}"><button class="btn btn-primary btn-small" type="button" data-copy-target="share-link">Copy link</button><a class="btn btn-small" id="open-live" href="${url}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a></div>
       <p class="copy-status" id="share-status" role="status"></p>
@@ -818,6 +818,16 @@ export async function builder(ctx) {
   const renderAccess = () => {
     const signin = form.signin;
     const protectedForm = form.access === 'signin';
+    // Respondent sign-in can be switched off for the whole deployment (FORMS_RESPONDENT_SIGNIN).
+    if (!boot.respondentSignin) {
+      return mount($('#access'), html`<div class="card card-plain access-card"><h2 id="access-heading" tabindex="-1">Who can respond</h2>
+        <fieldset><legend class="visually-hidden">Who can respond</legend>
+          <label class="check"><input type="radio" name="form-access" value="public" ${protectedForm ? '' : raw('checked')}> Anyone with the link</label>
+          <label class="check"><input type="radio" name="form-access" value="signin" ${protectedForm ? raw('checked') : ''} disabled aria-describedby="access-off-hint"> Only people who sign in</label></fieldset>
+        ${protectedForm ? notice('bad', html`<p id="access-off-hint"><strong>This form refuses every respondent.</strong> It requires sign-in, and sign-in for respondents is switched off on this Schedora deployment, so nobody can open or submit it and it cannot be published. Choose <strong>Anyone with the link</strong> to reopen it to everyone with the link.</p>`)
+          : html`<p class="hint" id="access-off-hint">Requiring respondents to sign in is switched off on this Schedora deployment. Workspace single sign-on for members is not affected.</p>`}
+        <p class="copy-status" id="access-status" role="status"></p></div>`);
+    }
     mount($('#access'), html`<div class="card card-plain access-card"><h2 id="access-heading" tabindex="-1">Who can respond</h2>
       <fieldset><legend class="visually-hidden">Who can respond</legend>
         <label class="check"><input type="radio" name="form-access" value="public" ${protectedForm ? '' : raw('checked')}> Anyone with the link</label>

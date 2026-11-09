@@ -15,7 +15,7 @@ const answers = { student_id: 'NW-1', batch: 'jan' };
 
 // A workspace with SSO on a mock identity provider, a published form, and helpers that sign respondents in.
 async function world() {
-  const env = await setup();
+  const env = await setup({ config: { respondentSignin: true } }); // the deployment switch is on for these tests (forms-respondent-switch.test.mjs covers it off)
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' };
   const issuer = 'https://idp.example.com';

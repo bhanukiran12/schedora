@@ -117,4 +117,6 @@ These are separate from the milestones. Each needs a staging environment and the
 
 SSO domain rules and plan restrictions are unchanged in this pass.
 
+Until both gates pass, respondent sign-in ships **switched off** (`FORMS_RESPONDENT_SIGNIN` unset). Sign-in-only forms then refuse every request, including direct access and submission with an existing respondent session, and cannot be created or published. See `docs/FORMS.md`, "Respondent sign-in switch". The rollback rehearsal must still check direct access and submission to protected forms before the switch is ever enabled.
+
 Production deployment is not part of any milestone. Nothing has been deployed.
