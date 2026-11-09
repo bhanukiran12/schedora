@@ -1371,9 +1371,6 @@ dialog.prefill-dialog h2 { margin: 0; font-size: 20px; }
 .forms-search input { width: 100%; }
 .forms-filter { margin: 0; flex-wrap: wrap; }
 .forms-filter .count { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
-.forms-head { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 12px; }
-.forms-head h1 { margin: 0; font-size: 28px; line-height: 1.2; }
-.forms-head-workspace { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
 /* The list: aligned columns on wide screens; each form becomes a compact card on phones. */
 .forms-table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
 .forms-table th, .forms-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }

@@ -522,7 +522,7 @@ export async function dashboard(ctx) {
   setTitle('Forms by Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Every good conversation starts with a question.', lead: 'Build classic or one-question-at-a-time forms with logic and answer piping. Responses are saved to your workspace and can be exported.' }));
   if (!needsSession(ctx)) return;
-  mount(ctx.main, html`<div class="container page forms-page"><div class="forms-head"><div><h1>Forms</h1><p class="forms-head-workspace">${workspace().name}</p></div>
+  mount(ctx.main, html`<div class="container page forms-page"><div class="page-head forms-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Forms · ${workspace().name}</p><h1>Forms</h1></div>
     <button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
     <div id="form-templates" hidden></div>

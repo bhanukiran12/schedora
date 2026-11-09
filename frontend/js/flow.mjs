@@ -24,7 +24,7 @@ export async function dashboard(ctx) {
   if (!needsSession(ctx)) return;
   const tab = ctx.params[0] || 'flows';
   mount(ctx.main, html`<div class="container page">
-    <div class="row-between"><div><span class="tag">Flow · ${workspace().name}</span><h1>Automations</h1></div><div class="row"><a class="btn" href="/enquiries?show=attention">Enquiries needing attention</a>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New flow</a>` : ''}</div></div>
+    <div class="page-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Flow · ${workspace().name}</p><h1>Automations</h1></div><div class="row"><a class="btn" href="/enquiries?show=attention">Enquiries needing attention</a>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New flow</a>` : ''}</div></div>
     ${workspace().entitlements.flow.active ? '' : notice('warn', html`<p>This workspace has no active Flow or Suite plan, so flows cannot run. <a href="/billing">Review plans</a>.</p>`)}
 
     <section id="panel">${loading()}</section></div>`);

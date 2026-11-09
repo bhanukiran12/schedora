@@ -73,7 +73,7 @@ export async function dashboard(ctx) {
   // The video tab has its own primary action (start a meeting), so "New event type" steps back there.
   const primaryHere = tab !== 'video';
   mount(ctx.main, html`<div class="container page meet-dashboard">
-    <header class="meet-head"><div><span class="tag">Meet · ${ws.name}</span><h1>${label}</h1><p class="meet-lead">${TAB_LEADS[tab]}</p></div>
+    <header class="meet-head page-head"><div class="page-head-text"><p class="page-eyebrow" title="${ws.name}">Meet · ${ws.name}</p><h1>${label}</h1><p class="meet-lead">${TAB_LEADS[tab]}</p></div>
       <div class="row meet-head-actions"><a class="btn" href="/meet/${ws.slug}" target="_blank" rel="noopener">Your booking page<span class="visually-hidden"> (opens in a new tab)</span></a><a class="btn ${primaryHere ? 'btn-primary' : ''}" href="/meet/event-types/new">New event type</a></div></header>
     ${ws.entitlements.meet.active ? '' : notice('warn', html`<p>This workspace has no active Meet or Suite plan, so booking pages are not accepting appointments. <a href="/billing">Review plans</a>.</p>`)}
     <section id="tab-panel" aria-live="polite" aria-label="${label}">${loading()}</section></div>`);

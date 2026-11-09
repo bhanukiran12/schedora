@@ -17,6 +17,8 @@ function item([key, label, href, iconName], current) {
  * @param current sidebar key of the current page
  * @param links { dashboard: { [product]: url } } absolute product addresses for this host
  */
+const initials = name => String(name || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(word => [...word][0]).join('').toUpperCase() || '·';
+
 export function renderShell({ product, current, links, onWorkspaceChange }) {
   const sidebar = $('#app-sidebar');
   const topbar = $('#app-topbar');
@@ -33,9 +35,9 @@ export function renderShell({ product, current, links, onWorkspaceChange }) {
       <div class="side-apps-panel" id="side-apps-panel" hidden><ul>${['suite', 'meet', 'forms', 'flow'].map(key => html`<li><a class="side-app" data-app="${key}" href="${key === product ? PRODUCT_INFO[key].dashboard : links.home[key]}" ${key === product ? raw('aria-current="true"') : ''}>
           <img src="${PRODUCT_INFO[key].logo}" alt="" width="22" height="22"><span><strong>${PRODUCT_INFO[key].name}</strong>${key === product ? html` <span class="side-app-current">Current</span>` : ''} <small>${SWITCH_TEXT[key]}</small></span></a></li>`)}</ul>
         <p class="side-apps-note">Same account and workspace. Access follows your workspace plan.</p></div></div>`}
-    ${ws ? html`<div class="side-workspace">${session.workspaces.length > 1
-      ? html`<label for="side-workspace-select">Workspace</label><select id="side-workspace-select">${session.workspaces.map(entry => html`<option value="${entry.id}" ${entry.id === session.workspaceId ? raw('selected') : ''}>${entry.name}</option>`)}</select>`
-      : html`<span class="side-label">Workspace</span><strong class="side-workspace-name" title="${ws.name}">${ws.name}</strong>`}</div>` : ''}
+    ${ws ? html`<div class="side-workspace"><span class="side-workspace-avatar" aria-hidden="true">${initials(ws.name)}</span><div class="side-workspace-text">${session.workspaces.length > 1
+      ? html`<label for="side-workspace-select">Workspace</label><select id="side-workspace-select" title="${ws.name}">${session.workspaces.map(entry => html`<option value="${entry.id}" ${entry.id === session.workspaceId ? raw('selected') : ''}>${entry.name}</option>`)}</select>`
+      : html`<span class="side-label">Workspace</span><strong class="side-workspace-name" title="${ws.name}">${ws.name}</strong>`}</div></div>` : ''}
     <nav class="side-nav" aria-label="${PRODUCT_INFO[product].name}">${groups.map(([title, items], index) => html`<h2 class="side-group" id="side-group-${index}">${title}</h2><ul aria-labelledby="side-group-${index}">${items.map(entry => item(entry, current))}</ul>`)}</nav>
     <div class="side-bottom">
       <nav aria-label="Account"><ul>
