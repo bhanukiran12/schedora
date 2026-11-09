@@ -295,8 +295,10 @@ try {
     for (const id of ['proposal-questions', 'renewal-feedback']) {
       if (!(await evaluate(`Boolean(document.querySelector('#form-templates [data-template="${id}"]'))`))) throw new Error('missing sales/client template: ' + id);
     }
-    const featured = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[0].querySelectorAll('h3')].map(h => h.textContent)");
-    if (featured.join('|') !== 'Blank form|Sales discovery|Demo request|Client onboarding|Client review|Proposal questions|Support and renewal feedback') throw new Error('unexpected featured templates: ' + featured.join('|'));
+    const starts = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[0].querySelectorAll('h3')].map(h => h.textContent)");
+    if (starts.join('|') !== 'Blank form|Import JSON') throw new Error('unexpected own starting points: ' + starts.join('|'));
+    const featured = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[1].querySelectorAll('h3')].map(h => h.textContent)");
+    if (featured.join('|') !== 'Sales discovery|Demo request|Client onboarding|Client review|Proposal questions|Support and renewal feedback') throw new Error('unexpected featured templates: ' + featured.join('|'));
     // Preview runs the template's questions without creating a draft; Escape returns focus to its card.
     await evaluate("document.querySelector('[data-preview-template=\"client-review\"]').focus()");
     await click('[data-preview-template="client-review"]');

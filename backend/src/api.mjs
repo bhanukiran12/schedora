@@ -3,6 +3,7 @@ import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, 
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
 import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
 import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/themes.mjs';
+import { exportDefinition, exportFilename, IMPORT_MAX_BYTES, importForm, inspectDefinition } from './forms/definition-io.mjs';
 import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
@@ -278,6 +279,14 @@ export function createApi(app) {
   // ---- Forms ----
   get('/api/workspaces/:ws/forms', ctx => listForms(app, member(ctx, 'forms.manage').workspace.id));
   post('/api/workspaces/:ws/forms', async ctx => { const actor = member(ctx, 'forms.manage'); return { status: 201, body: createForm(app, actor.workspace.id, ctx.user.id, await ctx.json()) }; });
+  // Form definitions as files (forms/definition-io.mjs): check a file, import it as an unpublished draft,
+  // or download a draft. Import and export never carry responses, credentials or routing.
+  post('/api/workspaces/:ws/forms/import-check', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'forms-import-check', 120); const { summary, warnings } = inspectDefinition(app, actor.workspace.id, (await ctx.json(IMPORT_MAX_BYTES * 2)).source); return { summary, warnings }; });
+  post('/api/workspaces/:ws/forms/import', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'forms-import', 60); return { status: 201, body: importForm(app, actor.workspace.id, ctx.user.id, await ctx.json(IMPORT_MAX_BYTES * 2)) }; });
+  get('/api/workspaces/:ws/forms/:id/definition.json', ctx => {
+    const form = getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id);
+    return { raw: JSON.stringify(exportDefinition(form, app.now()), null, 2) + '\n', type: 'application/json; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${exportFilename(form)}"`, 'Cache-Control': 'no-store' } };
+  });
   get('/api/workspaces/:ws/forms/:id', ctx => getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   patch('/api/workspaces/:ws/forms/:id', async ctx => saveDraft(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });

@@ -7,6 +7,7 @@ import { readinessAreas } from './readiness-view.mjs';
 import { hostInfo, productOrigin } from './context.mjs';
 import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
+import { exportDefinition, openImportDialog } from './forms-import.mjs';
 
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
@@ -493,6 +494,12 @@ const templateCard = template => {
       <button class="btn btn-small btn-primary" type="button" data-template="${template.id}">Create draft<span class="visually-hidden"> from ${blank ? 'a blank form' : template.name}</span></button></div></li>`;
 };
 
+// Import JSON sits beside Blank form: same outcome (an unpublished draft), different source.
+const importCard = () => html`<li class="template-card template-card-import"><div class="template-icon" aria-hidden="true">{ … }</div>
+  <h3>Import JSON</h3><p>Upload or paste a Schedora form definition, such as one exported from another form. You see what it contains before anything is created.</p>
+  <p class="template-meta">Questions, pages, logic and theme · never responses</p>
+  <div class="template-actions"><button class="btn btn-small btn-primary" type="button" data-import>Import JSON<span class="visually-hidden"> file as a new draft</span></button></div></li>`;
+
 // Try a template's questions and logic before creating anything. The preview renderer never calls
 // the server, so nothing is saved, sent or counted.
 function previewTemplate(template, create) {
@@ -525,8 +532,10 @@ export async function dashboard(ctx) {
     <section class="form-templates" id="form-templates" aria-labelledby="templates-heading" hidden>
       <h2 id="templates-heading" tabindex="-1">Choose a starting point</h2>
       <p class="muted">Each option creates an unpublished draft in this workspace. Edit any question, preview it, then publish when you are ready. Nothing is public until you publish.</p>
+      <h3 class="template-group">Start your own</h3>
+      <ul class="template-grid">${templateCard(BLANK_TEMPLATE)}${importCard()}</ul>
       <h3 class="template-group">For sales and client meetings</h3>
-      <ul class="template-grid">${templateCard(BLANK_TEMPLATE)}${FORM_TEMPLATES.filter(template => template.group === 'meetings').map(templateCard)}</ul>
+      <ul class="template-grid">${FORM_TEMPLATES.filter(template => template.group === 'meetings').map(templateCard)}</ul>
       <h3 class="template-group">More starting points</h3>
       <ul class="template-grid">${FORM_TEMPLATES.filter(template => template.group !== 'meetings').map(templateCard)}</ul>
       <div id="template-status" role="status"></div></section>
@@ -555,6 +564,7 @@ export async function dashboard(ctx) {
     } finally { delete picker.dataset.busy; }
   };
   picker.addEventListener('click', event => {
+    if (event.target.closest('[data-import]')) return openImportDialog({ onCreated: form => ctx.navigate(`/forms/${form.id}?created=import`) });
     const use = event.target.closest('[data-template]');
     if (use) return create(use.dataset.template);
     const preview = event.target.closest('[data-preview-template]');
@@ -653,7 +663,7 @@ export async function builder(ctx) {
         <span class="toolbar-divider" aria-hidden="true"></span><div class="preview-devices" role="group" aria-label="Device size"><button type="button" class="btn btn-icon" data-device="desktop" aria-label="Desktop size" title="Desktop size">${formIcon('desktop')}</button><button type="button" class="btn btn-icon" data-device="mobile" aria-label="Mobile size" title="Mobile size">${formIcon('mobile')}</button></div>
         <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit" aria-label="Edit" title="Edit">${formIcon('edit')}</button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1" aria-label="Preview" title="Preview">${formIcon('play')}</button></div>
         <details class="overflow-menu toolbar-end"><summary class="btn btn-icon" aria-label="More actions" title="More actions">${formIcon('more')}</summary>
-          <div class="overflow-panel"><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
+          <div class="overflow-panel"><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
       </div>
       <div class="builder" data-view="edit" data-device="desktop">
         <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="questions" class="question-workspace">
@@ -1917,7 +1927,8 @@ export async function builder(ctx) {
   const created = ctx.query.get('created');
   if (created && !form.published_version) {
     const template = FORM_TEMPLATES.find(item => item.id === created);
-    mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${template ? html` from the “${template.name}” template` : ''}.</strong> It is saved in this workspace but not published, so nobody can open it yet. Review the questions, check the preview, then publish.</p>`));
+    const source = created === 'import' ? ' from your JSON file' : template ? html` from the “${template.name}” template` : '';
+    mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${source}.</strong> It is saved in this workspace but not published, so nobody can open it yet. Review the questions, check the preview, then publish.</p>`));
   }
 
   async function renderRouting() {
@@ -2005,6 +2016,14 @@ export async function builder(ctx) {
       }
     };
   }
+  // Exports what is saved, so the file always matches a revision the server accepted.
+  $('#export-form').onclick = async () => {
+    $('.overflow-menu').open = false;
+    try {
+      await exportDefinition(form);
+      toast(saveState === 'saved' ? 'Form definition downloaded.' : 'Downloaded the last saved draft. Your unsaved edits are not in the file; save, then export again to include them.');
+    } catch (error) { toast(error.message); }
+  };
   $('#delete-form').onclick = async () => {
     if (!(await ask({ title: 'Delete this form?', body: 'The form and all of its responses are permanently deleted. This does not restore your monthly response allowance.', confirm: 'Delete form and responses', danger: true }))) return;
     try { await api('DELETE', wsPath('/forms/' + form.id)); setState('saved'); toast('Form deleted.'); ctx.navigate('/forms', { replace: true }); }

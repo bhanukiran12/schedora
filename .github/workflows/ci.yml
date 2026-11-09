@@ -67,7 +67,7 @@ jobs:
           DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
         run: |
           export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
-          npm run test:postgres -- test/flow.test.mjs test/meet-readiness.test.mjs test/host-readiness.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/forms-media.test.mjs test/forms-jumps.test.mjs test/forms-choice-rules.test.mjs test/forms-url-params.test.mjs test/forms-evaluation-policy.test.mjs test/forms-rollout-compat.test.mjs test/forms-freeze.test.mjs test/forms-themes.test.mjs test/forms-groups.test.mjs test/meet-session.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
+          npm run test:postgres -- test/flow.test.mjs test/meet-readiness.test.mjs test/host-readiness.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/forms-media.test.mjs test/forms-jumps.test.mjs test/forms-choice-rules.test.mjs test/forms-url-params.test.mjs test/forms-evaluation-policy.test.mjs test/forms-rollout-compat.test.mjs test/forms-freeze.test.mjs test/forms-definition-io.test.mjs test/forms-themes.test.mjs test/forms-groups.test.mjs test/meet-session.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
       - name: Release rehearsal against the revision production runs
         env:
           DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres

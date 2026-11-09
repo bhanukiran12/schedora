@@ -247,6 +247,34 @@ tr:last-child td { border-bottom: 0; }
 dialog.template-preview { max-width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 dialog.template-preview h2 { margin: 0; font-size: 20px; }
 @media (max-width: 480px) { dialog.template-preview { padding: 16px; } }
+/* Forms: Import JSON */
+.template-card-import { border-style: dashed; }
+.template-card .template-icon { display: grid; place-items: center; height: 74px; margin-bottom: 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent); font: 700 15px/1 ui-monospace, Consolas, monospace; }
+dialog.import-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+dialog.import-dialog h2 { margin: 0; font-size: 20px; }
+.import-source { border: 0; padding: 0; margin: 12px 0 0; min-width: 0; }
+.segmented { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); }
+.segmented label { margin: 0; display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; border-radius: 999px; font-weight: 600; font-size: 14px; cursor: pointer; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label:has(input:checked) { background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .12); color: var(--ink); }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.import-drop { margin: 0; display: grid; gap: 4px; justify-items: center; padding: 22px 16px; border: 2px dashed var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-2); text-align: center; cursor: pointer; }
+.import-drop.is-over { border-color: var(--accent); background: var(--accent-tint); }
+.import-drop .hint { margin: 0; }
+.import-drop:has(+ #import-file:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.import-file-name { margin: 6px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+#import-text { width: 100%; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+.import-example { margin: 8px 0 0; font-size: 14px; }
+#import-result:empty { display: none; }
+#import-result { margin-top: 14px; }
+#import-result:focus { outline: none; }
+.import-preview { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.import-preview h3 { margin: 4px 0; font-size: 19px; overflow-wrap: anywhere; }
+.import-facts { margin: 0; font-weight: 600; }
+.import-preview .notice { margin: 12px 0 0; }
+.import-preview ul, .import-problems { margin: 6px 0 0; padding-left: 20px; }
+.import-problems li { margin: 4px 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) { dialog.import-dialog { padding: 16px; } .segmented { display: flex; } .segmented label { flex: 1; justify-content: center; padding: 0 8px; } }
 .template-audience { font-size: 13px; font-weight: 650; color: var(--accent); }
 .template-meta { font-size: 14px; color: var(--muted); }
 .template-logic { font-size: 14px; color: var(--muted); padding-bottom: 8px; }
@@ -778,7 +806,9 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 .overflow-menu { position: relative; }
 .overflow-menu summary { list-style: none; }
 .overflow-menu summary::-webkit-details-marker { display: none; }
-.overflow-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: grid; gap: 4px; width: 200px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.overflow-panel { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: grid; gap: 4px; width: 248px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.overflow-panel .btn { justify-content: flex-start; }
+.overflow-hint { margin: -2px 4px 6px; font-size: 12.5px; }
 
 .builder-page[data-surface="content"] .builder-surface:not(.surface-content), .builder-page[data-surface="settings"] .builder-surface:not(.surface-settings), .builder-page[data-surface="share"] .builder-surface:not(.surface-share), .builder-page[data-surface="workflow"] .builder-surface:not(.surface-workflow) { display: none; }
 #builder-notice:not(:empty) { margin: 0 16px 8px; }
