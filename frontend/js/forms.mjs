@@ -2161,26 +2161,61 @@ const STEP_LABELS = {
 };
 const stepBadge = step => step ? badge(STEP_LABELS[step.status]?.[0] || 'neutral', [STEP_LABELS[step.status]?.[1] || step.status, step.reference].filter(Boolean).join(' · ')) : html`<span class="muted">—</span>`;
 
+// Submitted-date choices are kept in the address as a relative window and turned into a start time
+// when the filter is applied, so paging and export use the same start.
+const SINCE = [['', 'Any time'], ['1d', 'Last 24 hours'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days']];
+const SINCE_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
+const SIGNIN_FILTERS = [['', 'Anyone'], ['verified', 'Verified sign-in'], ['anonymous', 'Not signed in']];
+const wideResponses = () => window.matchMedia('(min-width: 1200px)').matches;
+
 export async function responses(ctx) {
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Sign in to see responses', lead: 'Responses are visible only to members of the form\'s workspace.' }));
   if (!needsSession(ctx)) return;
+  // Search and filters live in the address, so a reload or a shared link keeps them. The server
+  // applies them to every response, not only the loaded page (backend/src/forms/response-filter.mjs).
+  const filters = {
+    q: (ctx.query.get('q') || '').slice(0, 200),
+    since: SINCE_DAYS[ctx.query.get('since')] ? ctx.query.get('since') : '',
+    version: /^\d{1,6}$/.test(ctx.query.get('version') || '') ? ctx.query.get('version') : '',
+    signin: ['verified', 'anonymous'].includes(ctx.query.get('signin')) ? ctx.query.get('signin') : ''
+  };
+  let sinceAt = filters.since ? Date.now() - SINCE_DAYS[filters.since] * 86400000 : null;
+  const active = () => Boolean(filters.q.trim() || filters.since || filters.version || filters.signin);
+  const serverQuery = () => {
+    const query = new URLSearchParams();
+    if (filters.q.trim()) query.set('q', filters.q.trim());
+    if (sinceAt != null) query.set('from', String(sinceAt));
+    if (filters.version) query.set('version', filters.version);
+    if (filters.signin) query.set('signin', filters.signin);
+    return query;
+  };
+  const listPath = before => {
+    const query = serverQuery();
+    if (before) query.set('before', before);
+    return wsPath(`/forms/${ctx.params[0]}/responses${query.size ? '?' + query : ''}`);
+  };
+
   mount(ctx.main, html`<div class="container page">${loading('Loading responses…')}</div>`);
   let data;
-  try { data = await api('GET', wsPath(`/forms/${ctx.params[0]}/responses`)); }
+  try { data = await api('GET', listPath()); }
   catch (error) {
-    const message = error.status === 404 ? 'This form was not found in the selected workspace, or you do not have access to it.' : error.status === 403 ? 'Your role in this workspace cannot view these responses.' : error.message;
-    return mount(ctx.main, html`<div class="container page">${notice('bad', html`<p>${message}</p>`)}<div class="actions"><a class="btn" href="${ctx.path}">Try again</a><a class="btn" href="/forms">Back to Forms</a></div></div>`);
+    const message = error.status === 404 ? 'This form was not found in the selected workspace, or you do not have access to it.' : error.status === 403 ? 'Your role in this workspace cannot view these responses.' : error.status === 400 ? `That search could not be run. ${error.message}` : error.message;
+    return mount(ctx.main, html`<div class="container page">${notice('bad', html`<p>${message}</p>`)}<div class="actions"><a class="btn" href="${error.status === 400 ? ctx.path : ctx.path + location.search}">${error.status === 400 ? 'Show all responses' : 'Try again'}</a><a class="btn" href="/forms">Back to Forms</a></div></div>`);
   }
   if (!ctx.alive()) return;
   const { form, versions } = data;
   let rows = data.responses;
+  let matched = data.matched ?? null;
+  let total = form.response_count;
   // Keep older server responses usable during a staggered frontend/backend deployment.
   const pageCursor = page => 'next' in page ? page.next : (page.responses.length === 50 ? String(page.responses.at(-1).created_at) : null);
   let cursor = pageCursor(data);
   let more = Boolean(cursor);
-  const trailPages = [data];
+  let trailPages = [data];
   let context = responseTrailContext(trailPages);
-  let filter = 'all';
+  let filter = 'all'; // 'attention' narrows the loaded responses to those whose follow-up needs attention
+  let listState = 'ready'; // 'loading' while a new search runs, 'error' when it failed
+  let listError = null;
   const trailOf = row => context ? buildTrail(row, context) : null;
   setTitle(`Responses: ${form.draft.title} · Forms by Schedora`);
   // Every question any version asked, latest version first; each answer is shown with the labels
@@ -2189,26 +2224,64 @@ export async function responses(ctx) {
   for (const definition of [...Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), form.draft]) {
     for (const field of definition.fields) if (field.type !== 'page_break' && !columns.some(column => column.id === field.id)) columns.push(field);
   }
+  const versionNumbers = Object.keys(versions).map(Number).sort((a, b) => b - a);
   const fieldIn = (row, id) => versions[row.form_version]?.fields.find(candidate => candidate.id === id);
   const cell = (row, column) => answerText(fieldIn(row, column.id) || column, row.answers[column.id]);
   const shortLabel = label => label.replace(/\{\{.*?\}\}/g, '…').slice(0, 60);
   // Attribution comes from the link and is shown apart from answers, labelled as such.
   // A verified sign-in is identity from the workspace's provider, shown apart from answers and attribution.
+  const offersSignin = form.access === 'signin' || data.has_verified || rows.some(row => row.respondent);
   const verifiedColumn = () => rows.some(row => row.respondent);
   const attributionKeys = () => attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), rows);
+  const shownRows = () => filter === 'attention' && context ? rows.filter(row => trailOf(row).attention.length) : rows;
+  const plural = (count, one, many = one + 's') => `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
+  const filterWords = () => [
+    filters.q.trim() ? `search “${filters.q.trim()}”` : null,
+    filters.since ? SINCE.find(([key]) => key === filters.since)[1].toLowerCase() : null,
+    filters.version ? `version ${filters.version}` : null,
+    filters.signin ? SIGNIN_FILTERS.find(([key]) => key === filters.signin)[1].toLowerCase() : null
+  ].filter(Boolean).join(', ');
+
+  const summary = () => {
+    if (listState === 'loading') return 'Searching responses…';
+    if (listState === 'error') return 'The search did not finish.';
+    const loaded = rows.length < (matched ?? total) ? ` · ${rows.length.toLocaleString('en-US')} loaded` : '';
+    return active()
+      ? `${plural(matched ?? rows.length, 'response')} of ${total.toLocaleString('en-US')} match ${filterWords()}${loaded}`
+      : `${plural(total, 'response')}${loaded}`;
+  };
+
+  // Export always says which responses the file holds. With filters, the matching ones are the
+  // first choice and all responses stay one click away.
+  const drawExport = () => {
+    mount($('#export-actions'), active()
+      ? html`<button class="btn btn-primary" id="export" data-scope="filtered">Export ${matched == null ? 'matching' : plural(matched, 'matching response')}<span class="visually-hidden"> as CSV</span></button>
+        <button class="btn" id="export-all" data-scope="all">Export all ${total.toLocaleString('en-US')}<span class="visually-hidden"> responses as CSV</span></button>`
+      : html`<button class="btn btn-primary" id="export" data-scope="all">Export CSV<span class="export-scope"> · all ${total.toLocaleString('en-US')}</span></button>`);
+    $('#responses-summary').textContent = summary();
+    $('#clear-filters').hidden = !active();
+  };
 
   const draw = () => {
+    drawExport();
+    const list = $('#responses');
+    list.setAttribute('aria-busy', String(listState === 'loading'));
+    if (listState === 'loading') return mount(list, loading('Searching responses…'));
+    if (listState === 'error') return mount(list, html`<div class="notice notice-bad" role="alert"><p>The responses could not be searched. ${listError} Your filters are kept.</p><div class="actions"><button class="btn btn-small" type="button" data-retry-filters>Try again</button><button class="btn btn-small" type="button" data-clear-filters>Clear filters</button></div></div>`);
+    if (!rows.length && active()) {
+      return mount(list, html`<div class="empty"><h2>No responses match</h2><p>None of the ${plural(total, 'response')} match ${filterWords()}.${filters.q.trim() ? ' Search looks at answers, receipt codes, link attribution and verified sign-in emails.' : ''}</p><div class="actions"><button class="btn" type="button" data-clear-filters>Clear filters</button></div></div>`);
+    }
     const attentionRows = context ? rows.filter(row => trailOf(row).attention.length) : [];
-    const shown = filter === 'attention' ? attentionRows : rows;
-    mount($('#responses'), rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
+    const shown = shownRows();
+    mount(list, rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
         <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
-        <span class="muted" role="status">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. Follow-ups cover every loaded response.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
-      ${shown.length ? html`<div class="table-wrap"><table><caption class="visually-hidden">Responses to ${form.draft.title}</caption>
-      <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}${verifiedColumn() ? html`<th scope="col" data-verified-column>Verified sign-in</th>` : ''}</tr></thead>
-      <tbody>${shown.map(row => html`<tr><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
-          <button class="btn btn-small" data-view-response="${row.id}">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
-        <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}${verifiedColumn() ? html`<td class="answer-cell">${row.respondent?.email ?? html`<span class="muted">Not signed in</span>`}</td>` : ''}</tr>`)}</tbody></table></div>
+        <span class="muted">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. It checks the loaded responses.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
+      ${shown.length ? html`<div class="table-wrap"><table class="responses-table"><caption class="visually-hidden">Responses to ${form.draft.title}${active() ? `, matching ${filterWords()}` : ''}</caption>
+      <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${verifiedColumn() ? html`<th scope="col" class="col-verified" data-verified-column>Verified sign-in <span class="col-note">identity, not an answer</span></th>` : ''}${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
+      <tbody>${shown.map(row => html`<tr data-row="${row.id}" class="${row.id === openRow ? 'is-open' : ''}" ${row.id === openRow ? raw('aria-current="true"') : ''}><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
+          <button class="btn btn-small" data-view-response="${row.id}" aria-expanded="${row.id === openRow}" aria-controls="response-detail">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
+        <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${verifiedColumn() ? html`<td class="answer-cell col-verified">${row.respondent?.email ?? html`<span class="muted">Not signed in</span>`}</td>` : ''}${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}</tr>`)}</tbody></table></div>
       `
       : html`<div class="empty"><h2>Nothing needs attention</h2><p>None of the loaded responses has a booking problem, a failed follow-up or an open follow-up task.</p></div>`}
       ${more ? html`<div class="actions"><button class="btn" id="more">Load older responses</button></div>` : ''}`
@@ -2218,64 +2291,186 @@ export async function responses(ctx) {
       : html`<p>${form.locked_ids?.length ? 'The form is closed, so it is not collecting responses.' : 'The form is not published yet, so nobody can respond.'}</p><p><a class="btn" href="/forms/${form.id}">Open the form to publish it</a></p>`}</div>`);
   };
 
+  // The detail is a panel beside the list on wide screens and a full-screen sheet on narrow ones. The
+  // list is never redrawn or scrolled by opening, stepping through or closing it, so its position stays.
   let openRow = null;
+  const panel = () => $('#response-detail');
+  const markOpen = () => $$('#responses tr[data-row]').forEach(tr => {
+    const open = tr.dataset.row === openRow;
+    tr.classList.toggle('is-open', open);
+    if (open) tr.setAttribute('aria-current', 'true'); else tr.removeAttribute('aria-current');
+    $('[data-view-response]', tr)?.setAttribute('aria-expanded', String(open));
+  });
+  // Opening or closing the panel changes the list's width, so the response's row is kept where it was
+  // on screen rather than letting the reflow move it.
+  const keepRowInPlace = (id, change) => {
+    const top = () => $(`#responses tr[data-row="${id}"]`)?.getBoundingClientRect().top;
+    const before = top();
+    change();
+    const after = top();
+    if (before != null && after != null && Math.abs(after - before) > 1) window.scrollBy(0, after - before);
+  };
   const showDetail = (row, { focus = true } = {}) => {
+    // A panel opened beside the list on a wide window becomes a sheet when reopened on a narrow one.
+    if (panel().open && panel().matches(':modal') === wideResponses()) { reopening = true; panel().close(); }
     openRow = row.id;
     const definition = versions[row.form_version];
     const fields = (definition?.fields || []).filter(field => field.type !== 'page_break');
     const answered = new Set(Object.keys(row.answers));
     const extra = columns.filter(column => answered.has(column.id) && !fields.some(field => field.id === column.id));
-    mount($('#response-detail'), html`<section class="card" aria-labelledby="detail-title"><div class="row-between"><h2 id="detail-title" tabindex="-1">Response from ${fmtDateTime(row.created_at)}</h2><button class="btn btn-small" id="close-detail">Close</button></div>
+    const shown = shownRows();
+    const index = shown.findIndex(item => item.id === row.id);
+    mount(panel(), html`<section aria-labelledby="detail-title"><div class="detail-head"><h2 id="detail-title" tabindex="-1">Response from ${fmtDateTime(row.created_at)}</h2><button class="btn btn-small" type="button" id="close-detail">Close<span class="visually-hidden"> response</span></button></div>
+      ${index >= 0 ? html`<div class="detail-nav" role="group" aria-label="Move between responses"><button class="btn btn-small" type="button" data-step-detail="-1" ${index > 0 ? '' : raw('disabled')}>← Newer</button><span class="muted">${index + 1} of ${shown.length} shown</span><button class="btn btn-small" type="button" data-step-detail="1" ${index < shown.length - 1 ? '' : raw('disabled')}>Older →</button></div>` : ''}
       <p class="muted">Receipt ${row.id.replace(/-/g, '').slice(0, 8).toUpperCase()} · Answered version ${row.form_version}${form.published_version && form.published_version !== row.form_version ? ` (live version is ${form.published_version})` : ''}</p>
-      ${context ? trailList(trailOf(row)) : html`<p class="muted" role="status">Checking what happened next…</p>`}
-      <dl class="response-answers">${[...fields, ...extra].map(field => html`<dt>${pipe(field.label, definition || { fields: [] }, row.answers)}</dt><dd>${answerText(field, row.answers[field.id]) || html`<span class="muted">Not answered or not shown</span>`}</dd>`)}</dl>
-      ${row.respondent ? html`<h3>Verified sign-in</h3><p class="hint">Confirmed by your workspace's identity provider when this response was submitted. Unlike answers and link values, the respondent could not type or change it.</p>
-        <dl class="response-answers" data-verified><dt>Email</dt><dd>${row.respondent.email}</dd>${row.respondent.name ? html`<dt>Name</dt><dd>${row.respondent.name}</dd>` : ''}<dt>Account ID</dt><dd><code>${row.respondent.subject}</code></dd><dt>Signed in</dt><dd>${fmtDateTime(row.respondent.verified_at)}</dd></dl>` : ''}
+      ${row.respondent ? html`<section class="detail-identity" aria-labelledby="detail-identity-title"><h3 id="detail-identity-title">Verified sign-in</h3><p class="hint">Confirmed by your workspace's identity provider when this response was submitted. It is not an answer: the respondent could not type or change it.</p>
+        <dl class="response-answers" data-verified><dt>Email</dt><dd>${row.respondent.email}</dd>${row.respondent.name ? html`<dt>Name</dt><dd>${row.respondent.name}</dd>` : ''}<dt>Account ID</dt><dd><code>${row.respondent.subject}</code></dd><dt>Signed in</dt><dd>${fmtDateTime(row.respondent.verified_at)}</dd></dl></section>`
+        : ''}
+      <h3>Answers</h3><p class="hint">What the respondent entered${row.respondent ? ', separate from the verified sign-in above' : ''}.</p>
+      <dl class="response-answers" data-answers>${[...fields, ...extra].map(field => html`<dt>${pipe(field.label, definition || { fields: [] }, row.answers)}</dt><dd>${answerText(field, row.answers[field.id]) || html`<span class="muted">Not answered or not shown</span>`}</dd>`)}</dl>
       ${row.attribution ? html`<h3>Attribution</h3><p class="hint">From the link this person used. Anyone can edit a link, so treat these as unverified.</p><dl class="response-answers" data-attribution>${Object.entries(row.attribution).map(([key, value]) => html`<dt>${key}</dt><dd>${value}</dd>`)}</dl>` : ''}
+      ${context ? trailList(trailOf(row)) : html`<p class="muted" role="status">Checking what happened next…</p>`}
       ${isAdmin() ? html`<div class="actions"><button class="btn btn-danger btn-small" data-delete="${row.id}">Delete this response</button></div>` : ''}</section>`);
-    if (focus) $('#detail-title').focus();
+    const dialog = panel();
+    keepRowInPlace(row.id, () => {
+      if (!dialog.open) { if (wideResponses()) dialog.show(); else dialog.showModal(); }
+      $('#responses-layout').classList.toggle('has-detail', !dialog.matches(':modal'));
+      markOpen();
+    });
+    dialog.scrollTop = 0;
+    // Stepping to a row outside the visible part of the list brings it into view.
+    const rect = $(`#responses tr[data-row="${row.id}"]`)?.getBoundingClientRect();
+    if (rect && !dialog.matches(':modal') && (rect.top < 0 || rect.bottom > innerHeight)) $(`#responses tr[data-row="${row.id}"]`).scrollIntoView({ block: 'nearest' });
+    if (focus) $('#detail-title').focus({ preventScroll: true });
   };
+  // Close, Escape and View again return focus to the response's row; closing because the list changed
+  // (a new search, a filter, a deletion) leaves focus where the person is working.
+  let restoreFocus = true;
+  let reopening = false; // closed only to reopen in the other layout: keep the content
+  const closeDetail = ({ restore = true } = {}) => { if (!panel().open) return; restoreFocus = restore; panel().close(); };
 
-  mount(ctx.main, html`<div class="container page" id="responses-page"><a href="/forms/${form.id}">← Back to form</a>
-    <div class="row-between"><h1>Responses</h1><button class="btn btn-primary" id="export">Export CSV</button></div>
-    <p class="muted">${form.draft.title} · ${form.response_count} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
+  mount(ctx.main, html`<div class="container page responses-page" id="responses-page"><a href="/forms/${form.id}">← Back to form</a>
+    <div class="row-between responses-head"><h1>Responses</h1><div class="row export-actions" id="export-actions"></div></div>
+    <p class="muted">${form.draft.title} · ${total} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
+    <form class="responses-filters" id="responses-filters" role="search" aria-label="Search and filter responses">
+      <div class="filter-search"><label for="response-search">Search responses</label><input type="search" id="response-search" maxlength="200" autocomplete="off" value="${filters.q}" placeholder="Answer, receipt or verified email" aria-describedby="responses-summary"></div>
+      <div><label for="response-since">Submitted</label><select id="response-since">${SINCE.map(([key, label]) => html`<option value="${key}" ${filters.since === key ? raw('selected') : ''}>${label}</option>`)}</select></div>
+      ${versionNumbers.length > 1 ? html`<div><label for="response-version">Version</label><select id="response-version"><option value="">All versions</option>${versionNumbers.map(number => html`<option value="${number}" ${filters.version === String(number) ? raw('selected') : ''}>Version ${number}${number === form.published_version ? ' (live)' : ''}</option>`)}</select></div>` : ''}
+      ${offersSignin ? html`<div><label for="response-signin">Sign-in</label><select id="response-signin">${SIGNIN_FILTERS.map(([key, label]) => html`<option value="${key}" ${filters.signin === key ? raw('selected') : ''}>${label}</option>`)}</select></div>` : ''}
+      <button class="btn btn-small" type="button" id="clear-filters" data-clear-filters hidden>Clear filters</button>
+    </form>
+    <p class="responses-summary" id="responses-summary"></p>
     <div id="export-status" tabindex="-1"></div>
-    <div id="response-detail"></div>
-    <p id="responses-status" class="hint" role="status"></p>
-    <div id="responses"></div></div>`);
+    <p id="responses-status" class="visually-hidden" role="status"></p>
+    <div class="responses-layout" id="responses-layout">
+      <div id="responses"></div>
+      <dialog class="response-panel" id="response-detail" aria-labelledby="detail-title"></dialog>
+    </div></div>`);
   draw();
 
+  panel().addEventListener('close', () => {
+    if (reopening || panel().open) { reopening = false; return; }
+    const id = openRow;
+    openRow = null;
+    keepRowInPlace(id, () => { $('#responses-layout').classList.remove('has-detail'); markOpen(); });
+    mount(panel(), '');
+    if (restoreFocus) $(`[data-view-response="${id}"]`)?.focus({ preventScroll: true });
+    restoreFocus = true;
+  });
+  // A panel shown beside the list is not modal, so Escape is handled here.
+  panel().addEventListener('keydown', event => { if (event.key === 'Escape' && !panel().matches(':modal')) { event.preventDefault(); closeDetail(); } });
+
+  // A new search replaces the loaded responses; an older request finishing late is ignored.
+  let searchToken = 0;
+  const applyFilters = async ({ announce = true } = {}) => {
+    const token = ++searchToken;
+    sinceAt = filters.since ? Date.now() - SINCE_DAYS[filters.since] * 86400000 : null;
+    const address = new URLSearchParams();
+    for (const key of ['q', 'since', 'version', 'signin']) if (String(filters[key]).trim()) address.set(key, String(filters[key]).trim());
+    history.replaceState(history.state, '', ctx.path + (address.size ? '?' + address : ''));
+    closeDetail({ restore: false });
+    listState = 'loading';
+    draw();
+    try {
+      const page = await api('GET', listPath());
+      if (token !== searchToken || !ctx.alive()) return;
+      rows = page.responses;
+      matched = page.matched ?? null;
+      total = page.form?.response_count ?? total;
+      cursor = pageCursor(page);
+      more = Boolean(cursor);
+      trailPages = [page];
+      context = responseTrailContext(trailPages);
+      listState = 'ready';
+      draw();
+      if (announce) $('#responses-status').textContent = summary();
+    } catch (error) {
+      if (token !== searchToken || !ctx.alive()) return;
+      listState = 'error';
+      listError = error.status === 400 ? error.message : error.name === 'TimeoutError' || error instanceof TypeError ? 'Schedora could not be reached.' : error.message;
+      draw();
+      $('#responses-status').textContent = 'The search did not finish. Your filters are kept.';
+    }
+  };
+  let typing;
+  $('#response-search').addEventListener('input', event => {
+    clearTimeout(typing);
+    typing = setTimeout(() => { if (filters.q !== event.target.value) { filters.q = event.target.value; applyFilters(); } }, 300);
+  });
+  $('#responses-filters').addEventListener('submit', event => { event.preventDefault(); clearTimeout(typing); filters.q = $('#response-search').value; applyFilters(); });
+  $('#responses-filters').addEventListener('change', event => {
+    const key = { 'response-since': 'since', 'response-version': 'version', 'response-signin': 'signin' }[event.target.id];
+    if (!key) return;
+    filters[key] = event.target.value;
+    applyFilters();
+  });
 
   // The export is fetched here so a failure is shown with a retry instead of downloading an error page.
-  $('#export').onclick = async () => {
-    const button = $('#export');
+  const exportCsv = async scope => {
+    const button = scope === 'all' && active() ? $('#export-all') : $('#export');
     button.setAttribute('aria-disabled', 'true');
     mount($('#export-status'), html`<p class="muted" role="status">Preparing export…</p>`);
     try {
-      const response = await fetch(wsPath(`/forms/${form.id}/responses.csv`), { credentials: 'same-origin', signal: AbortSignal.timeout(60000) });
+      const query = scope === 'filtered' ? serverQuery() : new URLSearchParams();
+      const response = await fetch(wsPath(`/forms/${form.id}/responses.csv${query.size ? '?' + query : ''}`), { credentials: 'same-origin', signal: AbortSignal.timeout(60000) });
       if (!response.ok) throw new Error(response.status === 404 || response.status === 403 ? 'You no longer have access to export these responses.' : 'The export could not be created.');
+      const count = Number(response.headers.get('x-response-count'));
+      const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') || '')?.[1] || `${form.slug}-responses.csv`;
       const url = URL.createObjectURL(await response.blob());
-      const link = Object.assign(document.createElement('a'), { href: url, download: `${form.slug}-responses.csv` });
+      const link = Object.assign(document.createElement('a'), { href: url, download: name });
       document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
-      mount($('#export-status'), html`<p class="muted" role="status">Export downloaded. It includes every response, with the form version each one answered.</p>`);
+      const counted = Number.isFinite(count) && response.headers.has('x-response-count') ? plural(count, 'response') : null;
+      mount($('#export-status'), html`<p class="muted" role="status">${scope === 'filtered'
+        ? `Export downloaded: ${counted ? `the ${counted}` : 'the responses'} matching ${filterWords()}. Other responses are not in this file.`
+        : `Export downloaded: ${counted ? `all ${counted}` : 'every response'}, whatever the filters, with the form version each one answered.`}</p>`);
     } catch (error) {
       mount($('#export-status'), notice('bad', html`<p>${error.name === 'TimeoutError' || error instanceof TypeError ? 'The export did not finish. Check your connection.' : error.message}</p><button class="btn btn-small" type="button" id="retry-export">Try again</button>`));
-      $('#retry-export').onclick = () => $('#export').click();
+      $('#retry-export').onclick = () => exportCsv(scope);
       $('#export-status').focus();
-    } finally { button.removeAttribute('aria-disabled'); }
+    } finally { button?.removeAttribute('aria-disabled'); }
   };
 
   $('#responses-page').addEventListener('click', async event => {
     const target = event.target.closest('button');
-    if (!target) return;
+    if (!target || target.closest('#responses-filters') && target.id !== 'clear-filters') return;
+    if (target.dataset.scope) return exportCsv(target.dataset.scope);
+    if (target.dataset.clearFilters !== undefined) {
+      Object.assign(filters, { q: '', since: '', version: '', signin: '' });
+      $('#response-search').value = '';
+      for (const id of ['#response-since', '#response-version', '#response-signin']) if ($(id)) $(id).value = '';
+      await applyFilters();
+      return $('#response-search').focus();
+    }
+    if (target.dataset.retryFilters !== undefined) return applyFilters();
     if (target.id === 'more') {
       if (!cursor || target.disabled) return;
       target.disabled = true;
       mount($('#responses-status'), 'Loading older responses…');
+      const token = searchToken;
       try {
-        const older = await api('GET', wsPath(`/forms/${form.id}/responses?before=${encodeURIComponent(cursor)}`));
-        if (!ctx.alive()) return;
+        const older = await api('GET', listPath(cursor));
+        if (!ctx.alive() || token !== searchToken) return;
         rows = [...new Map(rows.concat(older.responses).map(row => [row.id, row])).values()];
         trailPages.push(older);
         context = responseTrailContext(trailPages);
@@ -2291,6 +2486,7 @@ export async function responses(ctx) {
     if (target.dataset.filter) {
       if (target.getAttribute('aria-disabled') === 'true') return;
       filter = target.dataset.filter;
+      closeDetail({ restore: false });
       draw();
       return $(`[data-filter="${filter}"]`)?.focus();
     }
@@ -2299,14 +2495,25 @@ export async function responses(ctx) {
       catch { $('#empty-link').select(); $('#empty-copy-status').textContent = 'Copy failed. The link is selected: press Ctrl+C (⌘C on a Mac) to copy it.'; }
       return;
     }
-    if (target.id === 'close-detail') { $('#response-detail').innerHTML = ''; return $(`[data-view-response="${openRow}"]`)?.focus(); }
-    if (target.dataset.viewResponse) return showDetail(rows.find(row => row.id === target.dataset.viewResponse));
+    if (target.id === 'close-detail') return closeDetail();
+    if (target.dataset.stepDetail) {
+      const shown = shownRows();
+      const next = shown[shown.findIndex(row => row.id === openRow) + Number(target.dataset.stepDetail)];
+      if (next) { showDetail(next, { focus: false }); $(`[data-step-detail="${target.dataset.stepDetail}"]`)?.focus(); if ($(`[data-step-detail="${target.dataset.stepDetail}"]`)?.disabled) $('#detail-title').focus(); }
+      return;
+    }
+    if (target.dataset.viewResponse) {
+      if (openRow === target.dataset.viewResponse && panel().open) return closeDetail();
+      return showDetail(rows.find(row => row.id === target.dataset.viewResponse));
+    }
     const id = target.dataset.delete;
     if (!id || !(await ask({ title: 'Delete this response?', body: 'It is removed permanently from this inbox and from future exports. Exports already downloaded are not changed. Deleting does not restore your monthly response allowance, and it does not cancel a booking made from this response.', confirm: 'Delete response', danger: true }))) return;
     try {
       await api('DELETE', wsPath(`/forms/${form.id}/responses/${id}`));
       rows = rows.filter(row => row.id !== id);
-      $('#response-detail').innerHTML = '';
+      total = Math.max(0, total - 1);
+      if (matched != null) matched = Math.max(0, matched - 1);
+      closeDetail({ restore: false });
       draw();
       toast('Response deleted.');
       $('#export')?.focus();

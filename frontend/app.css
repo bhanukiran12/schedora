@@ -284,6 +284,45 @@ dialog.import-dialog h2 { margin: 0; font-size: 20px; }
 .trail-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; }
 .trail-filter .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .trail-filter .muted { font-size: 14px; }
+/* Responses: search and filters, a summary of what is shown, and a detail panel that leaves the list in place. */
+.container.responses-page { max-width: 1440px; }
+.responses-head { align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.export-actions { flex-wrap: wrap; gap: 8px; }
+.responses-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin: 16px 0 4px; }
+.responses-filters > div { display: grid; gap: 4px; min-width: 0; }
+.responses-filters label { margin: 0; font-size: 14px; }
+.responses-filters .filter-search { flex: 1 1 260px; }
+.responses-filters select { width: auto; max-width: 100%; }
+.responses-filters #clear-filters { align-self: flex-end; margin-bottom: 4px; }
+.responses-summary { margin: 4px 0 12px; font-weight: 600; }
+.responses-layout { display: grid; gap: 16px; align-items: start; }
+.responses-layout > #responses { min-width: 0; }
+.responses-table tr.is-open > td { background: var(--accent-tint); }
+.responses-table tr.is-open > td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
+.col-verified { background: var(--surface-2); }
+.col-note { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
+.response-panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); padding: 20px; box-sizing: border-box; }
+.response-panel .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.response-panel .detail-head h2 { margin: 0; font-size: 20px; }
+.response-panel .detail-head .btn { flex-shrink: 0; white-space: nowrap; }
+.response-panel .detail-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0; }
+.response-panel .detail-nav .muted { font-size: 14px; }
+.response-panel h3 { margin: 20px 0 4px; font-size: 16px; }
+.detail-identity { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 4px 16px 8px; margin-top: 16px; background: var(--surface-2); }
+/* Narrow screens: a full-screen sheet over the list. */
+.response-panel:modal { width: 100%; max-width: 640px; height: 100%; max-height: 100%; margin: 0 0 0 auto; border-radius: 0; overflow: auto; }
+.response-panel::backdrop { background: rgba(20, 16, 40, .45); }
+/* Wide screens: a panel beside the list, scrolled on its own. */
+@media (min-width: 1200px) {
+  .responses-layout.has-detail { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); }
+  .responses-layout > .response-panel:not(:modal) { inset: auto; position: sticky; top: 16px; margin: 0; width: auto; max-height: calc(100vh - 32px); overflow: auto; }
+}
+@media (max-width: 1199px) { .responses-layout > .response-panel:not(:modal) { position: fixed; } }
+@media (max-width: 760px) {
+  .responses-filters > div:not(.filter-search) { flex: 1 1 140px; }
+  .responses-filters select { width: 100%; }
+  .responses-head .export-actions { width: 100%; }
+}
 .attention-note { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--bad); }
 .trail { margin: 16px 0; }
 .trail h3 { font-size: 17px; margin: 0 0 8px; }

@@ -26,7 +26,7 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Builder · Share + readiness | Get the link and the embed code | The embed sits in a disclosure | Browser: prefill journey | **Prefilled links done (M2)**; layout polish M4 |
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |
 | Preview (builder pane, both layouts) | See what respondents see | Works. Device toggle present. | Browser: classic and conversational render after reopen | Verified in M1 |
-| `/forms/:id/responses` and detail | Scan, filter, inspect, export | Table without filters or search. The detail opens below the table, far from the clicked row on phones. | Browser at all widths. CSV contents checked. | Planned (M4); export verified in M1 |
+| `/forms/:id/responses` and detail | Scan, filter, inspect, export | — | Server tests (also on PostgreSQL); browser: loading, filtered, no-match, search-error, empty, other-workspace and signed-out states; side panel and phone sheet keep the row; filtered and full CSVs | **Done (M4 part 3)** |
 | `/f/:slug` Classic | Answer and submit | Works. Respondent pages now show only the Forms lockup in the header (M4 part 1). | Browser: 9-error summary, conditional question, Loom description, receipt, sign-in states | Verified in M1 and M3 |
 | `/f/:slug?mode=conversational` | One question at a time | Works | Browser: required error, conditional question, receipt | Verified in M1 |
 | `/f/:slug?embed=1` | Embedded on another site | Not re-checked this milestone | Browser inside an iframe host page | Planned (M4) |
@@ -86,7 +86,7 @@ This uses the workspace's own OIDC provider, as you decided. Respondents never b
 
 **Remaining, in order:**
 1. ~~The `/setup/forms` creation flow joined to the same picker.~~ Done (part 2).
-2. Responses: search, filters and a side detail panel.
+2. ~~Responses: search, filters and a side detail panel.~~ Done (part 3).
 3. Builder outline on phones and toolbar hierarchy.
 4. An embed check (`?embed=1` inside a host page).
 5. Endings polish.

@@ -5,7 +5,7 @@ export const formStatus = form => form.published_version ? 'live' : form.latest_
 
 export const STATUS_FILTERS = [['all', 'All'], ['live', 'Live'], ['draft', 'Drafts'], ['closed', 'Closed']];
 
-const fold = text => String(text ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const fold = text => String(text ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 /** Forms matching a search (every word, in the title or description) and a status, newest change first. */
 export function filterForms(forms, { query = '', status = 'all' } = {}) {

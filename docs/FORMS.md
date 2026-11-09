@@ -793,3 +793,54 @@ There was no overflow at 320/375/768/1280 px.
 - *Skip Forms for now* in a third workspace, then *Blank form* from `/forms` there
 
 There was no overflow at 320, 375, 768 or 1280 px.
+
+## Responses: search, filters and export (9 November 2026, local only)
+
+**Filters run on the server** (`backend/src/forms/response-filter.mjs`) and cover every response, not just the loaded page. `GET …/responses` and `GET …/responses.csv` take the same optional query:
+
+| Parameter | Meaning |
+|---|---|
+| `q` | Words that must all appear, ignoring case and accents. It searches answers (choices by the label the respondent saw in their version), the receipt code, link attribution, and the verified sign-in email or name. Up to 200 characters. |
+| `version` | The form version answered. |
+| `from`, `to` | Submitted at or after / before, in epoch milliseconds. |
+| `signin` | `verified` or `anonymous`. |
+
+Anything invalid is refused with `400` and the field named.
+- **List response.** With a filter, the list also returns `matched`: every match, not just this page. Paging with `before` stays inside the matches. `has_verified` says whether any response to the form has a verified sign-in, so the inbox can offer that filter.
+- **CSV response.** A filtered CSV holds only the matches and is named `…-responses-filtered.csv`. Its columns are worked out from every response, so they line up with a full export. Both report the row count in `X-Response-Count`.
+
+**Inbox** (`/forms/:id/responses`)
+- **Filters.** Search, *Submitted* (any time, 24 hours, 7 or 30 days), *Version* (when there is more than one) and *Sign-in* (when the form requires it or a response has it). They live in the address (`?q=&since=&version=&signin=`), so a reload keeps them.
+- **Summary line.** It states what is shown, for example *8 responses of 56 match search "hyderabad" · 50 loaded*. Results are announced to screen readers. No matches gives *Clear filters*. A failed search keeps the filters and offers *Try again*.
+- **Export.**
+  - Without filters, the button reads *Export CSV · all 56*.
+  - With filters, there are two buttons: *Export 8 matching responses* and *Export all 56*.
+  - After a filtered download, the message says the file holds only the matches and that other responses are not in it.
+- **Detail.**
+  - **Wide screens (1200 px and up):** it opens in a panel beside the list. The panel scrolls on its own, and the row you opened stays where it was on screen.
+  - **Narrower screens:** it is a full-screen sheet.
+  - **Moving around:** *Newer* and *Older* step through the shown responses and mark the current row. Close, Escape or *View* again returns focus to that row without moving the list.
+- **Verified identity stays separate.**
+  - **Table:** *Verified sign-in* is its own shaded column labelled *identity, not an answer*, placed before the answers.
+  - **Detail:** it is a separate box above *Answers*, which are labelled as what the respondent entered.
+  - **CSV:** the verified columns stay last, as before.
+- *Needs attention* still narrows the loaded responses and says so.
+
+**Evidence (local SQLite, headless Chrome):** `backend/test/forms-response-filter.test.mjs` (4 tests, also in the PostgreSQL CI job) covers:
+- search by version labels, accents, receipt and verified email
+- combined filters and paging inside the matches
+- refused filters
+- filtered and full CSVs with matching columns
+- another workspace (404) and a signed-out visitor (401)
+
+A scratchpad journey with the Technical Profile Details file ran these steps:
+1. Imported and published the form, then collected 56 responses across two versions, one with a verified sign-in.
+2. Checked the loading state on a slow connection.
+3. Searched and filtered by version and sign-in, reloaded with filters, cleared them, and searched "JOSE".
+4. Checked that the verified identity stayed apart from the typed email.
+5. On a wide screen, opened the side panel. The row stayed in place, *Older* moved the highlight, and Escape returned focus to the row.
+6. On a phone, the detail opened as a sheet, and closing it left the scroll position unchanged.
+7. Downloaded filtered (8 rows) and full (56 rows) CSVs, with the same header.
+8. Checked no matches, a search while offline (filters kept, retry works), an unpublished form, another workspace and a signed-out visitor.
+
+There was no overflow at 320, 375, 768 or 1280 px.

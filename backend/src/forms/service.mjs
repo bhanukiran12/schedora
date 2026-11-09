@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail, HttpError } from '../http.mjs';
+import { filterActive, filterSql, searchMatcher } from './response-filter.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
 import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
@@ -389,7 +390,25 @@ function loadVersion(app, formId, version) {
 // The receipt reference is derived from the response id; it identifies nothing else.
 const receipt = (row, version) => ({ id: row.id, reference: row.id.replace(/-/g, '').slice(0, 8).toUpperCase(), created_at: row.created_at, version });
 
-export function listResponses(app, workspaceId, formId, { before, limit = 50 } = {}) {
+const RESPONSE_COLUMNS = `r.id, r.form_version, r.answers, r.attribution, r.respondent, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at`;
+
+// Responses matching a filter, newest first. The database checks version, dates and sign-in; the
+// text search runs here because answers are read with the labels of the version they were given in.
+function filteredRows(app, workspaceId, formId, filter, { order = 'DESC' } = {}) {
+  const where = filterSql(filter);
+  const rows = app.db.all(`SELECT ${RESPONSE_COLUMNS}
+    FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ?${where.sql}
+    ORDER BY r.created_at ${order}, r.id ${order}`, formId, workspaceId, ...where.params);
+  if (!filter.q) return rows;
+  const matches = searchMatcher(filter, formVersions(app, formId));
+  return rows.filter(row => matches({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), attribution: parse(row.attribution), respondent: parse(row.respondent) }));
+}
+
+/**
+ * One page of responses, newest first. With a filter (response-filter.mjs) the page holds only
+ * matching responses and `matched` counts every match, not only this page.
+ */
+export function listResponses(app, workspaceId, formId, { before, limit = 50, filter = {} } = {}) {
   getForm(app, workspaceId, formId);
   // Accept legacy timestamp cursors, but emit timestamp + id for stable paging through ties.
   const cursor = before ? /^(\d{1,16})(?:\.([A-Za-z0-9-]{1,64}))?$/.exec(before) : null;
@@ -397,14 +416,24 @@ export function listResponses(app, workspaceId, formId, { before, limit = 50 } =
   const at = cursor ? Number(cursor[1]) : Number.MAX_SAFE_INTEGER;
   const id = cursor?.[2] || '';
   const size = Math.min(200, Math.max(1, Math.trunc(Number(limit) || 50)));
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.attribution, r.respondent, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
+  let rows;
+  let matched = null;
+  if (filterActive(filter)) {
+    const all = filteredRows(app, workspaceId, formId, filter);
+    matched = all.length;
+    rows = all.filter(row => row.created_at < at || (row.created_at === at && row.id < id)).slice(0, size + 1);
+  } else {
+    rows = app.db.all(`SELECT ${RESPONSE_COLUMNS}
     FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ?
     AND (r.created_at < ? OR (r.created_at = ? AND r.id < ?))
     ORDER BY r.created_at DESC, r.id DESC LIMIT ?`, formId, workspaceId, at, at, id, size + 1);
+  }
   const page = rows.slice(0, size);
   const last = page.at(-1);
   return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row), ...(row.attribution ? { attribution: JSON.parse(row.attribution) } : {}), ...(row.respondent ? { respondent: JSON.parse(row.respondent) } : {}) })),
-    next: rows.length > size ? `${last.created_at}.${last.id}` : null };
+    next: rows.length > size ? `${last.created_at}.${last.id}` : null, ...(matched == null ? {} : { matched }),
+    // Whether any response to the form carries a verified sign-in, so the inbox can offer that filter.
+    has_verified: Boolean(app.db.get('SELECT 1 AS found FROM responses WHERE form_id = ? AND workspace_id = ? AND respondent IS NOT NULL LIMIT 1', formId, workspaceId)) };
 }
 
 // Booking state is read from Meet, following reschedules, so the inbox never claims more than Meet records.
@@ -451,16 +480,19 @@ const NEXT_STEP_TEXT = { offered: 'Booking offered', unavailable: 'Booking unava
 
 // Each answer is written using the version the respondent answered, so renamed or removed options
 // keep their original labels.
-export function exportCsv(app, workspaceId, formId) {
+// With a filter, only matching responses are written and the file name says so; the columns stay the
+// same as a full export.
+export function exportCsv(app, workspaceId, formId, filter = {}) {
   const form = getForm(app, workspaceId, formId);
   const versions = formVersions(app, formId);
   const columns = exportColumns(versions, form.draft);
-  const rows = app.db.all(`SELECT r.id, r.form_version, r.answers, r.attribution, r.respondent, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at
-    FROM responses r LEFT JOIN form_handoffs h ON h.response_id = r.id WHERE r.form_id = ? AND r.workspace_id = ? ORDER BY r.created_at`, formId, workspaceId);
-  // Verified sign-in columns come last and only when some response has one, so other exports keep their shape.
-  const verified = rows.some(row => row.respondent);
+  const rows = filteredRows(app, workspaceId, formId, filter, { order: 'ASC' });
+  // Columns depend on every response to the form, never on the filter, so a filtered file lines up
+  // with a full one. Verified sign-in columns come last and only when some response has one, so
+  // other exports keep their shape.
+  const verified = Boolean(app.db.get('SELECT 1 AS found FROM responses WHERE form_id = ? AND workspace_id = ? AND respondent IS NOT NULL LIMIT 1', formId, workspaceId));
   // Attribution columns come last and only when recorded, so existing exports keep their shape.
-  const attributed = rows.map(row => ({ attribution: parse(row.attribution) }));
+  const attributed = app.db.all('SELECT attribution FROM responses WHERE form_id = ? AND workspace_id = ? AND attribution IS NOT NULL', formId, workspaceId).map(row => ({ attribution: parse(row.attribution) }));
   const attribution = attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), attributed);
   const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(field => field.label || field.id), ...attribution.map(key => `Attribution: ${key}`), ...(verified ? ['Verified sign-in email', 'Verified sign-in subject'] : [])].map(csvCell).join(',')];
   for (const row of rows) {
@@ -473,7 +505,7 @@ export function exportCsv(app, workspaceId, formId) {
       ...columns.map(column => answerText(fields.find(field => field.id === column.id) || column, answers[column.id])),
       ...attribution.map(key => recorded[key] ?? ''), ...(verified ? (identity => [identity?.email ?? '', identity?.subject ?? ''])(parse(row.respondent)) : [])].map(csvCell).join(','));
   }
-  return { filename: `${form.slug}-responses.csv`, body: '﻿' + lines.join('\r\n') + '\r\n' };
+  return { filename: `${form.slug}-responses${filterActive(filter) ? '-filtered' : ''}.csv`, count: rows.length, body: '﻿' + lines.join('\r\n') + '\r\n' };
 }
 
 // ---- Routing and the Meet handoff -----------------------------------------------------------------

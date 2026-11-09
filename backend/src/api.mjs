@@ -3,6 +3,7 @@ import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, 
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
 import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
 import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/themes.mjs';
+import { parseResponseFilter } from './forms/response-filter.mjs';
 import { exportDefinition, exportFilename, IMPORT_MAX_BYTES, importForm, inspectDefinition } from './forms/definition-io.mjs';
 import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
@@ -310,13 +311,13 @@ export function createApi(app) {
     const actor = member(ctx, 'responses.read');
     const { workspace } = actor;
     const form = getForm(app, workspace.id, ctx.params.id);
-    const page = listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit') });
+    const page = listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit'), filter: parseResponseFilter(ctx.query) });
     return { form, versions: formVersions(app, form.id), ...page, followups: followupsForItems(app, actor, page.responses) };
   });
   get('/api/workspaces/:ws/forms/:id/responses.csv', ctx => {
     const { workspace } = member(ctx, 'responses.read');
-    const { filename, body } = exportCsv(app, workspace.id, ctx.params.id);
-    return { raw: body, type: 'text/csv; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-z0-9.-]/gi, '_')}"`, 'Cache-Control': 'no-store' } };
+    const { filename, body, count } = exportCsv(app, workspace.id, ctx.params.id, parseResponseFilter(ctx.query));
+    return { raw: body, type: 'text/csv; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-z0-9.-]/gi, '_')}"`, 'Cache-Control': 'no-store', 'X-Response-Count': String(count) } };
   });
   del('/api/workspaces/:ws/forms/:id/responses/:rid', ctx => { deleteResponse(app, member(ctx, 'responses.delete').workspace.id, ctx.params.id, ctx.params.rid); return { status: 204 }; });
 
