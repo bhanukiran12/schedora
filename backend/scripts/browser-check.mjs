@@ -324,20 +324,20 @@ try {
     await layoutCheck('Forms builder from template');
   });
   await step('build and publish form', async () => {
-    await open('/forms', "document.querySelector('#new-form') && document.querySelector('#form-list .list')");
+    await open('/forms', "document.querySelector('#new-form') && document.querySelector('#form-list .forms-table')");
     await click('#new-form');
     await click('[data-template="blank"]');
     await waitFor("document.querySelector('#publish') && document.querySelector('#preview form')", 'builder');
     const emailsBeforeShare = app.db.get('SELECT COUNT(*) AS count FROM emails').count;
     formId = await evaluate("location.pathname.split('/')[2]");
     await layoutCheck('form builder');
-    if (!(await text()).includes('All changes saved')) throw new Error('initial save state missing');
+    if (!(await evaluate("document.querySelector('#builder-status').dataset.save === 'saved'"))) throw new Error('initial save state missing');
     await fill('#f-title', 'Project intake');
-    if (!(await text()).includes('Unsaved changes')) throw new Error('unsaved state missing');
+    if (!(await text()).includes('Unsaved edits')) throw new Error('unsaved state missing');
     if (await evaluate("Boolean(document.querySelector('#share-link, #share-future, #share-panel input'))")) throw new Error('a draft offers a respondent link');
     await click('#publish');
     await waitFor("document.querySelector('#share-panel #share-link')", 'published share link');
-    await waitFor("document.querySelector('#builder-status').innerText.includes('Live · version 1') && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'live and saved status');
+    await waitFor("document.querySelector('#builder-status').dataset.liveVersion === '1' && document.querySelector('#builder-status').dataset.save === 'saved'", 'live and saved status');
     formSlug = (await evaluate("document.querySelector('#share-link').value")).split('/f/')[1];
     // The respondent link is the first thing after publishing: focused heading, link in view at phone and desktop widths.
     if (!(await focused('#share-heading'))) throw new Error('publishing does not move focus to the respondent link');
@@ -379,15 +379,15 @@ try {
     await click('[data-index="1"] [data-move="-1"]');
     if (!(await focused('[data-index="0"] [data-move="1"]'))) throw new Error('focus lost after moving to the top');
     await click('#save');
-    await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'saved after reorder');
+    await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'saved after reorder');
   });
   await step('form builder: one panel at a time on mobile', async () => {
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
     const shown = () => evaluate("[getComputedStyle(document.querySelector('.builder-edit')).display, getComputedStyle(document.querySelector('.builder-preview')).display].join()");
     if ((await shown()) !== 'block,none') throw new Error('edit panel only expected, got ' + await shown());
-    await click('.mobile-switch [data-view="preview"]');
+    await click('[data-builder-view="preview"]');
     if ((await shown()) !== 'none,block') throw new Error('preview panel only expected, got ' + await shown());
-    await click('.mobile-switch [data-view="edit"]');
+    await click('[data-builder-view="edit"]');
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   });
   await step('form builder: a conflicting save is not silent', async () => {
@@ -398,7 +398,7 @@ try {
     if (!(await text()).includes('Not saved: changed elsewhere')) throw new Error('conflict state missing');
     if ((await evaluate("document.querySelector('#f-title').value")) !== 'My local title') throw new Error('local edits lost');
     await click('#conflict-load');
-    await waitFor("document.querySelector('#f-title').value === 'Edited elsewhere' && document.querySelector('#builder-status').innerText.includes('All changes saved')", 'latest loaded');
+    await waitFor("document.querySelector('#f-title').value === 'Edited elsewhere' && document.querySelector('#builder-status').dataset.save === 'saved'", 'latest loaded');
   });
   // The builder shows one question at a time: choose it in the sidebar by its key. Returns its index.
   const selectQuestion = async key => {
@@ -420,9 +420,9 @@ try {
     await fill(`[data-index="${i}"] [data-prop="label"]`, 'Canvas wording');
     if (!(await evaluate(`document.querySelector('[data-question-row="${i}"]').innerText.includes('Canvas wording') && document.querySelector('#preview').textContent.includes('Canvas wording')`))) throw new Error('canvas edit did not reach the sidebar and preview');
     // The live preview is one switch away at every width, and the outline collapses to icons on narrower desktops with its names intact.
-    await click('.mobile-switch [data-view="preview"]');
+    await click('[data-builder-view="preview"]');
     if (!(await evaluate("getComputedStyle(document.querySelector('.builder-preview')).display !== 'none' && getComputedStyle(document.querySelector('.builder-edit')).display === 'none'"))) throw new Error('preview not shown by the switch');
-    await click('.mobile-switch [data-view="edit"]');
+    await click('[data-builder-view="edit"]');
     await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
     const collapsed = await evaluate("(() => { const rail = document.querySelector('.question-sidebar').getBoundingClientRect(); const label = document.querySelector('.question-row-label'); return { rail: rail.width, clipped: label.getBoundingClientRect().width <= 1, name: label.closest('button').textContent }; })()");
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -455,7 +455,7 @@ try {
       await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       await mouse('mouseReleased', at.x, at.y, 0);
-      if ((await questionKeys()).join() !== original.join() || (await text()).includes('Unsaved changes') || (await evaluate("Boolean(document.querySelector('.dragging, .drop-before, .drop-after, .is-dragging'))"))) throw new Error('Escape did not cancel the drag cleanly');
+      if ((await questionKeys()).join() !== original.join() || (await text()).includes('Unsaved edits') || (await evaluate("Boolean(document.querySelector('.dragging, .drop-before, .drop-after, .is-dragging'))"))) throw new Error('Escape did not cancel the drag cleanly');
       const plain = await middle(2);
       await mouse('mouseMoved', plain.x, plain.y, 0);
       await mouse('mousePressed', plain.x, plain.y, 1);
@@ -467,7 +467,7 @@ try {
       if ((await questionKeys()).join() !== 'email,name,topic,details') throw new Error('drag did not reorder: ' + (await questionKeys()).join());
       if (!(await focused('[data-question-index="1"]')) || (await evaluate("document.querySelector('[data-question-index=\"1\"]').getAttribute('aria-pressed')")) !== 'true' || (await evaluate("document.querySelector('#fields [data-prop=\"id\"]').value")) !== 'name') throw new Error('moved question not selected and focused after the drop');
       await waitFor("document.querySelector('#builder-live').innerText.includes('position 2')", 'drag announced');
-      if (!(await text()).includes('Unsaved changes')) throw new Error('drag did not mark the draft unsaved');
+      if (!(await text()).includes('Unsaved edits')) throw new Error('drag did not mark the draft unsaved');
       if (!(await evaluate("document.querySelector('[data-question-row=\"3\"]').innerText.includes('Logic')"))) throw new Error('a rule that is still valid was lost');
       // The move buttons act on the same order.
       await click('[data-index="1"] [data-move="-1"]');
@@ -505,7 +505,7 @@ try {
     if (!rule[0].startsWith('Rule 1: when “') || rule[1] !== 'If no rule matches: show the receipt only.' || !rule[2].includes('First match wins')) throw new Error('routing is not explained in plain words: ' + rule.slice(0, 2).join(' | '));
     await layoutCheck('form builder plain-language logic', '#routing');
     await click('#save');
-    await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'saved after logic checks');
+    await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'saved after logic checks');
   });
   await step('form builder: top navigation keeps edits, moves focus, shows one surface and stays in view', async () => {
     await open(`/forms/${formId}`, "document.querySelector('#builder-index [data-section]') && document.querySelector('#fields [data-prop=label]')");
@@ -528,7 +528,7 @@ try {
       if (!(await evaluate(`document.querySelector('#builder-index [data-section="${section}"]').getAttribute('aria-current') === 'location'`))) throw new Error(`${section} not marked current`);
       if (!(await shown(surface)) || (await shown(hidden))) throw new Error(`${section} does not show exactly its own surface`);
     }
-    if ((await evaluate('location.pathname + location.search + location.hash')) !== path || (await evaluate("document.querySelector('#f-title').value")) !== 'Unsaved index title' || !(await text()).includes('Unsaved changes')) throw new Error('the navigation changed the address or lost unsaved edits');
+    if ((await evaluate('location.pathname + location.search + location.hash')) !== path || (await evaluate("document.querySelector('#f-title').value")) !== 'Unsaved index title' || !(await text()).includes('Unsaved edits')) throw new Error('the navigation changed the address or lost unsaved edits');
     if (await evaluate("document.querySelector('.builder-topbar').getBoundingClientRect().top !== 0")) throw new Error('top bar not in view on a wide screen');
     await layoutCheck('form builder top navigation', '#questions');
     // Design opens beside the canvas and closes back to its button.
@@ -538,7 +538,7 @@ try {
     if (await shown('#design-panel')) throw new Error('Design does not close');
     // Phone: the bar scrolls away, and the Preview switch shows the preview.
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
-    await click('.mobile-switch [data-view="preview"]');
+    await click('[data-builder-view="preview"]');
     if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display === 'none' && getComputedStyle(document.querySelector('.builder-preview')).display !== 'none'"))) throw new Error('phone switch does not show the preview');
     await click('#builder-index [data-section="questions"]');
     // On phones the outline is folded into its bar, which names the selected question and takes focus.
@@ -563,7 +563,7 @@ try {
     await layoutCheck('form builder type replacement dialog', 'dialog[open]');
     await click('dialog[open] [value="cancel"]');
     await waitFor("!document.querySelector('dialog[open]')", 'dialog closed');
-    if ((await types()) !== before || !(await text()).includes('All changes saved')) throw new Error('cancelling a replacement changed the draft');
+    if ((await types()) !== before || !(await evaluate("document.querySelector('#builder-status').dataset.save === 'saved'"))) throw new Error('cancelling a replacement changed the draft');
     if (!(await focused(`[data-index="${i}"] [data-type]`))) throw new Error('focus not returned to the type select');
     // A published choice question that a display rule depends on cannot be replaced until the rule changes.
     i = await choose('topic', 'short_text');
@@ -575,7 +575,7 @@ try {
     if (!(await evaluate("document.querySelector('dialog[open]').innerText.includes('after the change')"))) throw new Error('rule meaning change not shown');
     await click('dialog[open] [value="ok"]');
     await waitFor("[...document.querySelectorAll('#fields [data-prop=\"id\"]')].some(input => input.value === 'topic' && input.closest('[data-index]').querySelector('[data-type]').value === 'multiple_choice')", 'multiple choice applied under the same key');
-    if (!(await text()).includes('Unsaved changes')) throw new Error('confirmed change did not mark the draft unsaved');
+    if (!(await text()).includes('Unsaved edits')) throw new Error('confirmed change did not mark the draft unsaved');
     // Widening a published short text applies at once.
     i = await choose('name', 'long_text');
     await waitFor(`document.querySelector('[data-index="${i}"] [data-type]').value === 'long_text'`, 'widening applied');
@@ -636,17 +636,17 @@ try {
       await click(`[data-index="${i}"] [data-video-add]`);
       await waitFor(`document.querySelector('[data-index="${i}"] [data-media-title]')`, 'video added');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'media saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'media saved');
       await row('name');
       await evaluate("document.querySelector('#fields [data-media-alt]').scrollIntoView({ block: 'center' })");
       await layoutCheck('form builder media editor', '#questions');
       // Image failure in the preview falls back to text. Shown first: a lazy image in a hidden panel never loads.
-      await click('.mobile-switch [data-view="preview"]');
+      await click('[data-builder-view="preview"]');
       await evaluate("document.querySelector('#preview [data-media-image] img').src = '/api/public/form-assets/' + 'f'.repeat(32)");
       await waitFor("!document.querySelector('#preview .q-media-failed').hidden", 'image fallback');
-      await click('.mobile-switch [data-view="edit"]');
+      await click('[data-builder-view="edit"]');
       await click('#publish');
-      await waitFor("document.querySelector('#share-link') && document.querySelector('#builder-status').innerText.includes('Live · version 1')", 'published with media');
+      await waitFor("document.querySelector('#share-link') && document.querySelector('#builder-status').dataset.liveVersion === '1'", 'published with media');
       // The question image and the option picture are the same file, so the server stores and records it once.
       if (app.db.get('SELECT COUNT(*) AS count FROM form_version_assets WHERE form_id = ?', mediaFormId).count !== 1 || app.db.get('SELECT COUNT(*) AS count FROM form_assets').count !== 1) throw new Error('published version does not record its deduplicated image');
       // Public form: images from this service only, no provider request until the respondent loads the video.
@@ -769,15 +769,15 @@ try {
       if (!(await evaluate("document.querySelector('[data-question-key=\"topic\"]').innerText.includes('Logic')"))) throw new Error('jump not marked in the outline');
       // Preview at both sizes, in the real renderer, stores nothing.
       const responsesBefore = app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', id).count;
-      await click('.mobile-switch [data-view="preview"]');
+      await click('[data-builder-view="preview"]');
       await click('[data-device="mobile"]');
       if (await evaluate("document.querySelector('#preview').getBoundingClientRect().width > 375")) throw new Error('mobile preview is wider than a phone');
       if ((await evaluate("document.querySelector('[data-device=\"mobile\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('device state not exposed');
       await click('[data-device="desktop"]');
       if (await evaluate("document.querySelector('#preview').getBoundingClientRect().width <= 375")) throw new Error('desktop preview did not widen');
-      await click('.mobile-switch [data-view="edit"]');
+      await click('[data-builder-view="edit"]');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'contact form saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'contact form saved');
       if (app.db.get('SELECT published_version FROM forms WHERE id = ?', id).published_version !== null) throw new Error('saving published the form');
       await layoutCheck('form editor contact form');
       // A wider layout viewport also widens innerWidth, which hides overflow from the width check.
@@ -862,7 +862,7 @@ try {
       // A preset applies at once to the canvas and the preview, without saving or publishing anything.
       await click('[data-preset-id="harbour"] [data-preset-apply]');
       if ((await paint('.canvas-frame')).background !== colour('#10243a')) throw new Error('preset did not reach the canvas');
-      if (!(await text()).includes('Unsaved changes')) throw new Error('applying a theme did not mark the draft unsaved');
+      if (!(await text()).includes('Unsaved edits')) throw new Error('applying a theme did not mark the draft unsaved');
       // Create a theme: every change shows on the canvas at once; the draft is what changes, not anything live.
       await click('#design-tab-mine');
       await click('[data-theme-create]');
@@ -893,7 +893,7 @@ try {
       const frame = await evaluate("(() => { const box = document.querySelector('.canvas-frame').getBoundingClientRect(); return { width: box.width, height: box.height, shown: getComputedStyle(document.querySelector('.builder-edit')).display !== 'none' }; })()");
       if (frame.width > 415 || frame.height <= frame.width || !frame.shown) throw new Error('mobile device view did not reshape the canvas: ' + JSON.stringify(frame));
       if ((await paint('.canvas-frame')).background !== colour('#123456')) throw new Error('theme lost in mobile device view');
-      await click('.mobile-switch [data-view="preview"]');
+      await click('[data-builder-view="preview"]');
       await waitFor("document.querySelector('#preview form')", 'preview shown');
       const mobile = await evaluate("(() => { const box = document.querySelector('#preview').getBoundingClientRect(); return { width: box.width, background: getComputedStyle(document.querySelector('#preview')).backgroundColor, button: getComputedStyle(document.querySelector('#preview .btn-primary')).backgroundColor, question: getComputedStyle(document.querySelector('#preview .q-label')).color }; })()");
       if (mobile.width > 375 || mobile.background !== colour('#123456') || mobile.button !== colour('#ff7a00') || mobile.question !== colour('#fff8e7')) throw new Error('mobile preview not themed: ' + JSON.stringify(mobile));
@@ -906,12 +906,12 @@ try {
       await click('#preview [type="submit"]');
       await waitFor("document.querySelector('#preview').innerText.includes('Preview complete')", 'preview run finished');
       if (responses() !== 0) throw new Error('preview stored a response');
-      await click('.mobile-switch [data-view="edit"]');
+      await click('[data-builder-view="edit"]');
       await click('[data-design-close]');
       if (!(await focused('#open-design')) || (await evaluate("getComputedStyle(document.querySelector('.question-settings')).display === 'none'"))) throw new Error('closing Design did not restore the inspector and focus');
       // Save and publish: the respondent sees exactly this look.
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'themed draft saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'themed draft saved');
       await click('#publish');
       await waitFor("document.querySelector('#share-panel #share-link')", 'themed form published');
       const published = await liveDefinition();
@@ -929,7 +929,7 @@ try {
       if ((await paint('.canvas-frame')).background !== colour('#faf6ee')) throw new Error('second theme did not reach the draft canvas');
       await click('[data-design-close]');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'draft ahead of live');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Draft saved · not published')", 'draft ahead of live');
       if (JSON.stringify(await seePublic()) !== JSON.stringify(before)) throw new Error('a saved draft changed the published look');
       // Editing the reusable theme itself restyles nothing already saved or published.
       await open(`/forms/${id}`, "document.querySelector('#open-design')");
@@ -1007,11 +1007,11 @@ try {
       if (!(canvasAfter.size > canvasBefore.size * 1.1) || !/rounded|Trebuchet/i.test(canvasAfter.font)) throw new Error('typography did not reach the canvas: ' + JSON.stringify(canvasAfter));
       if (canvasAfter.background !== canvasBefore.background || canvasAfter.themed) throw new Error('typography changed the default colours: ' + JSON.stringify([canvasBefore, canvasAfter]));
       if (!(await evaluate("document.querySelector('[data-design-current]').innerText")).includes('its own typography')) throw new Error('the panel does not say the draft has its own typography');
-      if (!(await text()).includes('Unsaved changes')) throw new Error('typography did not mark the draft unsaved');
+      if (!(await text()).includes('Unsaved edits')) throw new Error('typography did not mark the draft unsaved');
       await layoutCheck('form design typography', '#design-panel');
       await click('[data-design-close]');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'typography draft saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'typography draft saved');
       const stored = JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', id).draft);
       if (stored.fields[0].help !== LONG) throw new Error('the long description was not saved exactly, line breaks included');
       if (JSON.stringify(stored.theme) !== JSON.stringify({ name: 'Default style', font: 'rounded', question_size: 'large', description_size: 'small', answer_size: 'large' })) throw new Error('draft typography not stored as the default style: ' + JSON.stringify(stored.theme));
@@ -1030,13 +1030,13 @@ try {
       const preview = {};
       for (const mode of ['classic', 'conversational']) {
         await fill('#preview-mode', mode);
-        await click('.mobile-switch [data-view="preview"]');
+        await click('[data-builder-view="preview"]');
         for (const device of ['mobile', 'desktop']) {
           await click(`[data-device="${device}"]`);
           await waitFor("document.querySelector('#preview .q-label')", 'preview shown');
           preview[`${mode}/${device}`] = await sizes('#preview');
         }
-        await click('.mobile-switch [data-view="edit"]');
+        await click('[data-builder-view="edit"]');
       }
       if (app.db.get('SELECT published_version FROM forms WHERE id = ?', id).published_version !== null) throw new Error('previewing published the form');
       await click('#publish');
@@ -1096,7 +1096,7 @@ try {
       await fill('#draft-question_size', 'small');
       await click('[data-design-close]');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'draft ahead of live');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Draft saved · not published')", 'draft ahead of live');
       await evaluate('delete document.body.dataset.dirty');
       await open(`/f/${slug}?mode=classic`, "document.querySelector('#form-root .q-label')");
       if ((await sizes('#form-root')).question !== '20.7px') throw new Error('a saved draft changed the published typography');
@@ -1108,7 +1108,7 @@ try {
       if (await evaluate("!!document.querySelector('[data-theme-clear]') || document.querySelector('#draft-font').value !== 'system'")) throw new Error('Reset typography did not return to the default style');
       await click('[data-design-close]');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('Saved draft not yet published')", 'reset saved');
+      await waitFor("document.querySelector('#builder-status').innerText.includes('Draft saved · not published')", 'reset saved');
       if ('theme' in JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', id).draft)) throw new Error('a reset draft still stores a theme');
       if (themeRows() !== themesBefore) throw new Error('a workspace theme was created');
     } finally { await viewport(1280, false).catch(() => {}); await evaluate('delete document.body.dataset.dirty').catch(() => {}); }
@@ -1205,10 +1205,10 @@ try {
       await selectQuestion('email_2');
       await layoutCheck('form editor contact info page');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'page saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'page saved');
 
       // Preview in one-question-at-a-time mode: the page on one screen, invalid focus, Back keeps values, nothing stored.
-      await click('.mobile-switch [data-view="preview"]');
+      await click('[data-builder-view="preview"]');
       await evaluate("(() => { const select = document.querySelector('#preview-mode'); select.value = 'conversational'; select.dispatchEvent(new Event('change', { bubbles: true })); })()");
       const advancePreview = async value => { await fill('#preview form input', value); await click('#preview [type="submit"]'); };
       await advancePreview('Preview person');
@@ -1217,7 +1217,7 @@ try {
       await waitFor("document.querySelector('#preview .form-page-title')", 'preview page');
       if ((await evaluate("document.querySelector('#preview .form-page-title').textContent")) !== 'How can we reach you?' || (await evaluate("document.querySelectorAll('#preview .question').length")) !== 5) throw new Error('preview does not show the whole page on one screen');
       if (responses() !== 0) throw new Error('preview stored a response');
-      await click('.mobile-switch [data-view="edit"]');
+      await click('[data-builder-view="edit"]');
 
       await click('#publish');
       await waitFor("document.querySelector('#share-panel #share-link')", 'page published');
@@ -1343,7 +1343,7 @@ try {
       if (!(await focused('[data-map-select="2"]')) || (await evaluate("document.querySelector('[data-map-select=\"2\"]').getAttribute('aria-pressed')")) !== 'true') throw new Error('selecting a map item failed');
       await click('#workflow-editor [data-jump-add]');
       if (!(await focused('#workflow-editor [data-jump="0"] [data-jump-field]'))) throw new Error('adding a jump lost focus');
-      if (!(await text()).includes('Unsaved changes')) throw new Error('map edit did not mark the draft unsaved');
+      if (!(await text()).includes('Unsaved edits')) throw new Error('map edit did not mark the draft unsaved');
       await fill('#workflow-editor [data-jump="0"] [data-jump-to]', 'ending:sales');
       if (!(await focused('#workflow-editor [data-jump="0"] [data-jump-to]'))) throw new Error('changing the target lost focus');
       if (!(await arcs()).includes('notes>ending:sales')) throw new Error('new jump not drawn: ' + await arcs());
@@ -1358,7 +1358,7 @@ try {
       await click('#workflow-editor [data-jump-add]');
       await fill('#workflow-editor [data-jump="0"] [data-jump-to]', 'ending:sales');
       await click('#save');
-      await waitFor("document.querySelector('#builder-status').innerText.includes('All changes saved')", 'map edit saved');
+      await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'map edit saved');
       const saved = JSON.parse(app.db.get('SELECT draft FROM forms WHERE id = ?', created.id).draft);
       if (saved.logic.find(entry => entry.field === 'notes')?.rules[0].to.id !== 'sales') throw new Error('map edit not saved: ' + JSON.stringify(saved.logic));
       if (app.db.get('SELECT published_version FROM forms WHERE id = ?', created.id).published_version !== null) throw new Error('editing the map published the form');
@@ -1852,7 +1852,7 @@ try {
     if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', next.id).count !== 0) throw new Error('nothing should be stored');
   });
   await step('responses inbox, detail and CSV', async () => {
-    await open('/forms', "document.querySelector('.list')");
+    await open('/forms', "document.querySelector('.forms-table')");
     await click(`a[href="/forms/${formId}/responses"]`);
     await waitFor("document.querySelector('table')", 'responses table');
     await layoutCheck('responses');
@@ -1904,7 +1904,7 @@ try {
     await waitFor("document.querySelector('[data-aevent=\"0\"]') && !document.querySelector('[data-rvalue=\"0\"]')", 'booking destination');
     await layoutCheck('form routing');
     await click('#save-routing');
-    await waitFor("document.querySelector('#builder-status').innerText.includes('not yet published')", 'routing saved as draft');
+    await waitFor("document.querySelector('#builder-status').innerText.includes('not published')", 'routing saved as draft');
     await click('#publish');
     await waitFor("document.querySelector('dialog button[value=ok]')", 'republish confirmation');
     await click('dialog button[value=ok]');
@@ -2113,8 +2113,9 @@ try {
   await step('Enquiries: one list across Forms, Meet and Flow, attention first, read-only', async () => {
     const records = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM flow_runs) AS runs, (SELECT COUNT(*) FROM tasks) AS tasks'));
     const before = records();
-    await open('/forms', "document.querySelector('#main a[href=\"/enquiries\"]')");
-    await click('#main a[href="/enquiries"]');
+    // Enquiries lives in the sidebar; the Forms page header keeps one action.
+    await open('/forms', "document.querySelector('#app-sidebar a[href=\"/enquiries\"]')");
+    await click('#app-sidebar a[href="/enquiries"]');
     await waitFor("location.pathname === '/enquiries' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'enquiries list');
     const summary = await evaluate("({ origins: [...document.querySelectorAll('.enquiry .meta span:first-child')].map(s => s.textContent.split(':')[0]), states: [...document.querySelectorAll('.enquiry')].map(e => e.dataset.state), hint: document.querySelector('#enquiries-body .hint').textContent })");
     if (!summary.origins.includes('Form') || !summary.origins.includes('Booked directly')) throw new Error('responses and direct bookings are not both listed: ' + summary.origins.join(','));

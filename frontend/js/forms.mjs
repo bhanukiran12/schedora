@@ -522,8 +522,8 @@ export async function dashboard(ctx) {
   setTitle('Forms by Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Every good conversation starts with a question.', lead: 'Build classic or one-question-at-a-time forms with logic and answer piping. Responses are saved to your workspace and can be exported.' }));
   if (!needsSession(ctx)) return;
-  mount(ctx.main, html`<div class="container page"><div class="row-between"><div><span class="tag">Forms · ${workspace().name}</span><h1>Forms</h1></div>
-    <div class="row"><a class="btn" href="/enquiries">Enquiries</a><button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div></div>
+  mount(ctx.main, html`<div class="container page forms-page"><div class="forms-head"><div><h1>Forms</h1><p class="forms-head-workspace">${workspace().name}</p></div>
+    <button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
     <div id="form-templates" hidden></div>
     <div id="form-list">${loading()}</div></div>`);
@@ -551,7 +551,8 @@ export async function dashboard(ctx) {
 
 // The workspace's forms: search, status filter and row actions. Filters live in the address, so a
 // reload or a shared link keeps them; nothing here changes a form except Duplicate, which creates a draft.
-const STATUS_BADGE = { live: form => badge('published', `Live · v${form.published_version}`), draft: () => badge('draft', 'Draft'), closed: () => badge('paused', 'Closed') };
+const STATUS_TEXT = { live: 'Live', draft: 'Draft', closed: 'Closed' };
+const shortDate = at => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 function renderFormList(ctx, forms) {
   const params = new URLSearchParams(location.search);
   let query = params.get('q') || '';
@@ -562,7 +563,9 @@ function renderFormList(ctx, forms) {
       <div class="segmented forms-filter" role="radiogroup" aria-label="Show forms">${STATUS_FILTERS.map(([key, label]) => html`<label><input type="radio" name="form-status" value="${key}" ${key === status ? raw('checked') : ''}> ${label} <span class="count">${counts[key]}</span></label>`)}</div>
     </div>
     <p class="visually-hidden" id="form-count" role="status"></p>
-    <ul class="list forms-list" id="forms-rows"></ul><div id="forms-empty"></div><p class="copy-status" id="forms-status" role="status"></p>`);
+    <table class="forms-table" id="forms-table"><caption class="visually-hidden">Forms in ${workspace().name}</caption>
+      <thead><tr><th scope="col">Form</th><th scope="col">Status</th><th scope="col">Responses</th><th scope="col">Updated</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody id="forms-rows"></tbody></table><div id="forms-empty"></div><p class="copy-status" id="forms-status" role="status"></p>`);
   const remember = () => {
     const next = new URLSearchParams(location.search);
     if (query) next.set('q', query); else next.delete('q');
@@ -573,18 +576,20 @@ function renderFormList(ctx, forms) {
   const row = form => {
     const state = formStatus(form);
     const live = state === 'live';
-    return html`<li class="form-row" data-form-row="${form.id}" data-status="${state}"><div class="form-row-main">
-        <a class="list-title form-row-title" href="/forms/${form.id}">${form.draft.title}</a>
-        <div class="meta">${STATUS_BADGE[state](form)}<span>${form.response_count} ${form.response_count === 1 ? 'response' : 'responses'}</span><span>Updated ${fmtDateTime(form.updated_at)}</span>${live && form.has_unpublished_changes ? html`<span class="form-row-pending">Unpublished changes</span>` : ''}${form.access === 'signin' ? html`<span>Sign-in required</span>` : ''}</div></div>
-      <div class="form-row-actions"><a class="btn btn-small" href="/forms/${form.id}">Edit<span class="visually-hidden"> ${form.draft.title}</span></a><a class="btn btn-small" href="/forms/${form.id}/responses">Responses<span class="visually-hidden"> to ${form.draft.title}</span></a>
-        <details class="overflow-menu"><summary class="btn btn-icon btn-small" aria-label="More actions for ${form.draft.title}" title="More actions">${formIcon('more')}</summary>
-          <div class="overflow-panel">${live ? html`<button class="btn" type="button" data-row-copy="${form.id}">Copy respondent link</button><a class="btn" href="${publicUrl(form)}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a>` : ''}
-            <button class="btn" type="button" data-row-duplicate="${form.id}">Duplicate as draft</button><button class="btn" type="button" data-row-export="${form.id}">Export form definition</button></div></details></div></li>`;
+    const title = form.draft.title;
+    return html`<tr class="form-row" data-form-row="${form.id}" data-status="${state}">
+      <th scope="row" class="form-cell-title"><a class="form-row-title" href="/forms/${form.id}">${title}</a>${form.access === 'signin' ? html`<span class="form-row-note">Sign-in required</span>` : ''}</th>
+      <td class="form-cell-status" data-label="Status"><span class="form-status" data-state="${state}">${STATUS_TEXT[state]}</span>${live && form.has_unpublished_changes ? html`<span class="form-row-pending">Unpublished edits</span>` : ''}</td>
+      <td class="form-cell-responses" data-label="Responses"><a href="/forms/${form.id}/responses" class="form-row-responses">${form.response_count.toLocaleString()}<span class="responses-word"> ${form.response_count === 1 ? 'response' : 'responses'}</span><span class="visually-hidden"> to ${title}</span></a></td>
+      <td class="form-cell-updated" data-label="Updated"><time datetime="${new Date(form.updated_at).toISOString()}" title="${fmtDateTime(form.updated_at)}">${shortDate(form.updated_at)}</time></td>
+      <td class="form-cell-actions"><details class="overflow-menu"><summary class="btn btn-icon btn-small" aria-label="More actions for ${title}" title="More actions">${formIcon('more')}</summary>
+        <div class="overflow-panel"><a class="btn" href="/forms/${form.id}">Edit<span class="visually-hidden"> ${title}</span></a><a class="btn" href="/forms/${form.id}/responses">View responses</a>${live ? html`<button class="btn" type="button" data-row-copy="${form.id}">Copy respondent link</button><a class="btn" href="${publicUrl(form)}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a>` : ''}
+          <button class="btn" type="button" data-row-duplicate="${form.id}">Duplicate as draft</button><button class="btn" type="button" data-row-export="${form.id}">Export form definition</button></div></details></td></tr>`;
   };
   const draw = () => {
     const shown = filterForms(forms, { query, status });
     mount($('#forms-rows'), html`${shown.map(row)}`);
-    $('#forms-rows').hidden = !shown.length;
+    $('#forms-table').hidden = !shown.length;
     const filtered = query || status !== 'all';
     mount($('#forms-empty'), shown.length ? '' : html`<div class="empty"><h2>No forms match</h2><p>${query ? html`Nothing ${status === 'all' ? '' : `${STATUS_FILTERS.find(([key]) => key === status)[1].toLowerCase()} `}matches “${query}”.` : `There are no ${STATUS_FILTERS.find(([key]) => key === status)[1].toLowerCase()} forms.`}</p><div class="actions"><button class="btn" type="button" data-clear-filters>Show all forms</button></div></div>`);
     $('#form-count').textContent = filtered ? `Showing ${shown.length} of ${forms.length} forms.` : `${forms.length} forms.`;
@@ -635,7 +640,7 @@ const randomKey = (prefix, taken) => {
 const CONTENT_GROUPS = [['Contact', ['contact_info', 'email', 'phone']], ['Text', ['short_text', 'long_text']], ['Choice', ['single_choice', 'multiple_choice']], ['Other', ['date']], ['Layout', ['question_page', 'page_break']]];
 const CONTENT_LABELS = { ...FIELD_TYPES, contact_info: 'Contact Info', question_page: 'Page of questions' };
 
-const SAVE_TEXT = { saved: 'All changes saved', dirty: 'Unsaved changes', saving: 'Saving…', failed: 'Not saved', conflict: 'Not saved: changed elsewhere' };
+const SAVE_TEXT = { saved: 'All changes saved', dirty: 'Unsaved edits', saving: 'Saving…', failed: 'Not saved', conflict: 'Not saved: changed elsewhere' };
 // What the answer area looks like on the question canvas. Choice questions show their options instead.
 const ANSWER_SAMPLES = { short_text: 'Short answer', long_text: 'Longer answer, several lines', email: 'name@example.com', phone: '+91 98765 43210', date: 'dd / mm / yyyy' };
 
@@ -688,7 +693,7 @@ export async function builder(ctx) {
       <nav class="builder-index" id="builder-index" aria-label="Form builder sections"><ul>
         <li><a href="#questions" data-section="questions" aria-current="location">Content</a></li><li><a href="#workflow-map" data-section="workflow">Workflow</a></li><li><a href="#settings" data-section="settings">Settings</a></li>
         <li><a href="#share-panel" data-section="share">Share</a></li><li><a href="/forms/${form.id}/responses" id="responses-link">Responses</a></li></ul></nav>
-      <div class="builder-publish"><div id="builder-status"></div><button class="btn btn-ghost" type="button" id="topbar-preview" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span>Preview</span></button><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
+      <div class="builder-publish"><div id="builder-status"></div><button class="btn btn-ghost" type="button" id="topbar-preview" data-builder-view="preview" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span>Preview</span></button><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
     </header>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
@@ -696,9 +701,9 @@ export async function builder(ctx) {
       <div class="builder-toolbar" aria-label="Editor tools" role="group">
         <div class="add-content"><button class="btn btn-primary" type="button" id="add-field" aria-expanded="false" aria-controls="add-menu" aria-label="Add content">${formIcon('plus')}<span class="tool-text">Add content</span></button>
           <div class="add-menu" id="add-menu" role="group" aria-label="Add content" hidden>${CONTENT_GROUPS.map(([heading, types]) => html`<p class="add-menu-heading">${heading}</p>${types.map(type => html`<button type="button" class="add-menu-item" data-add-type="${type}"><span class="q-badge" data-kind="${TYPE_KIND[type] || 'contact'}">${formIcon(type === 'question_page' ? 'page' : type)}</span>${CONTENT_LABELS[type]}</button>`)}`)}</div></div>
-        <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost" type="button" id="open-design" aria-expanded="false" aria-controls="design-panel">${formIcon('design')}<span class="tool-text">Design</span></button>
+        <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost" type="button" id="open-design" aria-expanded="false" aria-controls="design-panel" title="Typography and themes for this form">${formIcon('design')}<span class="tool-text">Design</span></button>
         <span class="toolbar-divider" aria-hidden="true"></span><div class="preview-devices" role="group" aria-label="Device size"><button type="button" class="btn btn-icon" data-device="desktop" aria-label="Desktop size" title="Desktop size">${formIcon('desktop')}</button><button type="button" class="btn btn-icon" data-device="mobile" aria-label="Mobile size" title="Mobile size">${formIcon('mobile')}</button></div>
-        <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit" title="Edit questions">${formIcon('edit')}<span class="tab-text">Edit</span></button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span class="tab-text">Preview</span></button></div>
+
         <details class="overflow-menu toolbar-end"><summary class="btn btn-icon" aria-label="More actions" title="More actions">${formIcon('more')}</summary>
           <div class="overflow-panel"><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
       </div>
@@ -749,11 +754,23 @@ export async function builder(ctx) {
     renderStatus();
     readiness?.unsaved(value !== 'saved');
   };
-  const liveBadge = () => form.published_version ? badge('published', `Live · version ${form.published_version}`) : form.locked_ids?.length ? badge('paused', 'Closed · not collecting') : badge('draft', 'Not published');
+  // One quiet line beside the actions, only when the author has something to act on. A live form whose
+  // saved draft matches it shows nothing; the live version number is in Share. Failures stay prominent.
+  const statusLine = () => {
+    if (saveState === 'failed' || saveState === 'conflict') return { tone: 'bad', text: SAVE_TEXT[saveState] };
+    if (saveState === 'saving') return { tone: 'quiet', text: SAVE_TEXT.saving };
+    if (saveState === 'dirty') return { tone: 'pending', text: SAVE_TEXT.dirty };
+    if (form.published_version) return form.has_unpublished_changes ? { tone: 'pending', text: 'Draft saved · not published' } : null;
+    return { tone: 'quiet', text: form.locked_ids?.length ? 'Closed · not collecting' : 'Not published' };
+  };
   const renderStatus = () => {
-    mount($('#builder-status'), html`${liveBadge()}
-    <span class="badge badge-${saveState === 'saved' ? 'ok' : saveState === 'saving' || saveState === 'dirty' ? 'warn' : 'bad'}" role="status">${SAVE_TEXT[saveState]}</span>
-    ${saveState === 'saved' && form.published_version && form.has_unpublished_changes ? badge('pending', 'Saved draft not yet published') : ''}`);
+    const line = statusLine();
+    const status = $('#builder-status');
+    status.dataset.save = saveState;
+    status.dataset.publish = form.published_version ? (form.has_unpublished_changes ? 'ahead' : 'live') : form.locked_ids?.length ? 'closed' : 'draft';
+    status.dataset.liveVersion = form.published_version || '';
+    status.setAttribute('role', line?.tone === 'bad' ? 'alert' : 'status');
+    mount(status, line ? html`<span class="builder-status-text" data-tone="${line.tone}">${line.text}</span>` : '');
     // Publish is the main action only while there is something to publish.
     const publish = $('#publish');
     publish.textContent = form.published_version ? 'Publish changes' : form.locked_ids?.length ? 'Publish again' : 'Publish form';
@@ -773,6 +790,7 @@ export async function builder(ctx) {
     const attribute = value => value.replace(/[&"<>]/g, char => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[char]);
     const embedCode = mode => `<iframe src="${url}?embed=1${mode ? '&mode=' + mode : ''}" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0;max-width:100%"></iframe>`;
     mount($('#share-panel'), html`${heading}
+      <p class="share-live" data-share-live><span class="badge badge-published">Live · version ${form.published_version}</span>${form.has_unpublished_changes ? html` <span class="muted">Your saved draft has edits that are not published yet.</span>` : ''}</p>
       <p class="hint">${form.access === 'signin' && !boot.respondentSignin ? 'Nobody can respond right now: this form requires sign-in, and sign-in for respondents is switched off on this deployment. Change Settings → Who can respond to reopen it.' : form.access === 'signin' ? `Respondents must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they see any question. Change this under Settings → Who can respond.` : 'Anyone with this link can open the live form and respond without signing in.'}</p>
       <label for="share-link">Respondent link</label>
       <div class="share-row"><input id="share-link" readonly value="${url}"><button class="btn btn-primary btn-small" type="button" data-copy-target="share-link">Copy link</button><a class="btn btn-small" id="open-live" href="${url}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a></div>
@@ -1952,20 +1970,16 @@ export async function builder(ctx) {
   });
   $('#open-design').onclick = () => design.toggle();
   document.addEventListener('pointerdown', event => { const menu = $('.overflow-menu'); if (menu?.open && !menu.contains(event.target)) menu.open = false; });
-  const tabs = $$('.mobile-switch [data-view]');
-  const selectView = tab => {
-    view = tab.dataset.view;
+  // The header's one Preview control switches between editing and the respondent's view.
+  const selectView = next => {
+    view = next;
     $('.builder').dataset.view = view;
-    tabs.forEach(item => { item.setAttribute('aria-selected', String(item === tab)); item.tabIndex = item === tab ? 0 : -1; });
+    const toggle = $('#topbar-preview');
+    const previewing = view === 'preview';
+    toggle.dataset.builderView = previewing ? 'edit' : 'preview';
+    toggle.title = previewing ? 'Back to editing the questions' : 'See the form as respondents do. Nothing is saved or sent.';
+    mount(toggle, html`${formIcon(previewing ? 'edit' : 'play')}<span>${previewing ? 'Back to editing' : 'Preview'}</span>`);
   };
-  tabs.forEach(tab => {
-    tab.onclick = () => selectView(tab);
-    tab.onkeydown = event => {
-      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-      selectView(next); next.focus();
-    };
-  });
 
   const reportError = (error, prefix = '') => {
     const problems = error.details?.problems || [];
@@ -2072,11 +2086,11 @@ export async function builder(ctx) {
     if (section.startsWith('preview-')) {
       $('#preview-mode').value = section.slice(8);
       renderPreview();
-      selectView(tabs.find(tab => tab.dataset.view === 'preview'));
+      selectView('preview');
       $('#builder-preview').scrollIntoView({ block: 'start' });
       return $('#preview-heading').focus({ preventScroll: true });
     }
-    selectView(tabs.find(tab => tab.dataset.view === 'edit'));
+    selectView('edit');
     $('#fields').scrollIntoView({ block: 'start' });
     ($('#fields [data-prop="label"]') || $('#add-field')).focus({ preventScroll: true });
   }
@@ -2090,7 +2104,7 @@ export async function builder(ctx) {
     event.preventDefault();
     const [surface, heading] = sections[link.dataset.section];
     showSurface(surface);
-    if (surface === 'content') selectView(tabs.find(tab => tab.dataset.view === 'edit'));
+    if (surface === 'content') selectView('edit');
     // On narrow screens the outline is folded into its bar, which names the selected question.
     (surface === 'content' && narrowOutline() && !outlineOpen() ? $('#outline-toggle') : $(heading))?.focus();
   });
@@ -2201,7 +2215,12 @@ export async function builder(ctx) {
     };
   }
   // Preview is its own step in the header: it shows the draft as respondents would see it and saves nothing.
-  $('#topbar-preview').onclick = () => goTo('preview-' + (draft.presentation || 'classic'));
+  $('#topbar-preview').onclick = () => {
+    // Keeps the layout last chosen under Preview presentation; the form's own layout otherwise.
+    if (view !== 'preview') return goTo('preview-' + ($('#preview-mode').value || draft.presentation || 'classic'));
+    selectView('edit');
+    $('#topbar-preview').focus();
+  };
   // Exports what is saved, so the file always matches a revision the server accepted.
   $('#export-form').onclick = async () => {
     $('.overflow-menu').open = false;

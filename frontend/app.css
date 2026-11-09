@@ -1058,10 +1058,10 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 @media (max-width: 760px) { .form-details { grid-template-columns: minmax(0, 1fr); } }
 /* Fingers need the full target size on phones. */
 @media (max-width: 640px) {
-  .builder-publish { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
-  #builder-status { display: flex; flex-wrap: wrap; gap: 2px 8px; justify-content: flex-start; }
-  #builder-status .badge { padding: 0; border: 0; background: none; font-size: 12px; white-space: normal; }
-  .builder-publish #save, .builder-publish #publish { min-height: 40px; padding-inline: 12px; }
+  .builder-publish { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+  #builder-status { flex: 1 0 100%; justify-content: flex-start; }
+  .builder-status-text { white-space: normal; }
+  .builder-publish #topbar-preview, .builder-publish #save, .builder-publish #publish { min-height: 40px; padding-inline: 12px; }
   .builder-toolbar .mobile-switch { margin-inline-start: auto; }
   .builder-toolbar .mobile-switch button { width: auto; padding: 0 10px; }
 }
@@ -1323,7 +1323,11 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 .canvas-question-row .char-count:not(.is-near) { display: none; }
 .canvas-question-row .canvas-description:focus + .char-count { display: block; }
 .char-count.is-near { color: var(--warn); }
-.design-typography { display: grid; gap: 4px; padding: 8px 0; border-block: 1px solid var(--line); }
+.design-typography { display: grid; gap: 4px; padding: 4px 0 12px; border-bottom: 1px solid var(--line); }
+.design-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 2px; }
+.design-section-head h3, .design-themes > h3 { margin: 0; font-size: 15px; font-weight: 650; }
+.design-themes { display: grid; gap: 8px; padding-top: 12px; }
+.design-themes .hint { margin: 0; }
 .design-typography label, .theme-typography label { margin: 6px 0 2px; }
 .design-typography select { width: 100%; min-height: 32px; padding: 4px 8px; font-size: 13px; background: var(--surface); }
 .theme-typography { display: grid; gap: 2px; }
@@ -1367,18 +1371,51 @@ dialog.prefill-dialog h2 { margin: 0; font-size: 20px; }
 .forms-search input { width: 100%; }
 .forms-filter { margin: 0; flex-wrap: wrap; }
 .forms-filter .count { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
-.form-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
-.form-row-main { min-width: 0; flex: 1 1 280px; display: grid; gap: 6px; }
-.form-row-title { color: var(--ink); text-decoration: none; font-size: 17px; overflow-wrap: anywhere; }
+.forms-head { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.forms-head h1 { margin: 0; font-size: 28px; line-height: 1.2; }
+.forms-head-workspace { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+/* The list: aligned columns on wide screens; each form becomes a compact card on phones. */
+.forms-table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.forms-table th, .forms-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.forms-table thead th { font-size: 13px; font-weight: 600; color: var(--muted); }
+.forms-table tbody tr:last-child > * { border-bottom: 0; }
+.forms-table tbody tr:hover { background: var(--surface-2); }
+.forms-table .form-cell-title { font-weight: 400; width: 50%; }
+.form-row-title { color: var(--ink); text-decoration: none; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .form-row-title:hover { text-decoration: underline; }
-.form-row .meta { align-items: center; }
-.form-row-pending { color: var(--warn); font-weight: 600; }
-.form-row-actions { display: flex; align-items: center; gap: 6px; }
-.form-row-actions .overflow-panel { width: 230px; }
+.form-row-note { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+.form-status { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); white-space: nowrap; }
+.form-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.form-status[data-state="live"] { color: var(--ok); }
+.form-status[data-state="live"]::before { background: var(--ok); }
+.form-row-pending { display: block; margin-top: 2px; color: var(--warn); font-size: 13px; font-weight: 600; }
+.form-cell-responses, .form-cell-updated { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 14px; }
+.form-row-responses { color: var(--ink); font-weight: 600; }
+@media (min-width: 761px) { .forms-table .responses-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } }
+.forms-table .responses-word { font-weight: 400; }
+.form-cell-updated { color: var(--muted); }
+.form-cell-actions { width: 1%; text-align: right; }
+.form-cell-actions .overflow-panel { width: 230px; right: 0; }
+@media (max-width: 760px) {
+  .forms-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .forms-table, .forms-table tbody { display: block; }
+  .forms-table tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .forms-table tbody tr:last-child { border-bottom: 0; }
+  .forms-table th, .forms-table td { display: block; padding: 0; border: 0; width: auto; }
+  .forms-table .form-cell-title { flex: 1 1 calc(100% - 60px); order: 1; }
+  .forms-table .form-cell-actions { order: 2; align-self: start; }
+  .forms-table .form-cell-status, .forms-table .form-cell-responses, .forms-table .form-cell-updated { order: 3; font-size: 13px; white-space: nowrap; }
+  .forms-table .form-cell-updated::before { content: "Updated "; }
+  .forms-table .form-row-pending { display: inline; margin-inline-start: 6px; }
+}
 #topbar-preview { gap: 6px; }
-@media (max-width: 480px) { .forms-filter { display: flex; width: 100%; } .forms-filter label { flex: 1; justify-content: center; padding: 0 6px; font-size: 13px; } .form-row-actions { width: 100%; } }
-/* On narrow screens the toolbar's Edit/Preview tabs already do this, so the header stays short. */
-@media (max-width: 760px) { #topbar-preview { display: none; } }
+/* The builder's one status line: quiet, and only when there is something to act on; failures stand out. */
+#builder-status:empty { display: none; }
+.builder-status-text { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.builder-status-text[data-tone="pending"] { color: var(--warn); }
+.builder-status-text[data-tone="pending"]::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.builder-status-text[data-tone="bad"] { padding: 4px 10px; border-radius: 99px; background: var(--bad-tint); color: var(--bad); font-weight: 650; }
+@media (max-width: 480px) { .forms-filter { display: flex; width: 100%; } .forms-filter label { flex: 1; justify-content: center; padding: 0 6px; font-size: 13px; } }
 /* Every builder section fits a phone without hiding Responses off the edge. */
 @media (max-width: 480px) { .builder-index ul { gap: 0; justify-content: space-between; } .builder-index a { padding: 0 6px; font-size: 13px; } .builder-index .tab-count { display: none; } }
 @media (max-width: 360px) { .builder-index a { padding: 0 4px; font-size: 12px; } }
