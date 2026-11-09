@@ -687,15 +687,20 @@ export async function builder(ctx) {
           <div class="add-menu" id="add-menu" role="group" aria-label="Add content" hidden>${CONTENT_GROUPS.map(([heading, types]) => html`<p class="add-menu-heading">${heading}</p>${types.map(type => html`<button type="button" class="add-menu-item" data-add-type="${type}"><span class="q-badge" data-kind="${TYPE_KIND[type] || 'contact'}">${formIcon(type === 'question_page' ? 'page' : type)}</span>${CONTENT_LABELS[type]}</button>`)}`)}</div></div>
         <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost" type="button" id="open-design" aria-expanded="false" aria-controls="design-panel">${formIcon('design')}<span class="tool-text">Design</span></button>
         <span class="toolbar-divider" aria-hidden="true"></span><div class="preview-devices" role="group" aria-label="Device size"><button type="button" class="btn btn-icon" data-device="desktop" aria-label="Desktop size" title="Desktop size">${formIcon('desktop')}</button><button type="button" class="btn btn-icon" data-device="mobile" aria-label="Mobile size" title="Mobile size">${formIcon('mobile')}</button></div>
-        <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit" aria-label="Edit" title="Edit">${formIcon('edit')}</button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1" aria-label="Preview" title="Preview">${formIcon('play')}</button></div>
+        <div class="tabs mobile-switch" role="tablist" aria-label="Builder view"><button role="tab" data-view="edit" aria-selected="true" aria-controls="builder-edit" title="Edit questions">${formIcon('edit')}<span class="tab-text">Edit</span></button><button role="tab" data-view="preview" aria-selected="false" aria-controls="builder-preview" tabindex="-1" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span class="tab-text">Preview</span></button></div>
         <details class="overflow-menu toolbar-end"><summary class="btn btn-icon" aria-label="More actions" title="More actions">${formIcon('more')}</summary>
           <div class="overflow-panel"><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
       </div>
       <div class="builder" data-view="edit" data-device="desktop">
         <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="questions" class="question-workspace">
           <aside class="question-sidebar" aria-labelledby="questions-heading">
+            <div class="outline-bar" id="outline-bar"><button class="btn btn-icon" type="button" id="outline-prev" aria-label="Previous item in the outline" title="Previous">${formIcon('up')}</button>
+              <button class="outline-toggle" type="button" id="outline-toggle" aria-expanded="false" aria-controls="outline-panel"><span class="outline-current" id="outline-current"></span><span class="outline-toggle-label"><span class="outline-word">Outline</span>${formIcon('chevron')}</span></button>
+              <button class="btn btn-icon" type="button" id="outline-next" aria-label="Next item in the outline" title="Next">${formIcon('down')}</button></div>
+            <div class="outline-panel" id="outline-panel">
             <div class="rail-card rail-card-questions"><div class="rail-card-head"><h2 id="questions-heading" tabindex="-1">Questions</h2></div><div id="question-list"></div></div>
             <div class="rail-card rail-card-endings"><div class="rail-card-head"><h2 class="endings-heading">Endings</h2><button class="btn btn-small rail-add" type="button" id="add-ending" aria-label="Add ending" title="Add ending">${formIcon('plus')}</button></div><div id="ending-list"></div></div>
+            </div>
           </aside><div id="fields" class="question-panes"></div></div></section>
         <section class="builder-preview card" id="builder-preview" aria-label="Live preview"><div class="row-between"><h2 id="preview-heading" tabindex="-1">Preview</h2><select id="preview-mode" aria-label="Preview presentation"><option value="classic">Classic</option><option value="conversational">Conversational</option></select></div><div id="preview-params"></div><div id="preview"></div></section>
       </div>
@@ -932,6 +937,36 @@ export async function builder(ctx) {
         ${head ? html`<button type="button" class="question-toggle" data-page-toggle="${field.id}" aria-expanded="${String(open)}" aria-label="${open ? 'Collapse' : 'Expand'} page ${title}" title="${open ? 'Collapse' : 'Expand'} page">${formIcon('chevron')}</button>` : ''}</div>`;
     })}`);
     mount($('#ending-list'), html`${(draft.endings || []).map((ending, index) => html`<div class="question-row ending-row"><button type="button" class="question-select" data-ending-index="${index}" aria-pressed="${String(index === selectedEnding)}"><span class="q-badge" data-kind="layout">${formIcon('ending')}</span><span class="question-row-label">${ending.title || 'Untitled ending'}</span>${index === 0 ? html`<span class="question-row-logic">Default</span>` : ''}</button></div>`)}`);
+    renderOutlineBar(marks);
+  };
+  // Phones and narrow tablets: the outline folds into a bar naming the selection, with previous/next.
+  // "Outline" opens the full list (names, pages and their questions, the selection) above the canvas.
+  const outlineItems = () => [...$$('#question-list .question-select, #ending-list .question-select')];
+  const renderOutlineBar = (marks = outlineMarks(draft.fields)) => {
+    const questions = draft.fields.filter((field, index) => marks[index]).length;
+    let badge, title, where;
+    if (selectedEnding !== null) {
+      const ending = draft.endings?.[selectedEnding];
+      badge = html`<span class="q-badge" data-kind="layout">${formIcon('ending')}</span>`;
+      title = ending?.title || 'Untitled ending';
+      where = `Ending ${selectedEnding + 1} of ${draft.endings.length}`;
+    } else {
+      const field = draft.fields[selectedQuestion];
+      if (!field) { mount($('#outline-current'), html`<span class="outline-text"><span class="outline-title">No questions yet</span></span>`); return; }
+      const head = isHead(field);
+      const pageBreak = field.type === 'page_break';
+      badge = html`<span class="q-badge" data-kind="${TYPE_KIND[field.type]}">${formIcon(head ? 'page' : field.type)}${marks[selectedQuestion] ? html`<span class="question-row-number">${marks[selectedQuestion]}</span>` : ''}</span>`;
+      title = head ? field.label || 'Untitled page' : pageBreak ? FIELD_TYPES.page_break : field.label || FIELD_TYPES[field.type];
+      const page = draft.fields.slice(0, selectedQuestion + 1).filter(item => item.type === 'page_break' && !item.grouped).length + 1;
+      const owner = field.group != null ? draft.fields.find(item => item.id === field.group) : null;
+      const number = draft.fields.slice(0, selectedQuestion + 1).filter((item, index) => marks[index]).length;
+      where = [owner ? `In “${owner.label || 'Untitled page'}”` : head ? 'Multi-question page' : `Page ${page}`, marks[selectedQuestion] ? `${number} of ${questions}` : null].filter(Boolean).join(' · ');
+    }
+    mount($('#outline-current'), html`${badge}<span class="outline-text"><span class="outline-title">${title}</span><span class="outline-where">${where}</span></span>`);
+    const items = outlineItems();
+    const at = items.findIndex(item => item.getAttribute('aria-pressed') === 'true');
+    $('#outline-prev').disabled = at <= 0;
+    $('#outline-next').disabled = at < 0 || at >= items.length - 1;
   };
   const paramOptions = selected => declaredParams(draft).length ? html`<optgroup label="URL parameters">${declaredParams(draft).map(({ key }) => html`<option value="${paramSourceValue(key)}" ${key === selected ? raw('selected') : ''}>${key}</option>`)}</optgroup>` : '';
   // Jump rules for one question, in the settings pane. The first matching rule decides.
@@ -1220,8 +1255,43 @@ export async function builder(ctx) {
     selectedQuestion = Number(button.dataset.questionIndex);
     selectedEnding = null;
     renderFields();
+    if (narrowOutline() && outlineOpen()) { showOutline(false); announce(`Selected ${itemName(selectedQuestion)}.`); return $('#outline-toggle').focus(); }
     $(`[data-question-index="${selectedQuestion}"]`)?.focus();
   };
+  const narrowOutline = () => matchMedia('(max-width: 900px)').matches;
+  const outlineOpen = () => $('.question-sidebar').classList.contains('outline-open');
+  const showOutline = open => {
+    $('.question-sidebar').classList.toggle('outline-open', open);
+    $('#outline-toggle').setAttribute('aria-expanded', String(open));
+    if (open) ($('#outline-panel [aria-pressed="true"]') || $('#outline-panel .question-select'))?.scrollIntoView({ block: 'nearest' });
+  };
+  $('#outline-toggle').onclick = () => {
+    showOutline(!outlineOpen());
+    if (outlineOpen()) ($('#outline-panel [aria-pressed="true"]') || $('#outline-panel .question-select'))?.focus();
+  };
+  // Previous/next walk the outline in order (pages, their questions, then endings); focus stays on the arrow.
+  const stepOutline = step => {
+    const items = outlineItems();
+    const target = items[items.findIndex(item => item.getAttribute('aria-pressed') === 'true') + step];
+    if (!target) return;
+    if (target.dataset.endingIndex != null) selectEnding(Number(target.dataset.endingIndex));
+    else { selectedQuestion = Number(target.dataset.questionIndex); selectedEnding = null; renderFields(); }
+    announce(`Selected ${selectedEnding !== null ? `ending ${selectedEnding + 1}` : itemName(selectedQuestion)}.`);
+    const arrow = $(step < 0 ? '#outline-prev' : '#outline-next');
+    (arrow.disabled ? $('#outline-toggle') : arrow).focus();
+  };
+  $('#outline-prev').onclick = () => stepOutline(-1);
+  $('#outline-next').onclick = () => stepOutline(1);
+  // Arrow keys, Home and End move through the outline at any width; Escape folds it on narrow screens.
+  $('#outline-panel').addEventListener('keydown', event => {
+    if (event.key === 'Escape' && narrowOutline() && outlineOpen()) { event.preventDefault(); showOutline(false); return $('#outline-toggle').focus(); }
+    if (!event.target.matches('.question-select') || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const items = outlineItems();
+    const at = items.indexOf(event.target);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : Math.min(items.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)));
+    event.preventDefault();
+    items[next]?.focus();
+  });
 
   // Both the ↑/↓ buttons and drag: the moved question stays selected.
   const reportMove = moved => {
@@ -1713,7 +1783,9 @@ export async function builder(ctx) {
   };
   $('#ending-list').onclick = event => {
     const button = event.target.closest('[data-ending-index]');
-    if (button) selectEnding(Number(button.dataset.endingIndex));
+    if (!button) return;
+    selectEnding(Number(button.dataset.endingIndex));
+    if (narrowOutline() && outlineOpen()) { showOutline(false); $('#outline-toggle').focus(); }
   };
   $('#add-ending').onclick = () => {
     draft.endings = [...(draft.endings || []), { id: randomKey('end', draft.endings || []), title: 'Thanks for responding' }];
@@ -1979,7 +2051,8 @@ export async function builder(ctx) {
     const [surface, heading] = sections[link.dataset.section];
     showSurface(surface);
     if (surface === 'content') selectView(tabs.find(tab => tab.dataset.view === 'edit'));
-    $(heading)?.focus();
+    // On narrow screens the outline is folded into its bar, which names the selected question.
+    (surface === 'content' && narrowOutline() && !outlineOpen() ? $('#outline-toggle') : $(heading))?.focus();
   });
   renderAll();
   renderRouting();

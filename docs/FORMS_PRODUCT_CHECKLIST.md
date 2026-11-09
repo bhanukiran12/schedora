@@ -19,7 +19,7 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | `/forms` overview and list | Find a form, see whether it's live, open it | — | Browser: populated, filtered, no-match and offline-error states at 320/375/768/1280, plus unit tests | **Done (M4 part 1)** |
 | Create form → Blank / Templates (`/forms` and `/setup/forms`) | Start quickly from the right point | — | Browser: identical cards on both routes, cancel paths, workspace pinned across tabs, setup → builder → setup | **Done (M4 part 2)** |
 | Create form → **Import JSON** | Bring an existing definition in without a terminal or API key | — | Server tests plus the browser journey below | **Done (M1)** |
-| Builder · Content (outline, canvas, inspector) | Edit questions in place | Toolbar icons still have equal weight. On phones the outline is a chip strip with no labels. | Browser at all widths, keyboard-only pass, screenshots | Partly: *Preview · Save draft · Publish* header and phone tabs done (M4 part 1). Outline and toolbar remain. |
+| Builder · Content (outline, canvas, inspector) | Edit questions in place | — | Browser at 320/375/768/1280; keyboard pass with real key events (outline, add, reorder); fixture with 39 questions | **Done (M4 parts 1 and 4)** |
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
 | Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
 | Builder · Settings (presentation, access, routing) | Form-wide behaviour | — | Browser: sign-in journey | **Who can respond done (M3)** |
@@ -87,7 +87,7 @@ This uses the workspace's own OIDC provider, as you decided. Respondents never b
 **Remaining, in order:**
 1. ~~The `/setup/forms` creation flow joined to the same picker.~~ Done (part 2).
 2. ~~Responses: search, filters and a side detail panel.~~ Done (part 3).
-3. Builder outline on phones and toolbar hierarchy.
+3. ~~Builder outline on phones and toolbar hierarchy.~~ Done (part 4).
 4. An embed check (`?embed=1` inside a host page).
 5. Endings polish.
 

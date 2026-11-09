@@ -844,3 +844,28 @@ A scratchpad journey with the Technical Profile Details file ran these steps:
 8. Checked no matches, a search while offline (filters kept, retry works), an unpublished form, another workspace and a signed-out visitor.
 
 There was no overflow at 320, 375, 768 or 1280 px.
+
+## Builder on phones: outline, keyboard and actions (9 November 2026, local only)
+
+- **Outline (900 px and narrower).** The strip of unlabelled badges is gone.
+  - **The bar:** it names the selected item: its badge and number, its title on up to two lines, and where it sits (*Page 1 · 3 of 39*, *In "Contact details" · 8 of 42*, *Multi-question page* or *Ending 2 of 2*). ↑ and ↓ step through the outline in order: pages, their questions, then endings.
+  - **The full list:** *Outline* opens it above the canvas, with names, multi-question pages as groups (their questions indented, collapsible) and the selection marked. Choosing an item folds the list away and returns focus to the bar.
+  - **Wider screens:** they keep the outline column as before.
+- **Keyboard.** In the outline, at any width, ↓/↑ move between items, Home and End jump to the ends, and Enter selects. On narrow screens Escape folds the list back into the bar.
+  - **Arrows:** the bar's ↑/↓ keep focus on the arrow, or move it to the bar at either end.
+  - **Adding:** *Add content* puts the cursor in the new question's title, and the bar follows.
+  - **Reordering:** the canvas move buttons keep focus on the button, and the move is announced.
+  - **Content link:** on a phone it focuses the outline bar.
+- **Save, Preview and Publish on phones.** The status sits as plain text beside *Save draft* and *Publish* on one row. The toolbar's view switch is a labelled *Edit | Preview* control rather than two unlabelled icons.
+
+**Evidence (local, headless Chrome, Technical Profile Details fixture):** the browser suite's builder navigation check now expects focus on the outline bar on phones. A scratchpad journey at 375 px used real key events and covered:
+- the bar text and the canvas staying near the top
+- ↑/↓ with focus kept on the arrow
+- opening the outline on the selection, then ↓, End, Home, Enter (folding back to the bar) and Escape
+- adding a question by keyboard (cursor in the title, bar showing *7 of 40*)
+- moving it up (focus kept, move announced, outline order updated)
+- a new multi-question page shown as a group with its question indented
+- labelled *Edit | Preview*, save, preview and publish on one row
+- desktop unchanged, with arrow keys moving through the outline column
+
+There was no overflow at 320, 375, 768 or 1280 px.

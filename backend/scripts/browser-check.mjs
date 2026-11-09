@@ -541,7 +541,8 @@ try {
     await click('.mobile-switch [data-view="preview"]');
     if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display === 'none' && getComputedStyle(document.querySelector('.builder-preview')).display !== 'none'"))) throw new Error('phone switch does not show the preview');
     await click('#builder-index [data-section="questions"]');
-    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display !== 'none'")) || !(await focused('#questions-heading'))) throw new Error('phone Content link does not return to the editor');
+    // On phones the outline is folded into its bar, which names the selected question and takes focus.
+    if (!(await evaluate("getComputedStyle(document.querySelector('.builder-edit')).display !== 'none'")) || !(await focused('#outline-toggle'))) throw new Error('phone Content link does not return to the editor');
     if (await evaluate("getComputedStyle(document.querySelector('.builder-topbar')).position === 'sticky'")) throw new Error('top bar should not be sticky on phones');
     } finally {
       await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
