@@ -70,12 +70,14 @@ let currentPath = location.pathname;
 function renderHeader(product) {
   const individual = product !== 'suite';
   const authPage = /^\/(account|login|signup)$/.test(currentPath);
+  // Someone answering a form is not a Schedora prospect: no marketing links or account buttons beside their answers.
+  const respondentPage = currentPath.startsWith('/f/');
   const home = individual ? boot.landings[product] : boot.links.suite;
   const next = PRODUCT_INFO[product].dashboard;
   const auth = mode => `${mode ? '/signup' : '/login'}?product=${product}${mode ? '' : '&next=' + encodeURIComponent(next)}`;
   mount($('#site-header'), html`<div class="container header-inner"><a class="lockup" href="${home}">${lockup(product)}</a>
-    ${authPage ? '' : html`<nav class="site-nav" aria-label="${individual ? PRODUCT_INFO[product].name : 'Suite'} information">${individual ? html`<a href="${home}#features">Features</a><a href="${home}#how-it-works">How it works</a><a href="/demo/${product}">Try the demo</a>` : html`<a href="/#ecosystem">Products</a><a href="/#why-schedora">Why Schedora</a>`}<a href="/billing${individual ? '?product=' + product : ''}">Plans</a></nav>`}
-    <div class="header-tools">${authPage ? html`<a href="${home}">Back to ${PRODUCT_INFO[product].name}</a>` : session.user ? html`<a class="btn btn-small" href="${individual ? boot.links[product] : '/enquiries'}">Go to workspace</a>` : html`<a class="btn btn-small" href="${auth(false)}">Sign in</a><a class="btn btn-small btn-primary" href="${auth(true)}">Get started</a>`}</div></div>`);
+    ${authPage || respondentPage ? '' : html`<nav class="site-nav" aria-label="${individual ? PRODUCT_INFO[product].name : 'Suite'} information">${individual ? html`<a href="${home}#features">Features</a><a href="${home}#how-it-works">How it works</a><a href="/demo/${product}">Try the demo</a>` : html`<a href="/#ecosystem">Products</a><a href="/#why-schedora">Why Schedora</a>`}<a href="/billing${individual ? '?product=' + product : ''}">Plans</a></nav>`}
+    ${respondentPage ? '' : html`<div class="header-tools">${authPage ? html`<a href="${home}">Back to ${PRODUCT_INFO[product].name}</a>` : session.user ? html`<a class="btn btn-small" href="${individual ? boot.links[product] : '/enquiries'}">Go to workspace</a>` : html`<a class="btn btn-small" href="${auth(false)}">Sign in</a><a class="btn btn-small btn-primary" href="${auth(true)}">Get started</a>`}</div>`}</div>`);
 }
 
 function renderFooter() {

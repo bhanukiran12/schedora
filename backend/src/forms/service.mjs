@@ -134,6 +134,8 @@ function present(row) {
     id: row.id, slug: row.slug, draft: JSON.parse(row.draft), published_version: row.published_version, routing, access: row.access || 'public',
     published_routing: parse(row.published_routing),
     revision: row.draft_revision, updated_at: row.updated_at, created_at: row.created_at, response_count: row.response_count ?? undefined,
+    // Ever published, so a form that is not live now is closed rather than a draft that never went out.
+    latest_version: row.latest_version ?? null,
     has_unpublished_changes: row.published_definition
       // A published version carries its evaluation policy and the draft does not; nothing else differs.
       ? (row.published_definition !== row.draft && row.published_definition !== JSON.stringify(withEvaluationPolicy(JSON.parse(row.draft)))) || (row.published_routing || null) !== (row.routing || null)
@@ -144,6 +146,7 @@ function present(row) {
 }
 
 const FORM_SELECT = `SELECT f.*, (SELECT COUNT(*) FROM responses r WHERE r.form_id = f.id) AS response_count,
+  (SELECT MAX(version) FROM form_versions v WHERE v.form_id = f.id) AS latest_version,
   (SELECT definition FROM form_versions v WHERE v.form_id = f.id AND v.version = f.published_version) AS published_definition,
   (SELECT routing FROM form_versions v WHERE v.form_id = f.id AND v.version = f.published_version) AS published_routing FROM forms f`;
 

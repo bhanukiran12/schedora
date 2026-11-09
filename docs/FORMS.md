@@ -755,3 +755,23 @@ Turning off submit-time enforcement, or routing the respondent callback through 
 - a refused identity explained on the form
 
 There was no overflow at 320/375/768/1280 px. **Not verified:** a real identity provider, PostgreSQL in CI until it runs on this commit, and a screen reader.
+
+## Route pass, part 1: Forms list, builder header, respondent header (9 November 2026, local only)
+
+- **Forms list** (`/forms`, `frontend/js/forms-list.mjs`):
+  - **Search and filter.** Search matches every word in the title or description, ignoring case and accents. A status filter offers *All*, *Live*, *Drafts* and *Closed* with counts. *Closed* means published before but not collecting now; it comes from `latest_version`, which the list API now returns. Filters live in the address (`?q=&status=`), so a reload keeps them. No results gives *Show all forms*.
+  - **Rows.** Each row leads with the title (a link to the editor) and a status badge, then the response count, last change, *Unpublished changes* and *Sign-in required*.
+  - **Row actions.** *Edit* and *Responses*, plus a menu with *Copy respondent link* and *Open live form* (live forms only), *Duplicate as draft* and *Export form definition*. *Duplicate* is an export imported again, so it passes the same server checks. It is always a new unpublished draft called *Copy of …*, with no responses, routing or access setting.
+- **Builder header.** *Preview* is a labelled step before *Save draft* and *Publish*. It shows the draft as respondents would see it and saves nothing. On phones the toolbar's Edit/Preview tabs already do this, so the header button is hidden. The section tabs fit a 320 px screen without scrolling: the response count is dropped from the tab on phones and shown on the Responses page.
+- **Respondent pages** (`/f/:slug`) show only the Forms lockup in the header, with no marketing links and no *Sign in* or *Get started*. This keeps them from being confused with *Signed in as …* on protected forms.
+
+**Evidence (local SQLite, final code):** `npm test`: 391 tests, 384 pass, 0 fail, 7 skipped. `forms-list.test.mjs` covers status, search, filters, copy titles and `latest_version` from the API. A headless-Chrome journey covered:
+- live, closed and draft forms with counts
+- search, filter, the address after a reload, and no-results recovery
+- row copy (read from the clipboard), export download, and duplicate (identical questions, a new unpublished draft)
+- the Preview button's order and behaviour, and the phone header at 375 and 320 px
+- an offline load showing the list's error state
+- another workspace opening the form, which reveals nothing and offers *Back to Forms*
+- the respondent header, in a fresh browser
+
+There was no overflow at 320/375/768/1280 px.

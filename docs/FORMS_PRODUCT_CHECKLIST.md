@@ -16,10 +16,10 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 
 | Route / surface | User goal | Main UX gaps found | Verification | Status |
 |---|---|---|---|---|
-| `/forms` overview and list | Find a form, see whether it's live, open it | No search, filter or sort. Draft/live status is a small badge. Only two row actions (Edit, Responses), with no export, duplicate or copy link. The empty state pushes the picker open, but the list isn't the first thing a returning user sees. | Browser: empty, loading, error and populated states at 320/375/768/1280. Search and filter unit tests. | Planned (M4) |
+| `/forms` overview and list | Find a form, see whether it's live, open it | — | Browser: populated, filtered, no-match and offline-error states at 320/375/768/1280, plus unit tests | **Done (M4 part 1)** |
 | Create form → Blank / Templates | Start quickly from the right point | The picker is hidden behind *Create form*. Templates are grouped well. `/setup/forms` uses a separate flow. | Browser journey from both entry points creates the same unpublished draft. | Partly (M1 added *Start your own*; unifying `/setup/forms` is M4) |
 | Create form → **Import JSON** | Bring an existing definition in without a terminal or API key | — | Server tests plus the browser journey below | **Done (M1)** |
-| Builder · Content (outline, canvas, inspector) | Edit questions in place | Toolbar icons have equal weight. Save, Preview and Publish sit far apart, and Preview is a tab icon. On phones the section tabs clip (*Responses* is cut off) and the outline becomes a chip strip with no labels. | Browser at all widths, keyboard-only pass, screenshots | Planned (M4) |
+| Builder · Content (outline, canvas, inspector) | Edit questions in place | Toolbar icons still have equal weight. On phones the outline is a chip strip with no labels. | Browser at all widths, keyboard-only pass, screenshots | Partly: *Preview · Save draft · Publish* header and phone tabs done (M4 part 1). Outline and toolbar remain. |
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
 | Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
 | Builder · Settings (presentation, access, routing) | Form-wide behaviour | — | Browser: sign-in journey | **Who can respond done (M3)** |
@@ -27,7 +27,7 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |
 | Preview (builder pane, both layouts) | See what respondents see | Works. Device toggle present. | Browser: classic and conversational render after reopen | Verified in M1 |
 | `/forms/:id/responses` and detail | Scan, filter, inspect, export | Table without filters or search. The detail opens below the table, far from the clicked row on phones. | Browser at all widths. CSV contents checked. | Planned (M4); export verified in M1 |
-| `/f/:slug` Classic | Answer and submit | Works. The marketing header's *Sign in / Get started* sits next to *Signed in as …* on protected forms, which could confuse respondents (M4). | Browser: 9-error summary, conditional question, Loom description, receipt, sign-in states | Verified in M1 and M3 |
+| `/f/:slug` Classic | Answer and submit | Works. Respondent pages now show only the Forms lockup in the header (M4 part 1). | Browser: 9-error summary, conditional question, Loom description, receipt, sign-in states | Verified in M1 and M3 |
 | `/f/:slug?mode=conversational` | One question at a time | Works | Browser: required error, conditional question, receipt | Verified in M1 |
 | `/f/:slug?embed=1` | Embedded on another site | Not re-checked this milestone | Browser inside an iframe host page | Planned (M4) |
 | Endings | Custom completion screens | Edited in the outline's *Endings* card | Existing jumps/endings tests | Planned (M4 polish) |
@@ -80,17 +80,17 @@ This uses the workspace's own OIDC provider, as you decided. Respondents never b
 - Whether respondents outside the SSO email domain should be allowed, through a per-form *allowed respondent domains* list. It matters if students sign in with personal addresses.
 - Whether protected forms should work in embeds or meetings later.
 
-## Milestone 4: Every route (planned)
+## Milestone 4: Every route (in progress)
 
-This milestone works through the *Planned (M4)* rows above:
+**Part 1 is done:** the Forms list, the builder header's Preview step and phone tabs, and the respondent header. See `docs/FORMS.md`, "Route pass, part 1".
 
-- Workspace list: search, live/draft filter, status emphasis, and row actions (Edit, Responses, Copy link, Export, Duplicate).
-- One creation flow shared by `/forms` and `/setup/forms`.
-- Builder toolbar hierarchy: save state next to Save, a visible *Preview* button, and *Publish* as the single primary action.
-- The mobile section tabs and the outline.
-- Responses: filters, search and a side detail panel.
-- An embed check.
+**Remaining, in order:**
+1. The `/setup/forms` creation flow joined to the same picker.
+2. Responses: search, filters and a side detail panel.
+3. Builder outline on phones and toolbar hierarchy.
+4. An embed check (`?embed=1` inside a host page).
+5. Endings polish.
 
-Each route gets verified at 320/375/768/1280 px across empty, loading, error and permission states. The full journey is import → edit → preview → publish → submit → inspect → export.
+None of these depends on SSO.
 
 Production deployment is not part of any milestone. Nothing has been deployed.

@@ -1291,3 +1291,24 @@ dialog.prefill-dialog h2 { margin: 0; font-size: 20px; }
 .access-card { margin-top: 16px; }
 .access-card fieldset { border: 0; padding: 0; margin: 8px 0; }
 .access-card .check:has(input:disabled) { opacity: .6; cursor: not-allowed; }
+/* Forms: workspace list */
+.forms-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin: 8px 0 12px; }
+.forms-search { flex: 1 1 260px; max-width: 420px; }
+.forms-search input { width: 100%; }
+.forms-filter { margin: 0; flex-wrap: wrap; }
+.forms-filter .count { color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+.form-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.form-row-main { min-width: 0; flex: 1 1 280px; display: grid; gap: 6px; }
+.form-row-title { color: var(--ink); text-decoration: none; font-size: 17px; overflow-wrap: anywhere; }
+.form-row-title:hover { text-decoration: underline; }
+.form-row .meta { align-items: center; }
+.form-row-pending { color: var(--warn); font-weight: 600; }
+.form-row-actions { display: flex; align-items: center; gap: 6px; }
+.form-row-actions .overflow-panel { width: 230px; }
+#topbar-preview { gap: 6px; }
+@media (max-width: 480px) { .forms-filter { display: flex; width: 100%; } .forms-filter label { flex: 1; justify-content: center; padding: 0 6px; font-size: 13px; } .form-row-actions { width: 100%; } }
+/* On narrow screens the toolbar's Edit/Preview tabs already do this, so the header stays short. */
+@media (max-width: 760px) { #topbar-preview { display: none; } }
+/* Every builder section fits a phone without hiding Responses off the edge. */
+@media (max-width: 480px) { .builder-index ul { gap: 0; justify-content: space-between; } .builder-index a { padding: 0 6px; font-size: 13px; } .builder-index .tab-count { display: none; } }
+@media (max-width: 360px) { .builder-index a { padding: 0 4px; font-size: 12px; } }

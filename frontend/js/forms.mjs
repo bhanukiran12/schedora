@@ -9,6 +9,7 @@ import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-c
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
 import { exportDefinition, openImportDialog } from './forms-import.mjs';
 import { openPrefillBuilder } from './forms-prefill.mjs';
+import { copyTitle, filterForms, formStatus, STATUS_FILTERS, statusCounts } from './forms-list.mjs';
 
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
@@ -601,14 +602,83 @@ export async function dashboard(ctx) {
   try {
     const forms = await api('GET', wsPath('/forms'));
     if (!ctx.alive()) return;
-    mount($('#form-list'), forms.length ? html`<ul class="list">${forms.map(form => html`<li class="row-between"><div>
-        <div class="list-title">${form.draft.title}</div>
-        <div class="meta"><span>${form.response_count} ${form.response_count === 1 ? 'response' : 'responses'}</span><span>Updated ${fmtDateTime(form.updated_at)}</span>${form.published_version && form.has_unpublished_changes ? html`<span>Unpublished changes</span>` : ''}</div></div>
-      <div class="row">${form.published_version ? badge('published', 'Live · v' + form.published_version) : badge('draft', 'Not published')}
-        <a class="btn btn-small" href="/forms/${form.id}">Edit</a><a class="btn btn-small" href="/forms/${form.id}/responses">Responses</a></div></li>`)}</ul>`
-      : html`<div class="empty"><h2>No forms yet</h2><p>Pick a starting point above, or start blank. You can change every question later.</p><div class="actions"><a class="btn" href="/setup/forms">Guided setup</a></div></div>`);
-    if (!forms.length) showPicker(true, false);
+    if (!forms.length) {
+      mount($('#form-list'), html`<div class="empty"><h2>No forms yet</h2><p>Pick a starting point above, start blank or import a JSON file. You can change every question later.</p><div class="actions"><a class="btn" href="/setup/forms">Guided setup</a></div></div>`);
+      return showPicker(true, false);
+    }
+    renderFormList(ctx, forms);
   } catch (error) { mount($('#form-list'), errorBlock(error)); }
+}
+
+// The workspace's forms: search, status filter and row actions. Filters live in the address, so a
+// reload or a shared link keeps them; nothing here changes a form except Duplicate, which creates a draft.
+const STATUS_BADGE = { live: form => badge('published', `Live · v${form.published_version}`), draft: () => badge('draft', 'Draft'), closed: () => badge('paused', 'Closed') };
+function renderFormList(ctx, forms) {
+  const params = new URLSearchParams(location.search);
+  let query = params.get('q') || '';
+  let status = STATUS_FILTERS.some(([key]) => key === params.get('status')) ? params.get('status') : 'all';
+  const counts = statusCounts(forms);
+  mount($('#form-list'), html`<div class="forms-toolbar">
+      <div class="forms-search"><label class="visually-hidden" for="form-search">Search forms</label><input type="search" id="form-search" placeholder="Search forms" value="${query}" autocomplete="off"></div>
+      <div class="segmented forms-filter" role="radiogroup" aria-label="Show forms">${STATUS_FILTERS.map(([key, label]) => html`<label><input type="radio" name="form-status" value="${key}" ${key === status ? raw('checked') : ''}> ${label} <span class="count">${counts[key]}</span></label>`)}</div>
+    </div>
+    <p class="visually-hidden" id="form-count" role="status"></p>
+    <ul class="list forms-list" id="forms-rows"></ul><div id="forms-empty"></div><p class="copy-status" id="forms-status" role="status"></p>`);
+  const remember = () => {
+    const next = new URLSearchParams(location.search);
+    if (query) next.set('q', query); else next.delete('q');
+    if (status !== 'all') next.set('status', status); else next.delete('status');
+    const search = next.toString();
+    history.replaceState(history.state, '', location.pathname + (search ? '?' + search : ''));
+  };
+  const row = form => {
+    const state = formStatus(form);
+    const live = state === 'live';
+    return html`<li class="form-row" data-form-row="${form.id}" data-status="${state}"><div class="form-row-main">
+        <a class="list-title form-row-title" href="/forms/${form.id}">${form.draft.title}</a>
+        <div class="meta">${STATUS_BADGE[state](form)}<span>${form.response_count} ${form.response_count === 1 ? 'response' : 'responses'}</span><span>Updated ${fmtDateTime(form.updated_at)}</span>${live && form.has_unpublished_changes ? html`<span class="form-row-pending">Unpublished changes</span>` : ''}${form.access === 'signin' ? html`<span>Sign-in required</span>` : ''}</div></div>
+      <div class="form-row-actions"><a class="btn btn-small" href="/forms/${form.id}">Edit<span class="visually-hidden"> ${form.draft.title}</span></a><a class="btn btn-small" href="/forms/${form.id}/responses">Responses<span class="visually-hidden"> to ${form.draft.title}</span></a>
+        <details class="overflow-menu"><summary class="btn btn-icon btn-small" aria-label="More actions for ${form.draft.title}" title="More actions">${formIcon('more')}</summary>
+          <div class="overflow-panel">${live ? html`<button class="btn" type="button" data-row-copy="${form.id}">Copy respondent link</button><a class="btn" href="${publicUrl(form)}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a>` : ''}
+            <button class="btn" type="button" data-row-duplicate="${form.id}">Duplicate as draft</button><button class="btn" type="button" data-row-export="${form.id}">Export form definition</button></div></details></div></li>`;
+  };
+  const draw = () => {
+    const shown = filterForms(forms, { query, status });
+    mount($('#forms-rows'), html`${shown.map(row)}`);
+    $('#forms-rows').hidden = !shown.length;
+    const filtered = query || status !== 'all';
+    mount($('#forms-empty'), shown.length ? '' : html`<div class="empty"><h2>No forms match</h2><p>${query ? html`Nothing ${status === 'all' ? '' : `${STATUS_FILTERS.find(([key]) => key === status)[1].toLowerCase()} `}matches “${query}”.` : `There are no ${STATUS_FILTERS.find(([key]) => key === status)[1].toLowerCase()} forms.`}</p><div class="actions"><button class="btn" type="button" data-clear-filters>Show all forms</button></div></div>`);
+    $('#form-count').textContent = filtered ? `Showing ${shown.length} of ${forms.length} forms.` : `${forms.length} forms.`;
+  };
+  draw();
+  $('#form-search').addEventListener('input', event => { query = event.target.value; remember(); draw(); });
+  $('#form-list').addEventListener('change', event => { if (event.target.name === 'form-status') { status = event.target.value; remember(); draw(); } });
+  $('#form-list').addEventListener('click', async event => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const status$ = $('#forms-status');
+    const form = forms.find(item => item.id === (target.dataset.rowCopy || target.dataset.rowDuplicate || target.dataset.rowExport));
+    target.closest('details')?.removeAttribute('open');
+    if (target.dataset.clearFilters !== undefined) { query = ''; status = 'all'; $('#form-search').value = ''; $('input[name="form-status"][value="all"]').checked = true; remember(); draw(); return $('#form-search').focus(); }
+    if (!form) return;
+    if (target.dataset.rowCopy) {
+      try { await navigator.clipboard.writeText(publicUrl(form)); status$.textContent = `Respondent link for “${form.draft.title}” copied. Nothing has been sent.`; }
+      catch { status$.textContent = `Copy failed. The link is ${publicUrl(form)}`; }
+    } else if (target.dataset.rowExport) {
+      try { await exportDefinition(form); status$.textContent = `Downloaded the saved draft of “${form.draft.title}”. No responses are included.`; }
+      catch (error) { status$.textContent = error.message; }
+    } else if (target.dataset.rowDuplicate) {
+      // A duplicate is an export imported again: same checks, always a new unpublished draft, no responses.
+      target.disabled = true;
+      status$.textContent = `Duplicating “${form.draft.title}”…`;
+      try {
+        const file = await api('GET', wsPath(`/forms/${form.id}/definition.json`));
+        file.definition.title = copyTitle(file.definition.title);
+        const { form: copy } = await api('POST', wsPath('/forms/import'), { source: JSON.stringify(file) }, {}, { timeout: 30000 });
+        ctx.navigate(`/forms/${copy.id}?created=duplicate`);
+      } catch (error) { target.disabled = false; status$.textContent = `The copy was not created. ${error.message}`; }
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -679,7 +749,7 @@ export async function builder(ctx) {
       <nav class="builder-index" id="builder-index" aria-label="Form builder sections"><ul>
         <li><a href="#questions" data-section="questions" aria-current="location">Content</a></li><li><a href="#workflow-map" data-section="workflow">Workflow</a></li><li><a href="#settings" data-section="settings">Settings</a></li>
         <li><a href="#share-panel" data-section="share">Share</a></li><li><a href="/forms/${form.id}/responses" id="responses-link">Responses</a></li></ul></nav>
-      <div class="builder-publish"><div id="builder-status"></div><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
+      <div class="builder-publish"><div id="builder-status"></div><button class="btn btn-ghost" type="button" id="topbar-preview" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span>Preview</span></button><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
     </header>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
@@ -744,7 +814,7 @@ export async function builder(ctx) {
     const publish = $('#publish');
     publish.textContent = form.published_version ? 'Publish changes' : form.locked_ids?.length ? 'Publish again' : 'Publish form';
     publish.classList.toggle('btn-primary', !form.published_version || form.has_unpublished_changes || saveState !== 'saved');
-    $('#responses-link').textContent = `Responses (${form.response_count ?? 0})`;
+    mount($('#responses-link'), html`Responses<span class="tab-count"> (${form.response_count ?? 0})</span>`);
   };
   // The one link to give respondents, kept apart from the editor and preview. Nothing here publishes
   // or sends anything: copying, sharing and the email draft all stay on the creator's device.
@@ -1996,7 +2066,7 @@ export async function builder(ctx) {
   const created = ctx.query.get('created');
   if (created && !form.published_version) {
     const template = FORM_TEMPLATES.find(item => item.id === created);
-    const source = created === 'import' ? ' from your JSON file' : template ? html` from the “${template.name}” template` : '';
+    const source = created === 'import' ? ' from your JSON file' : created === 'duplicate' ? ' as a copy' : template ? html` from the “${template.name}” template` : '';
     mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${source}.</strong> It is saved in this workspace but not published, so nobody can open it yet. Review the questions, check the preview, then publish.</p>`));
   }
 
@@ -2085,6 +2155,8 @@ export async function builder(ctx) {
       }
     };
   }
+  // Preview is its own step in the header: it shows the draft as respondents would see it and saves nothing.
+  $('#topbar-preview').onclick = () => goTo('preview-' + (draft.presentation || 'classic'));
   // Exports what is saved, so the file always matches a revision the server accepted.
   $('#export-form').onclick = async () => {
     $('.overflow-menu').open = false;
