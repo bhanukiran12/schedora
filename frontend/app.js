@@ -135,6 +135,15 @@ export async function render() {
   video.leaveMeeting(); // releases camera, microphone and the connection before any other view renders
   const main = $('#main');
   const query = new URLSearchParams(location.search);
+  // `?ws=` pins a link (such as a new draft's builder address) to the workspace it was made in. It is
+  // honoured only for a workspace the person belongs to, then dropped from the address so switching
+  // workspace afterwards still works.
+  const pinned = query.get('ws');
+  if (pinned) {
+    if (session.workspaces?.some(item => item.id === pinned)) selectWorkspace(pinned);
+    query.delete('ws');
+    history.replaceState(history.state, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
+  }
   const redirect = canonicalRedirect(location, boot.productDomain);
   if (redirect) { location.replace(redirect); return; }
   let product = contextFor(location.hostname, currentPath, boot.productDomain);

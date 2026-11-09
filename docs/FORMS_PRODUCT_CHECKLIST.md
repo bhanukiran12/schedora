@@ -17,7 +17,7 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Route / surface | User goal | Main UX gaps found | Verification | Status |
 |---|---|---|---|---|
 | `/forms` overview and list | Find a form, see whether it's live, open it | — | Browser: populated, filtered, no-match and offline-error states at 320/375/768/1280, plus unit tests | **Done (M4 part 1)** |
-| Create form → Blank / Templates | Start quickly from the right point | The picker is hidden behind *Create form*. Templates are grouped well. `/setup/forms` uses a separate flow. | Browser journey from both entry points creates the same unpublished draft. | Partly (M1 added *Start your own*; unifying `/setup/forms` is M4) |
+| Create form → Blank / Templates (`/forms` and `/setup/forms`) | Start quickly from the right point | — | Browser: identical cards on both routes, cancel paths, workspace pinned across tabs, setup → builder → setup | **Done (M4 part 2)** |
 | Create form → **Import JSON** | Bring an existing definition in without a terminal or API key | — | Server tests plus the browser journey below | **Done (M1)** |
 | Builder · Content (outline, canvas, inspector) | Edit questions in place | Toolbar icons still have equal weight. On phones the outline is a chip strip with no labels. | Browser at all widths, keyboard-only pass, screenshots | Partly: *Preview · Save draft · Publish* header and phone tabs done (M4 part 1). Outline and toolbar remain. |
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
@@ -85,7 +85,7 @@ This uses the workspace's own OIDC provider, as you decided. Respondents never b
 **Part 1 is done:** the Forms list, the builder header's Preview step and phone tabs, and the respondent header. See `docs/FORMS.md`, "Route pass, part 1".
 
 **Remaining, in order:**
-1. The `/setup/forms` creation flow joined to the same picker.
+1. ~~The `/setup/forms` creation flow joined to the same picker.~~ Done (part 2).
 2. Responses: search, filters and a side detail panel.
 3. Builder outline on phones and toolbar hierarchy.
 4. An embed check (`?embed=1` inside a host page).

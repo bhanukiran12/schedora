@@ -1,13 +1,13 @@
 import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
-import { FORM_TEMPLATES, questionCount } from './forms-templates.mjs';
 import { buildTrail, responseTrailContext, STATE_LABELS } from './enquiry-trail.mjs';
 import { assessFormReadiness, conditionSentence } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
 import { hostInfo, productOrigin } from './context.mjs';
 import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
-import { exportDefinition, openImportDialog } from './forms-import.mjs';
+import { exportDefinition } from './forms-import.mjs';
+import { createdSource, draftAddress, mountStartingPoints } from './forms-picker.mjs';
 import { openPrefillBuilder } from './forms-prefill.mjs';
 import { copyTitle, filterForms, formStatus, STATUS_FILTERS, statusCounts } from './forms-list.mjs';
 
@@ -507,50 +507,6 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
 // ---------------------------------------------------------------------------------------------
 // Dashboard
 
-const BLANK_TEMPLATE = { id: 'blank', name: 'Blank form', purpose: 'Start from a short starter with name, email and one choice question to replace with your own.',
-  definition: { presentation: 'classic', fields: [{ label: 'Your name' }, { label: 'Email address' }, { label: 'Your first question' }] } };
-const presentationName = definition => definition.presentation === 'conversational' ? 'one question at a time' : 'classic layout';
-
-// A card shows who the template is for, what it collects and how its logic behaves; a small
-// sketch of its first questions stands in for a thumbnail.
-const templateCard = template => {
-  const blank = template === BLANK_TEMPLATE;
-  const sketch = template.definition.fields.filter(field => field.type !== 'page_break' && !field.show_if).slice(0, 3);
-  return html`<li class="template-card"><div class="template-sketch" aria-hidden="true">${sketch.map(field => html`<span>${field.label}</span>`)}</div>
-    ${template.audience ? html`<p class="template-audience">${template.audience}</p>` : ''}<h3>${template.name}</h3><p>${template.purpose}</p>
-    <p class="template-meta">${blank ? 3 : questionCount(template.definition)} questions · ${presentationName(template.definition)}</p>${template.logic ? html`<p class="template-logic">${template.logic}</p>` : ''}
-    <div class="template-actions">${blank ? '' : html`<button class="btn btn-small" type="button" data-preview-template="${template.id}">Preview<span class="visually-hidden"> ${template.name}</span></button>`}
-      <button class="btn btn-small btn-primary" type="button" data-template="${template.id}">Create draft<span class="visually-hidden"> from ${blank ? 'a blank form' : template.name}</span></button></div></li>`;
-};
-
-// Import JSON sits beside Blank form: same outcome (an unpublished draft), different source.
-const importCard = () => html`<li class="template-card template-card-import"><div class="template-icon" aria-hidden="true">{ … }</div>
-  <h3>Import JSON</h3><p>Upload or paste a Schedora form definition, such as one exported from another form. You see what it contains before anything is created.</p>
-  <p class="template-meta">Questions, pages, logic and theme · never responses</p>
-  <div class="template-actions"><button class="btn btn-small btn-primary" type="button" data-import>Import JSON<span class="visually-hidden"> file as a new draft</span></button></div></li>`;
-
-// Try a template's questions and logic before creating anything. The preview renderer never calls
-// the server, so nothing is saved, sent or counted.
-function previewTemplate(template, create) {
-  const dialog = document.createElement('dialog');
-  dialog.className = 'card template-preview';
-  dialog.setAttribute('aria-labelledby', 'template-preview-title');
-  mount(dialog, html`<div class="row-between"><h2 id="template-preview-title" tabindex="-1">Preview: ${template.name}</h2><button class="btn btn-small" type="button" data-close>Close</button></div>
-    <p class="hint">Try the questions and logic. Nothing is saved or sent, and no draft exists until you create one.</p>
-    <div class="template-preview-form"></div>
-    <div class="actions"><button class="btn btn-primary" type="button" data-use>Create draft from this template</button><button class="btn" type="button" data-close>Close</button></div>`);
-  const opener = document.activeElement;
-  document.body.append(dialog);
-  renderForm($('.template-preview-form', dialog), withEvaluationPolicy(template.definition), { preview: true });
-  dialog.addEventListener('click', event => {
-    if (event.target.closest('[data-close]')) dialog.close();
-    else if (event.target.closest('[data-use]')) { dialog.returnValue = 'use'; dialog.close(); }
-  });
-  dialog.addEventListener('close', () => { const use = dialog.returnValue === 'use'; dialog.remove(); opener?.focus?.(); if (use) create(template.id); });
-  dialog.showModal();
-  $('#template-preview-title', dialog).focus();
-}
-
 export async function dashboard(ctx) {
   setTitle('Forms by Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Every good conversation starts with a question.', lead: 'Build classic or one-question-at-a-time forms with logic and answer piping. Responses are saved to your workspace and can be exported.' }));
@@ -558,47 +514,19 @@ export async function dashboard(ctx) {
   mount(ctx.main, html`<div class="container page"><div class="row-between"><div><span class="tag">Forms · ${workspace().name}</span><h1>Forms</h1></div>
     <div class="row"><a class="btn" href="/enquiries">Enquiries</a><button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
-    <section class="form-templates" id="form-templates" aria-labelledby="templates-heading" hidden>
-      <h2 id="templates-heading" tabindex="-1">Choose a starting point</h2>
-      <p class="muted">Each option creates an unpublished draft in this workspace. Edit any question, preview it, then publish when you are ready. Nothing is public until you publish.</p>
-      <h3 class="template-group">Start your own</h3>
-      <ul class="template-grid">${templateCard(BLANK_TEMPLATE)}${importCard()}</ul>
-      <h3 class="template-group">For sales and client meetings</h3>
-      <ul class="template-grid">${FORM_TEMPLATES.filter(template => template.group === 'meetings').map(templateCard)}</ul>
-      <h3 class="template-group">More starting points</h3>
-      <ul class="template-grid">${FORM_TEMPLATES.filter(template => template.group !== 'meetings').map(templateCard)}</ul>
-      <div id="template-status" role="status"></div></section>
+    <div id="form-templates" hidden></div>
     <div id="form-list">${loading()}</div></div>`);
   const picker = $('#form-templates');
+  const starting = mountStartingPoints(picker, {
+    onCreated: (form, created, workspaceId) => ctx.navigate(draftAddress(form, { created, workspaceId })),
+    cancel: { label: 'Cancel', onCancel: () => { showPicker(false); $('#new-form').focus(); } }
+  });
   const showPicker = (open, focus = true) => {
     picker.hidden = !open;
     $('#new-form').setAttribute('aria-expanded', String(open));
-    if (open && focus) $('#templates-heading').focus();
+    if (open && focus) starting.focus();
   };
   $('#new-form').onclick = () => showPicker(picker.hidden);
-  // Creating a draft is the explicit action here; publishing stays a separate step in the builder.
-  const create = async id => {
-    if (picker.dataset.busy) return;
-    const template = FORM_TEMPLATES.find(item => item.id === id);
-    picker.dataset.busy = '1';
-    $$('[data-template]', picker).forEach(item => item.setAttribute('aria-disabled', 'true'));
-    mount($('#template-status'), html`<p class="muted">Creating draft…</p>`);
-    try {
-      const form = await api('POST', wsPath('/forms'), template ? { definition: template.definition } : { title: 'Untitled form' });
-      ctx.navigate(`/forms/${form.id}?created=${template ? template.id : 'blank'}`);
-    } catch (error) {
-      mount($('#template-status'), notice('bad', html`<p>The draft was not created. ${error.message}</p>`));
-      $$('[data-template]', picker).forEach(item => item.removeAttribute('aria-disabled'));
-      $('#template-status').scrollIntoView({ block: 'nearest' });
-    } finally { delete picker.dataset.busy; }
-  };
-  picker.addEventListener('click', event => {
-    if (event.target.closest('[data-import]')) return openImportDialog({ onCreated: form => ctx.navigate(`/forms/${form.id}?created=import`) });
-    const use = event.target.closest('[data-template]');
-    if (use) return create(use.dataset.template);
-    const preview = event.target.closest('[data-preview-template]');
-    if (preview) previewTemplate(FORM_TEMPLATES.find(item => item.id === preview.dataset.previewTemplate), create);
-  });
   try {
     const forms = await api('GET', wsPath('/forms'));
     if (!ctx.alive()) return;
@@ -675,7 +603,7 @@ function renderFormList(ctx, forms) {
         const file = await api('GET', wsPath(`/forms/${form.id}/definition.json`));
         file.definition.title = copyTitle(file.definition.title);
         const { form: copy } = await api('POST', wsPath('/forms/import'), { source: JSON.stringify(file) }, {}, { timeout: 30000 });
-        ctx.navigate(`/forms/${copy.id}?created=duplicate`);
+        ctx.navigate(draftAddress(copy, { created: 'duplicate', workspaceId: session.workspaceId }));
       } catch (error) { target.disabled = false; status$.textContent = `The copy was not created. ${error.message}`; }
     }
   });
@@ -2062,12 +1990,16 @@ export async function builder(ctx) {
     mount($('#builder-notice'), notice('warn', html`<p data-authoring-frozen><strong>Editing forms is paused while a release is in progress.</strong> Your form is safe and live forms keep working, but changes here cannot be saved or published right now.</p>`));
   };
   showFreeze();
-  // Arriving from the template picker: say plainly what exists and what does not yet.
+  // Arriving from the starting-point picker or guided setup: say plainly what exists and what does
+  // not yet, and how to get back to setup.
   const created = ctx.query.get('created');
+  const fromSetup = ctx.query.get('from') === 'setup';
+  const backToSetup = fromSetup ? html` <a href="/setup/forms" data-back-setup>Back to setup</a>` : '';
   if (created && !form.published_version) {
-    const template = FORM_TEMPLATES.find(item => item.id === created);
-    const source = created === 'import' ? ' from your JSON file' : created === 'duplicate' ? ' as a copy' : template ? html` from the “${template.name}” template` : '';
-    mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${source}.</strong> It is saved in this workspace but not published, so nobody can open it yet. Review the questions, check the preview, then publish.</p>`));
+    const source = createdSource(created);
+    mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${source ? ' ' + source : ''} in ${workspace().name}.</strong> It is saved but not published, so nobody can open it yet. Review the questions, check the preview, then publish.${backToSetup}</p>`));
+  } else if (fromSetup && !boot.formsAuthoringFrozen) {
+    mount($('#builder-notice'), notice('info', html`<p>Opened from guided setup. Changes here are saved to the same draft.${backToSetup}</p>`));
   }
 
   async function renderRouting() {

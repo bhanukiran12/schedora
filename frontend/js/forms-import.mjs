@@ -1,7 +1,7 @@
 // Import JSON and Export form definition (docs/FORMS.md, "Import and export"). The browser only reads the
 // file and shows what the server says: every check runs on the server, first to preview and again when
 // the draft is created. Nothing is created until the author confirms the preview.
-import { $, $$, api, html, mount, notice, workspace, wsPath } from './core.mjs';
+import { $, $$, api, html, mount, notice, session, wsPath } from './core.mjs';
 import { EXAMPLE_DEFINITION_FILE, EXAMPLE_FILENAME } from './forms-definition-example.mjs';
 
 const MAX_BYTES = 1024 * 1024;
@@ -48,14 +48,17 @@ const problemList = error => {
 
 /**
  * Opens the import dialog. onCreated(form) runs after the server creates the draft; the dialog closes
- * itself first. Focus returns to the opener when the dialog is dismissed.
+ * itself first. Focus returns to the opener when the dialog is dismissed. workspaceId fixes the
+ * workspace the draft is created in (the current one by default).
  */
-export function openImportDialog({ onCreated }) {
+export function openImportDialog({ onCreated, workspaceId = session.workspaceId }) {
+  const path = route => `/api/workspaces/${encodeURIComponent(workspaceId)}${route}`;
+  const workspaceName = session.workspaces.find(item => item.id === workspaceId)?.name || 'this workspace';
   const dialog = document.createElement('dialog');
   dialog.className = 'card import-dialog';
   dialog.setAttribute('aria-labelledby', 'import-title');
   mount(dialog, html`<div class="row-between"><h2 id="import-title" tabindex="-1">Import JSON</h2><button class="btn btn-small" type="button" data-close>Close</button></div>
-    <p class="hint">Creates an <strong>unpublished draft</strong> in <strong>${workspace()?.name || 'this workspace'}</strong>. Nothing is public until you publish. Files hold questions, pages, choices, ids, logic, descriptions and theme only; never responses, credentials or integrations.</p>
+    <p class="hint">Creates an <strong>unpublished draft</strong> in <strong>${workspaceName}</strong>. Nothing is public until you publish. Files hold questions, pages, choices, ids, logic, descriptions and theme only; never responses, credentials or integrations.</p>
     <fieldset class="import-source"><legend class="visually-hidden">How to provide the file</legend>
       <div class="segmented" role="radiogroup" aria-label="Source">
         <label><input type="radio" name="import-source" value="file" checked> Upload a file</label>
@@ -98,7 +101,7 @@ export function openImportDialog({ onCreated }) {
     busy = true;
     mount(result, html`<p class="muted" role="status">Checking the file…</p>`);
     try {
-      const preview = await api('POST', wsPath('/forms/import-check'), { source: text }, {}, { timeout: 30000 });
+      const preview = await api('POST', path('/forms/import-check'), { source: text }, {}, { timeout: 30000 });
       checked = text;
       const { summary, warnings } = preview;
       mount(result, html`<section class="import-preview" aria-labelledby="import-preview-title">
@@ -122,7 +125,7 @@ export function openImportDialog({ onCreated }) {
     busy = true;
     $$('[data-create]', dialog).forEach(button => { button.disabled = true; button.textContent = 'Creating draft…'; });
     try {
-      const { form } = await api('POST', wsPath('/forms/import'), { source: checked }, {}, { timeout: 30000 });
+      const { form } = await api('POST', path('/forms/import'), { source: checked }, {}, { timeout: 30000 });
       dialog.returnValue = 'created';
       dialog.close();
       onCreated(form);

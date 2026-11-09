@@ -9,7 +9,7 @@ import { PRODUCT_INFO } from './products.mjs';
 import { assessReadiness } from './meet-readiness.mjs';
 import { assessFormReadiness } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
-import { FORM_TEMPLATES } from './forms-templates.mjs';
+import { createdSource, draftAddress, mountStartingPoints } from './forms-picker.mjs';
 import { FLOW_STARTERS } from './flow-starters.mjs';
 import { DESCRIPTION_LIMITS, definitionProblems, visibleFields } from '/shared/forms-logic.mjs';
 
@@ -117,8 +117,10 @@ export async function liveOnboarding(ctx) {
   const isSuiteView = !routeProd && effectiveProduct === 'suite';
   let simulationNote = null;
 
+  let justCreated = null; // the picker source of a draft created in this visit, for one notice
+  const saveStateQuietly = async patch => { state = await api('PATCH', wsPath('/onboarding'), patch); };
   const saveState = async patch => {
-    state = await api('PATCH', wsPath('/onboarding'), patch);
+    await saveStateQuietly(patch);
     draw();
   };
 
@@ -293,36 +295,35 @@ export async function liveOnboarding(ctx) {
     </form>`;
   }
 
+  // No draft yet: the same starting-point picker as /forms (Blank, Import JSON, Templates). Once a
+  // draft exists, this step edits its basics and links to the builder, which links back here.
   function renderFormStep() {
     const existingForm = state.records.forms.form;
+    if (!existingForm) {
+      return html`<div class="card card-plain" id="live-forms-picker"></div>`;
+    }
+    const builderLink = draftAddress(existingForm, { from: 'setup', workspaceId: ws.id });
     return html`<form class="card card-plain" id="live-forms-form" novalidate>
-      <h2>${existingForm ? `Update draft form “${existingForm.draft.title}”` : 'Create your first draft form'}</h2>
-      <p class="muted">${existingForm
-        ? `Saved revision ${existingForm.revision} (${existingForm.published_version != null ? `Live version ${existingForm.published_version}` : 'Unpublished draft — not publicly reachable'}). Saving here updates the draft only and never publishes automatically.`
-        : 'Choose a goal template or start with a simple intake form. This creates a real unpublished draft in your workspace.'}</p>
-
-      ${existingForm ? '' : html`<label for="live-form-template">Starting point</label>
-        <select id="live-form-template" name="template_id">
-          ${FORM_TEMPLATES.map(tpl => html`<option value="${tpl.id}">${tpl.name} — ${tpl.purpose}</option>`)}
-          <option value="blank">Simple contact & enquiry form (3 questions)</option>
-        </select>`}
+      ${justCreated ? html`<div class="notice notice-ok" role="status" id="live-form-created" tabindex="-1"><p><strong>Draft created${createdSource(justCreated) ? ' ' + createdSource(justCreated) : ''}.</strong> “${existingForm.draft.title}” is saved in ${ws.name} and is not published. Adjust the basics here and continue, or open it in the Form Builder to edit questions. The builder links back to setup.</p></div>` : ''}
+      <h2>Update draft form “${existingForm.draft.title}”</h2>
+      <p class="muted">Saved revision ${existingForm.revision} (${existingForm.published_version != null ? `Live version ${existingForm.published_version}` : 'Unpublished draft — not publicly reachable'}). Saving here updates the draft only and never publishes automatically.</p>
 
       <label for="live-form-title">Form title</label>
-      <input id="live-form-title" name="title" required maxlength="120" value="${existingForm?.draft?.title || FORM_TEMPLATES[0].definition.title}">
+      <input id="live-form-title" name="title" required maxlength="120" value="${existingForm.draft.title}">
 
       <label for="live-form-description">Description</label><span class="hint" id="live-form-description-hint">Up to ${DESCRIPTION_LIMITS.form.toLocaleString('en-US')} characters. Line breaks are kept.</span>
-      <textarea id="live-form-description" name="description" maxlength="${DESCRIPTION_LIMITS.form}" aria-describedby="live-form-description-hint">${existingForm?.draft?.description || FORM_TEMPLATES[0].definition.description}</textarea>
+      <textarea id="live-form-description" name="description" maxlength="${DESCRIPTION_LIMITS.form}" aria-describedby="live-form-description-hint">${existingForm.draft.description || ''}</textarea>
 
       <label for="live-form-presentation">Presentation style</label>
       <select id="live-form-presentation" name="presentation">
-        <option value="classic" ${(existingForm?.draft?.presentation || 'classic') === 'classic' ? raw('selected') : ''}>Classic (questions grouped on a page)</option>
-        <option value="conversational" ${existingForm?.draft?.presentation === 'conversational' ? raw('selected') : ''}>Conversational (one question at a time)</option>
+        <option value="classic" ${(existingForm.draft.presentation || 'classic') === 'classic' ? raw('selected') : ''}>Classic (questions grouped on a page)</option>
+        <option value="conversational" ${existingForm.draft.presentation === 'conversational' ? raw('selected') : ''}>Conversational (one question at a time)</option>
       </select>
 
       <div data-form-status tabindex="-1"></div>
       <div class="actions">
-        <button class="btn btn-primary" type="submit">${existingForm ? 'Save draft form & continue →' : 'Create unpublished draft form →'}</button>
-        ${existingForm ? html`<a class="btn" href="/forms/${existingForm.id}">Open in Form Builder</a>` : ''}
+        <button class="btn btn-primary" type="submit">Save draft form & continue →</button>
+        <a class="btn" href="${builderLink}" id="live-open-builder">Open in Form Builder</a>
       </div>
     </form>`;
   }
@@ -449,7 +450,7 @@ export async function liveOnboarding(ctx) {
               <h2>${forms.form.draft.title} ${badge(forms.form.published_version != null ? 'ok' : 'neutral', forms.form.published_version != null ? `Published v${forms.form.published_version}` : 'Draft (not published)')}</h2>
             </div>
             <div class="row">
-              <a class="btn btn-small btn-primary" href="/forms/${forms.form.id}">Open in Form Builder</a>
+              <a class="btn btn-small btn-primary" href="${draftAddress(forms.form, { from: 'setup', workspaceId: ws.id })}">Open in Form Builder</a>
               <button class="btn btn-small" type="button" data-setup-step="form">Edit Forms setup</button>
             </div>
           </div>
@@ -619,58 +620,40 @@ export async function liveOnboarding(ctx) {
       });
     }
 
+    if (currentStep === 'form' && $('#live-forms-picker')) {
+      mountStartingPoints($('#live-forms-picker'), {
+        onCreated: async (form, created) => {
+          await saveStateQuietly({ forms_form_id: form.id });
+          justCreated = created;
+          draw();
+          $('#live-form-created')?.focus?.();
+          toast('Unpublished draft form created.');
+        },
+        heading: 'Create your first draft form',
+        lead: 'The same choice as Create form in Forms. You come back here once the draft is created.',
+        cancel: { label: 'Skip Forms for now', onCancel: () => saveState({ active_step: nextStepAfter('form', state.selected_products) }) }
+      });
+    }
     if (currentStep === 'form' && $('#live-forms-form')) {
-      const tplSelect = $('#live-form-template');
-      if (tplSelect) {
-        tplSelect.onchange = () => {
-          const tpl = FORM_TEMPLATES.find(item => item.id === tplSelect.value);
-          if (tpl) {
-            $('#live-form-title').value = tpl.definition.title;
-            $('#live-form-description').value = tpl.definition.description;
-          } else {
-            $('#live-form-title').value = 'Client enquiry';
-            $('#live-form-description').value = 'Share a few details so we can help.';
-          }
-        };
-      }
       handleSubmit($('#live-forms-form'), async values => {
         const existing = state.records.forms.form;
-        let savedForm;
-        if (existing) {
-          const nextDraft = {
-            ...existing.draft,
-            title: values.title.trim(),
-            description: values.description || '',
-            presentation: values.presentation || 'classic'
-          };
-          savedForm = await api('PATCH', wsPath(`/forms/${existing.id}`), {
-            title: nextDraft.title,
-            definition: nextDraft,
-            expected_revision: existing.revision
-          });
-        } else {
-          const tpl = FORM_TEMPLATES.find(item => item.id === values.template_id);
-          const baseDef = tpl ? structuredClone(tpl.definition) : {
-            title: values.title.trim(),
-            description: values.description || '',
-            presentation: values.presentation || 'classic',
-            submit_label: 'Send',
-            fields: [
-              { id: 'name', type: 'short_text', label: 'Your name', required: true },
-              { id: 'email', type: 'email', label: 'Email address', required: true },
-              { id: 'topic', type: 'long_text', label: 'How can we help?', required: true }
-            ]
-          };
-          baseDef.title = values.title.trim();
-          baseDef.description = values.description || '';
-          baseDef.presentation = values.presentation || 'classic';
-          savedForm = await api('POST', wsPath('/forms'), { title: baseDef.title, definition: baseDef });
-        }
+        const nextDraft = {
+          ...existing.draft,
+          title: values.title.trim(),
+          description: values.description || '',
+          presentation: values.presentation || 'classic'
+        };
+        const savedForm = await api('PATCH', wsPath(`/forms/${existing.id}`), {
+          title: nextDraft.title,
+          definition: nextDraft,
+          expected_revision: existing.revision
+        });
+        justCreated = null;
         await saveState({
           forms_form_id: savedForm.id,
           active_step: nextStepAfter('form', state.selected_products)
         });
-        toast(existing ? 'Draft form updated (unpublished).' : 'Unpublished draft form created.');
+        toast('Draft form updated (unpublished).');
       });
     }
 

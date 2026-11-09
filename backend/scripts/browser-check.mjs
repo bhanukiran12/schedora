@@ -2760,7 +2760,13 @@ try {
     await waitFor("document.querySelector('#live-meet-form')", 'live availability step');
     await fill('#live-event-title', 'Live Onboarding Call');
     await click('#live-meet-form button[type=submit]');
-    await waitFor("document.querySelector('#live-forms-form')", 'live form step');
+    // Setup offers the same starting points as /forms (Blank, Import JSON, ten templates), then returns here.
+    await waitFor("document.querySelector('#live-forms-picker [data-template]')", 'live form step picker');
+    if ((await evaluate("document.querySelectorAll('#live-forms-picker [data-template]').length")) !== 11 || !(await evaluate("Boolean(document.querySelector('#live-forms-picker [data-import]'))"))) throw new Error('setup does not offer the same starting points as /forms');
+    await layoutCheck('live onboarding form picker');
+    await click('#live-forms-picker [data-template="blank"]');
+    await waitFor("document.querySelector('#live-forms-form') && document.querySelector('#live-form-created')", 'setup returns after creating a draft');
+    if (!(await evaluate("document.querySelector('#live-open-builder').getAttribute('href').includes('from=setup')"))) throw new Error('builder link from setup has no way back');
     await fill('#live-form-title', 'Live Onboarding Form');
     // Onboarding uses the shared 2,000-character form description limit, line breaks included.
     if ((await evaluate("document.querySelector('#live-form-description').maxLength")) !== 2000) throw new Error('onboarding form description is not limited to 2,000');

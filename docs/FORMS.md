@@ -775,3 +775,21 @@ There was no overflow at 320/375/768/1280 px. **Not verified:** a real identity 
 - the respondent header, in a fresh browser
 
 There was no overflow at 320/375/768/1280 px.
+
+## Route pass, part 2: one creation flow (9 November 2026, local only)
+
+- **One picker** (`frontend/js/forms-picker.mjs`). *Create form* on `/forms` and the guided setup at `/setup/forms` show the same starting points: *Blank form*, *Import JSON* and the ten templates. Both create an unpublished draft through the same server routes. Setup no longer has its own template list or built-in starter.
+- **Workspace.** The picker fixes the workspace when it opens and names it ("Each option creates an unpublished draft in *Campus Hiring*"). The draft is created there even if another tab switches workspace in the meantime. Builder links from the picker and from setup carry `?ws=<id>`. The app honours that only for a workspace the person belongs to, then drops it from the address so the sidebar switcher still works.
+- **Cancelling.** On `/forms`, *Cancel* closes the picker and returns focus to *Create form*. In setup, *Skip Forms for now* moves to the next step without creating anything. Closing the import dialog or a template preview returns focus to the card that opened it. None of these create a draft.
+- **After creating.**
+  - From `/forms`, the builder opens with "Draft created … in *workspace*. It is saved but not published."
+  - From setup, you stay in setup on the same step, with a notice saying what was created. You can then adjust the title, description and layout, or follow *Open in Form Builder*. The builder shows *Back to setup* when opened from setup.
+
+**Evidence (local SQLite, headless Chrome):** `npm test` passes. The browser suite now drives the setup step through the shared picker. A scratchpad journey covered:
+- identical cards on both routes
+- *Cancel* on `/forms`, with focus restored and no draft created
+- in a second workspace, cancelling the import dialog, then importing the Technical Profile Details file while another tab switched the stored workspace; all 39 questions landed, unpublished, in the right workspace only
+- the setup → builder → *Back to setup* loop, opened as a fresh page load while storage pointed at the other workspace
+- *Skip Forms for now* in a third workspace, then *Blank form* from `/forms` there
+
+There was no overflow at 320, 375, 768 or 1280 px.
