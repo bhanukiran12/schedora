@@ -22,12 +22,12 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Builder · Content (outline, canvas, inspector) | Edit questions in place | Toolbar icons have equal weight. Save, Preview and Publish sit far apart, and Preview is a tab icon. On phones the section tabs clip (*Responses* is cut off) and the outline becomes a chip strip with no labels. | Browser at all widths, keyboard-only pass, screenshots | Planned (M4) |
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
 | Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
-| Builder · Settings (presentation, routing) | Form-wide behaviour | No per-form access setting (M3) | — | Planned (M3) |
+| Builder · Settings (presentation, access, routing) | Form-wide behaviour | — | Browser: sign-in journey | **Who can respond done (M3)** |
 | Builder · Share + readiness | Get the link and the embed code | The embed sits in a disclosure | Browser: prefill journey | **Prefilled links done (M2)**; layout polish M4 |
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |
 | Preview (builder pane, both layouts) | See what respondents see | Works. Device toggle present. | Browser: classic and conversational render after reopen | Verified in M1 |
 | `/forms/:id/responses` and detail | Scan, filter, inspect, export | Table without filters or search. The detail opens below the table, far from the clicked row on phones. | Browser at all widths. CSV contents checked. | Planned (M4); export verified in M1 |
-| `/f/:slug` Classic | Answer and submit | Works: the required-error summary, progress and long folded descriptions | Browser: 9-error summary, conditional question, Loom description, receipt | Verified in M1 |
+| `/f/:slug` Classic | Answer and submit | Works. The marketing header's *Sign in / Get started* sits next to *Signed in as …* on protected forms, which could confuse respondents (M4). | Browser: 9-error summary, conditional question, Loom description, receipt, sign-in states | Verified in M1 and M3 |
 | `/f/:slug?mode=conversational` | One question at a time | Works | Browser: required error, conditional question, receipt | Verified in M1 |
 | `/f/:slug?embed=1` | Embedded on another site | Not re-checked this milestone | Browser inside an iframe host page | Planned (M4) |
 | Endings | Custom completion screens | Edited in the outline's *Endings* card | Existing jumps/endings tests | Planned (M4 polish) |
@@ -71,31 +71,14 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 
 Built as `Share → Build prefilled link` with `answer.<key>=value` links. The contract and evidence are in `docs/FORMS.md`, "Prefilled links and question IDs". Sensitive and contact questions are never offered, and the respondent page ignores them even in a hand-written link. Verified in a fresh browser context: grouped questions, conditional logic, a renamed label, republishing, invalid values, and editing a prefilled answer through to the stored response.
 
-## Milestone 3: Respondent sign-in (design; needs your decision)
+## Milestone 3: Respondent sign-in (done, using the workspace's existing SSO)
 
-Three things are kept separate:
+This uses the workspace's own OIDC provider, as you decided. Respondents never become users, members or editors. Sign-in is enforced on the server for both form access and submission, and existing links stay public. The contract, the tests and a rollback hazard are in `docs/FORMS.md`, "Respondent sign-in".
 
-- A **question ID** targets a field (definition, prefill).
-- A **response ID** identifies a submission (receipt reference, inbox).
-- A **verified respondent identity** comes only from a sign-in completed on the server. It is stored with the response as `respondent: { subject, email, issuer, verified_at }` and is never taken from answers or the URL.
-
-Proposed design:
-
-- A per-form `access: 'public' | 'signin'` setting, stored on the form (not in the definition file), default `public`, so every existing link is unchanged.
-- `GET /api/public/forms/:slug` and `POST …/responses` both enforce it on the server. Without a valid respondent session they return `401 signin_required` and reveal no definition.
-- The respondent session is separate from the host session: its own cookie and short expiry, and it never grants workspace membership.
-- Optional claim mapping (email → an email question, `student_id` → a text question). Mapped answers are shown read-only as *Verified by sign-in*, kept apart from editable prefill, and come from the session, never from the submitted body.
-- Tests to write: direct API calls without a session, expired sessions, a session from another workspace or form, and existing public links.
-
-**Decision needed from you:** which identity provider respondents sign in with.
-
-- (a) The workspace's existing OIDC SSO connection. This needs a change so that respondent sign-in never auto-joins people as members.
-- (b) Google sign-in with an email-domain allow-list per form.
-- (c) A one-time email code.
-
-Also: should sign-in-required forms be gated by plan?
-
-My recommendation is (a) with (b) as a fallback for workspaces without SSO. M3 code waits for this decision; M2 and M4 don't.
+**Still open for you to decide:**
+- Plan restrictions for sign-in forms. None are applied today.
+- Whether respondents outside the SSO email domain should be allowed, through a per-form *allowed respondent domains* list. It matters if students sign in with personal addresses.
+- Whether protected forms should work in embeds or meetings later.
 
 ## Milestone 4: Every route (planned)
 

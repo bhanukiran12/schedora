@@ -1,5 +1,5 @@
 import { Worker, MessageChannel, receiveMessageOnPort } from 'node:worker_threads';
-import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORM_ASSET_TABLES, FORM_THEME_TABLES, SESSION_OFFER_TABLES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, ONBOARDING_TABLES, postgresSchema, postgresUpgrade, TASK_ASSIGNEE_INDEXES, VIDEO_TABLES } from './postgres-sql.mjs';
+import { EMAIL_REPORT_COLUMNS, EMAIL_REPORT_TABLES, ENQUIRY_FEED_INDEXES, FORM_ASSET_TABLES, FORM_THEME_TABLES, RESPONDENT_TABLES, SESSION_OFFER_TABLES, FORMS_V5_COLUMNS, FORMS_V5_TABLES, MONITORING_TABLES, ONBOARDING_TABLES, postgresSchema, postgresUpgrade, TASK_ASSIGNEE_INDEXES, VIDEO_TABLES } from './postgres-sql.mjs';
 import { openDatabase } from './db.mjs';
 
 export function openPostgres(connectionString, { ca, schemaName = 'schedora' } = {}) {
@@ -12,7 +12,7 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
     const indexes = template.all("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL");
     // Tables added after the first PostgreSQL release are created by versioned upgrade steps, the
     // same way for new and existing databases.
-    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES, ...MONITORING_TABLES, ...EMAIL_REPORT_TABLES, ...ONBOARDING_TABLES, ...FORM_ASSET_TABLES, ...SESSION_OFFER_TABLES, ...FORM_THEME_TABLES];
+    const later = [...VIDEO_TABLES, ...FORMS_V5_TABLES, ...MONITORING_TABLES, ...EMAIL_REPORT_TABLES, ...ONBOARDING_TABLES, ...FORM_ASSET_TABLES, ...SESSION_OFFER_TABLES, ...FORM_THEME_TABLES, ...RESPONDENT_TABLES];
     schema = postgresSchema(tables.filter(table => !later.includes(table.name)), indexes.filter(index => !later.includes(index.tbl_name)));
     upgrades = [{ name: 'postgres_v4_meet_video', statements: postgresUpgrade(tables.filter(table => VIDEO_TABLES.includes(table.name)), indexes.filter(index => VIDEO_TABLES.includes(index.tbl_name)), [
       "CREATE FUNCTION credit_ledger_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'credit_ledger_immutable'; END $$",
@@ -30,7 +30,9 @@ export function openPostgres(connectionString, { ca, schemaName = 'schedora' } =
       { name: 'postgres_v13_form_assets', statements: postgresUpgrade(tables.filter(table => FORM_ASSET_TABLES.includes(table.name)), indexes.filter(index => FORM_ASSET_TABLES.includes(index.tbl_name))) },
       { name: 'postgres_v14_session_offers', statements: postgresUpgrade(tables.filter(table => SESSION_OFFER_TABLES.includes(table.name)), indexes.filter(index => SESSION_OFFER_TABLES.includes(index.tbl_name))) },
       { name: 'postgres_v15_form_themes', statements: postgresUpgrade(tables.filter(table => FORM_THEME_TABLES.includes(table.name)), indexes.filter(index => FORM_THEME_TABLES.includes(index.tbl_name))) },
-      { name: 'postgres_v16_response_attribution', statements: ['ALTER TABLE responses ADD COLUMN IF NOT EXISTS attribution TEXT'] }];
+      { name: 'postgres_v16_response_attribution', statements: ['ALTER TABLE responses ADD COLUMN IF NOT EXISTS attribution TEXT'] },
+      { name: 'postgres_v17_respondent_signin', statements: ["ALTER TABLE forms ADD COLUMN IF NOT EXISTS access TEXT NOT NULL DEFAULT 'public'", 'ALTER TABLE responses ADD COLUMN IF NOT EXISTS respondent TEXT',
+        ...postgresUpgrade(tables.filter(table => RESPONDENT_TABLES.includes(table.name)), indexes.filter(index => RESPONDENT_TABLES.includes(index.tbl_name)))] }];
   } finally { template.close(); }
   const { port1, port2 } = new MessageChannel();
   const state = new SharedArrayBuffer(4);

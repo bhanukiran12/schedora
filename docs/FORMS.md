@@ -706,3 +706,52 @@ Migration `014_form_assets.sql` (SQLite) and `postgres_v13_form_assets` are addi
 6. Renamed the label in the builder, removed a prefilled question and republished. The old link still filled by key, ignored the removed question, and the dialog listed version 2.
 
 There was no overflow at 320/375/768/1280 px. **Not verified:** a real OS clipboard outside headless Chrome, and a screen reader.
+
+## Respondent sign-in (9 November 2026, local only)
+
+A form can require respondents to sign in through the **workspace's existing single sign-on provider** (OIDC, the same connection members use). The default is *Anyone with the link*, and every existing form stays public.
+
+**Three separate things.**
+- A **question key** targets a field: definitions, logic and `answer.<key>` prefilled links.
+- A **response id** identifies a submission: receipt reference and inbox.
+- A **verified respondent** is who completed sign-in, stored as `responses.respondent = { issuer, subject, email, name, verified_at }`. It is taken only from the server-side respondent session, never from answers, the URL or the request body.
+
+Prefilled links and URL parameters never stand in for identity.
+
+- **Setting.** *Settings → Who can respond* has two choices: anyone with the link, or only people who sign in with `<provider host>` (`@<domain>` accounts). The change is stored in `forms.access` (`PUT /forms/:id/access`, needs `forms.manage`, frozen by the authoring freeze). It is not part of the definition or of exported files, and it applies to the live form immediately, after a confirmation. Choosing sign-in needs the workspace's SSO to be enabled. The builder sees only the provider's host and email domain, never the client id or secret. No plan check: plan restrictions are still open.
+- **Enforcement (server).** `publishedForm` and `submitResponse` call `assertFormAccess` before anything else:
+  - Without a valid respondent session for that workspace, `GET /api/public/forms/:slug` returns `401 signin_required` with only the workspace name and the sign-in URL, and no questions.
+  - Submissions, including replays of an earlier `submission_id`, return 401 and store nothing.
+  - If SSO is later disabled, a protected form answers `503 signin_unavailable` to everyone rather than opening up.
+  - A workspace member's own session does not count as a respondent sign-in.
+- **Respondents are never members.** Sign-in reuses the provider's discovery, PKCE, signed-token checks, verified-email and domain rules and redirect URI (`verifiedSignIn` in `platform/sso.mjs`), so nothing new is registered at the provider. It uses its own flow cookie (`schedora_sso_respondent`) and never creates a user, a membership or a member session. A respondent flow cookie presented as a member flow is refused. The result is a row in `respondent_sessions`: the token is stored only as a hash, it lasts 2 hours, it is scoped to one workspace, and expired rows are cleaned on the next sign-in. The cookie is `schedora_respondent`: `HttpOnly; SameSite=Lax; Path=/api/public/forms`, `Secure` in production, and scoped to `COOKIE_DOMAIN`. `/api/me` reports no user for a respondent, and every workspace API returns 401. *Sign out* deletes the session on the server.
+- **Respondent experience.** A protected link shows *Sign in to answer this form*, which says that sign-in confirms identity for this form only and creates no Schedora account. After sign-in the person returns to the same form address, so prefilled answers and `mode` are kept. Provider refusals (wrong domain, unverified email, no subject) come back as *Sign-in did not complete* with the reason. The form shows *Signed in as … · Sign out*. If the session expires before submit, nothing is stored. The answers are kept for that tab (`sessionStorage`, read once) and restored after signing in again.
+- **Responses.** The inbox adds a *Verified sign-in* column, and the detail view adds a *Verified sign-in* section (email, name, account id, time), both only when a response has one. The CSV adds `Verified sign-in email` and `Verified sign-in subject` as the last columns, only when some response has them, so other exports keep their shape.
+- **Not supported yet (by design in this slice):**
+  - Embedding a protected form on another site. The `SameSite=Lax` cookie isn't sent in a cross-site iframe.
+  - Offering one in a meeting. `attachOffer` refuses it, because attendees answer with a meeting ticket.
+  - Mapping identity claims into answer fields.
+  - Respondents from outside the SSO email domain. The domain check is the same as for members. If students sign in with personal addresses, an *allowed respondent domains* setting is needed: an owner decision.
+  - Images shown by a protected form are still served by unguessable asset id without a session.
+
+**Deployment.** SQLite migration `018_respondent_signin.sql` and PostgreSQL step `postgres_v17_respondent_signin` are additive: `forms.access` defaults to `'public'`, and `responses.respondent` and the `respondent_sessions` table are new. The release rehearsal checks that the upgrade applies exactly the new steps and leaves every existing form public. Deploy the backend before the frontend. **Rollback hazard:** the previous backend does not know `forms.access` and would serve protected forms publicly. Before rolling back, set every `access = 'signin'` form to *Stop collecting* (or back to public, if that is acceptable). The column can stay.
+
+**Evidence (local SQLite, final code):** `npm test`: 387 tests, 380 pass, 0 fail, 7 skipped. `forms-respondent-signin.test.mjs` runs against a mock OIDC provider with real RS256-signed tokens. It covers:
+- public default, SSO required to protect, workspace boundaries and the freeze
+- no definition and no submission without sign-in, including direct API calls, replays, forged body identity, unknown cookies and a member's own session
+- identity stored apart from answers, plus inbox and CSV columns
+- no user, membership or member session created, no access to workspace APIs, and sessions per workspace
+- two-hour expiry, server-side sign-out, refused domains, unverified email, missing subject, and SSO disabled failing closed
+- a respondent flow unable to complete a member sign-in
+
+Turning off submit-time enforcement, or routing the respondent callback through the member path, fails 3 of 5 tests each. A headless-Chrome journey covered:
+- requiring sign-in from Settings
+- a fresh browser seeing no questions while another public form stays open
+- signing in through a mock provider page and returning with prefill and layout
+- the respondent never appearing among workspace members
+- expiry before submit storing nothing, then answers restored after signing in again and the response submitted
+- the verified column and detail in Responses
+- sign-out
+- a refused identity explained on the form
+
+There was no overflow at 320/375/768/1280 px. **Not verified:** a real identity provider, PostgreSQL in CI until it runs on this commit, and a screen reader.

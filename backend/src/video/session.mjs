@@ -148,9 +148,11 @@ function sessionView(app, context) {
 function attachOffer(app, context, body) {
   const { room, actor } = requireHost(context);
   const mode = MODES.includes(body.mode) ? body.mode : fail(400, 'validation_failed', 'Choose when attendees see the form.', { field: 'mode' });
-  const form = typeof body.form_id === 'string' && app.db.get('SELECT id, published_version FROM forms WHERE id = ? AND workspace_id = ?', body.form_id, room.workspace_id);
+  const form = typeof body.form_id === 'string' && app.db.get('SELECT id, published_version, access FROM forms WHERE id = ? AND workspace_id = ?', body.form_id, room.workspace_id);
   if (!form) fail(400, 'validation_failed', 'Choose a form from this workspace.', { field: 'form_id' });
   if (form.published_version == null) fail(400, 'validation_failed', 'Publish this form before offering it in a meeting.', { field: 'form_id' });
+  // Attendees answer in the room with a meeting ticket, not a respondent sign-in (docs/FORMS.md, "Respondent sign-in").
+  if (form.access === 'signin') fail(400, 'validation_failed', 'This form requires respondents to sign in, which is not available inside meetings yet. Choose a form anyone with the link can answer.', { field: 'form_id' });
   return app.db.transaction(() => {
     const now = app.now();
     const active = app.db.get("SELECT id, form_id, mode FROM video_session_offers WHERE room_id = ? AND status = 'active'", room.id);

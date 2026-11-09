@@ -19,7 +19,8 @@ import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
 import { listEnquiries, followupsForItems } from './enquiries.mjs';
 import { getOnboarding, updateOnboarding } from './onboarding.mjs';
 import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './platform/oauth.mjs';
-import { finishSso, getSsoConfig, saveSsoConfig, ssoWorkspaceFor, startSso } from './platform/sso.mjs';
+import { finishRespondentSso, finishSso, getSsoConfig, isRespondentCallback, saveSsoConfig, ssoWorkspaceFor, startRespondentSso, startSso } from './platform/sso.mjs';
+import { createRespondentSession, endRespondentSession, safeReturnSearch, setFormAccess } from './forms/respondents.mjs';
 import { handleMcp } from './platform/mcp.mjs';
 import { chat, createRecap, createTranscript, deleteTranscript, getTranscript, handleInboundEmail, listTranscripts, meetingPrep, publicRecap, shareRecap, unshareRecap } from './ai/service.mjs';
 import { timingSafeEqual } from 'node:crypto';
@@ -237,6 +238,16 @@ export function createApi(app) {
     return { redirect: url };
   }, { public: true });
   get('/api/auth/sso/callback', async ctx => {
+    // A respondent sign-in started from a form returns to that form with a respondent session only.
+    if (isRespondentCallback(app, ctx.request, ctx.query)) {
+      const result = await finishRespondentSso(app, ctx.request, ctx.query);
+      ctx.setCookie(result.clear);
+      const back = slug => `/f/${encodeURIComponent(slug)}`;
+      if (!result.ok) return { redirect: result.slug ? `${back(result.slug)}${result.search || '?'}${result.search ? '&' : ''}signin_error=${encodeURIComponent(result.message.slice(0, 160))}` : '/' };
+      try { ctx.setCookie(createRespondentSession(app, result.workspaceId, result.identity)); }
+      catch (error) { return { redirect: `${back(result.slug)}?signin_error=${encodeURIComponent(error.message.slice(0, 160))}` }; }
+      return { redirect: back(result.slug) + result.search };
+    }
     try {
       const { cookies } = await finishSso(app, ctx.request, ctx.query);
       cookies.forEach(ctx.setCookie);
@@ -290,6 +301,7 @@ export function createApi(app) {
   get('/api/workspaces/:ws/forms/:id', ctx => getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   patch('/api/workspaces/:ws/forms/:id', async ctx => saveDraft(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
+  put('/api/workspaces/:ws/forms/:id/access', async ctx => setFormAccess(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   put('/api/workspaces/:ws/forms/:id/routing', async ctx => saveRouting(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   post('/api/workspaces/:ws/forms/:id/publish', async ctx => publishForm(app, member(ctx, 'forms.manage').workspace.id, ctx.user.id, ctx.params.id, await ctx.json().catch(() => ({}))));
   post('/api/workspaces/:ws/forms/:id/publish-check', async ctx => checkFormPublish(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
@@ -320,15 +332,33 @@ export function createApi(app) {
   get('/api/workspaces/:ws/form-assets/:id', ctx => workspaceAsset(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/public/form-assets/:id', ctx => { limit(ctx, 'manage', 600); return publicAsset(app, ctx.params.id); }, { public: true });
   get('/api/public/forms/:slug', ctx => {
-    const form = publishedForm(app, ctx.params.slug);
+    const form = publishedForm(app, ctx.params.slug, ctx.request);
     const state = availability(app, form.workspace_id);
-    return { slug: form.slug, version: form.published_version, definition: publicDefinition(form.definition), workspace_name: form.workspace_name, availability: state, accepting: state === 'open' };
+    return { slug: form.slug, version: form.published_version, definition: publicDefinition(form.definition), workspace_name: form.workspace_name, availability: state, accepting: state === 'open',
+      ...(form.respondent ? { respondent: { email: form.respondent.email, name: form.respondent.name } } : {}) };
   }, { public: true });
+  // Respondent sign-in for forms that require it: through the workspace's identity provider, returning to
+  // the form. It never creates an account or a membership (forms/respondents.mjs).
+  get('/api/public/forms/:slug/signin', async ctx => {
+    limit(ctx, 'respondent-signin', 20);
+    const slug = ctx.params.slug;
+    const search = safeReturnSearch(ctx.query.get('return'));
+    const form = app.db.get('SELECT workspace_id, access, published_version FROM forms WHERE slug = ?', String(slug));
+    if (!form || form.published_version == null || form.access !== 'signin') return { redirect: `/f/${encodeURIComponent(slug)}${search}` };
+    try {
+      const { url, cookie } = await startRespondentSso(app, form.workspace_id, slug, search);
+      ctx.setCookie(cookie);
+      return { redirect: url };
+    } catch (error) {
+      return { redirect: `/f/${encodeURIComponent(slug)}?signin_error=${encodeURIComponent(error.message.slice(0, 160))}` };
+    }
+  }, { public: true });
+  post('/api/public/forms/:slug/signout', ctx => { ctx.setCookie(endRespondentSession(app, ctx.request)); return { status: 204 }; }, { public: true });
   // Opaque booking handoff from an accepted response: returns only what the booking page may pre-fill.
   get('/api/public/form-handoffs/:token', ctx => { limit(ctx, 'manage', 60); return { status: 200, body: handoffDetails(app, ctx.params.token) }; }, { public: true });
   post('/api/public/forms/:slug/responses', async ctx => {
     limit(ctx, 'responses', 30);
-    const result = submitResponse(app, ctx.params.slug, await ctx.json(256 * 1024));
+    const result = submitResponse(app, ctx.params.slug, await ctx.json(256 * 1024), ctx.request);
     return { status: result.replay ? 200 : 201, body: result };
   }, { public: true });
 

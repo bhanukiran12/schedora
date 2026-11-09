@@ -1285,3 +1285,9 @@ dialog.prefill-dialog h2 { margin: 0; font-size: 20px; }
 .prefill-preview { margin-top: 14px; padding: 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
 .prefill-preview h3 { margin: 0 0 4px; font-size: 16px; }
 @media (max-width: 480px) { dialog.prefill-dialog { padding: 16px; } .prefill-output { position: static; } }
+/* Forms: respondent sign-in */
+.respondent-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0 auto 10px; font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.respondent-bar strong { color: var(--ink); }
+.access-card { margin-top: 16px; }
+.access-card fieldset { border: 0; padding: 0; margin: 8px 0; }
+.access-card .check:has(input:disabled) { opacity: .6; cursor: not-allowed; }

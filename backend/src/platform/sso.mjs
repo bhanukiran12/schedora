@@ -102,12 +102,9 @@ async function verifyIdToken(app, metadata, config, idToken, nonce) {
   return claims;
 }
 
-export async function finishSso(app, request, query) {
-  const raw = parseCookies(request.headers.cookie)[FLOW_COOKIE];
-  if (!raw) fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
-  let flow;
-  try { flow = decryptJson(app.config, raw); } catch { fail(400, 'invalid_state', 'Sign-in session expired. Try again.'); }
-  if (flow.exp < app.now() || flow.state !== query.get('state')) fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+// The code exchange and ID-token checks shared by member sign-in and respondent sign-in. Returns the verified
+// claims and email only; what a sign-in grants is decided by the caller.
+async function verifiedSignIn(app, flow, query) {
   if (query.get('error')) fail(401, 'sso_denied', 'The identity provider did not approve the sign-in.');
   const config = app.db.get('SELECT * FROM sso_configs WHERE workspace_id = ? AND enabled = 1', flow.ws);
   if (!config) fail(404, 'not_found', 'Single sign-on is not set up for this workspace.');
@@ -125,6 +122,23 @@ export async function finishSso(app, request, query) {
   const email = String(claims.email || '').toLowerCase();
   if (!email || claims.email_verified === false) fail(403, 'sso_failed', 'The identity provider did not share a verified email address.');
   if (email.split('@')[1] !== config.email_domain) fail(403, 'sso_failed', `Only @${config.email_domain} accounts can sign in here.`);
+  return { claims, email, issuer: claims.iss || config.issuer };
+}
+
+function readFlow(app, request, query, cookieName) {
+  const raw = parseCookies(request.headers.cookie)[cookieName];
+  if (!raw) fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+  let flow;
+  try { flow = decryptJson(app.config, raw); } catch { fail(400, 'invalid_state', 'Sign-in session expired. Try again.'); }
+  if (flow.exp < app.now() || flow.state !== query.get('state')) fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+  return flow;
+}
+
+export async function finishSso(app, request, query) {
+  const flow = readFlow(app, request, query, FLOW_COOKIE);
+  if (flow.purpose === 'respondent') fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+  const { claims, email } = await verifiedSignIn(app, flow, query);
+  const config = app.db.get('SELECT default_role FROM sso_configs WHERE workspace_id = ?', flow.ws);
   let user = app.db.get('SELECT id FROM users WHERE email = ?', email);
   if (!user) {
     // SSO-only accounts get an unusable random password.
@@ -134,4 +148,46 @@ export async function finishSso(app, request, query) {
   app.db.run('INSERT OR IGNORE INTO memberships (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)', flow.ws, user.id, config.default_role, app.now());
   const session = createSession(app, user.id);
   return { cookies: [session.cookie, `${FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0${flowCookieScope(app)}`], workspaceId: flow.ws };
+}
+
+// ---- Respondent sign-in (docs/FORMS.md, "Respondent sign-in") ----
+// A form that requires sign-in sends respondents through the workspace's own identity provider, with the
+// same redirect URI, so nothing new has to be registered there. It has its own flow cookie and it never
+// creates a user, a membership or a member session: the result is only a verified identity for answering
+// that workspace's forms (forms/respondents.mjs).
+export const RESPONDENT_FLOW_COOKIE = 'schedora_sso_respondent';
+
+/** Whether this callback belongs to a respondent sign-in started from a form. */
+export function isRespondentCallback(app, request, query) {
+  const raw = parseCookies(request.headers.cookie)[RESPONDENT_FLOW_COOKIE];
+  if (!raw) return false;
+  try { const flow = decryptJson(app.config, raw); return flow.purpose === 'respondent' && flow.state === query.get('state'); } catch { return false; }
+}
+
+export async function startRespondentSso(app, workspaceId, slug, search = '') {
+  const config = app.db.get('SELECT * FROM sso_configs WHERE workspace_id = ? AND enabled = 1', workspaceId);
+  if (!config) fail(404, 'signin_unavailable', 'Sign-in is not available for this form right now.');
+  const metadata = await discover(app, config.issuer);
+  const verifier = randomBytes(32).toString('base64url');
+  const flow = { purpose: 'respondent', ws: workspaceId, slug, search, state: newToken(16), nonce: newToken(16), verifier, exp: app.now() + 10 * 60000 };
+  const params = new URLSearchParams({
+    client_id: config.client_id, response_type: 'code', scope: 'openid email profile', redirect_uri: redirectUri(app),
+    state: flow.state, nonce: flow.nonce, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', prompt: 'select_account'
+  });
+  const cookie = `${RESPONDENT_FLOW_COOKIE}=${encodeURIComponent(encryptJson(app.config, flow))}; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=600${flowCookieScope(app)}`;
+  return { url: `${metadata.authorization_endpoint}?${params}`, cookie };
+}
+
+/** Verifies a respondent sign-in. Returns the identity and where to send the person back; grants nothing else. */
+export async function finishRespondentSso(app, request, query) {
+  const clear = `${RESPONDENT_FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0${flowCookieScope(app)}`;
+  let flow = null;
+  try {
+    flow = readFlow(app, request, query, RESPONDENT_FLOW_COOKIE);
+    if (flow.purpose !== 'respondent') fail(400, 'invalid_state', 'Sign-in session expired. Try again.');
+    const { claims, email, issuer } = await verifiedSignIn(app, flow, query);
+    return { ok: true, clear, workspaceId: flow.ws, slug: flow.slug, search: flow.search || '', identity: { issuer, subject: String(claims.sub || ''), email, name: String(claims.name || '').slice(0, 100) || null } };
+  } catch (error) {
+    return { ok: false, clear, slug: flow?.slug || null, search: flow?.search || '', message: error.message };
+  }
 }

@@ -230,7 +230,7 @@ async function upgradeSection() {
   await freshDatabase('rh_fresh');
   await startServer(newBackend, newFrontend, 'rh_fresh');
   const freshMigrations = (await q('rh_fresh', 'SELECT name FROM schema_migrations ORDER BY name')).map(row => row.name);
-  check(S, 'fresh database: postgres_v13 to postgres_v16 recorded', ['postgres_v13_form_assets', 'postgres_v14_session_offers', 'postgres_v15_form_themes', 'postgres_v16_response_attribution'].every(name => freshMigrations.includes(name)), freshMigrations.join());
+  check(S, 'fresh database: postgres_v13 to postgres_v17 recorded', ['postgres_v13_form_assets', 'postgres_v14_session_offers', 'postgres_v15_form_themes', 'postgres_v16_response_attribution', 'postgres_v17_respondent_signin'].every(name => freshMigrations.includes(name)), freshMigrations.join());
   const fresh = apiClient();
   const account = await signUp(fresh);
   const freshForm = await published(fresh, account.forms, typedForm('Fresh form'));
@@ -266,7 +266,8 @@ async function upgradeSection() {
   await startServer(newBackend, newFrontend, 'rh_upgrade');
   const after = (await q('rh_upgrade', 'SELECT name FROM schema_migrations ORDER BY name')).map(row => row.name);
   const added = after.filter(name => !oldMigrations.includes(name));
-  check(S, 'upgrade: applies exactly the four new steps', added.join() === 'postgres_v13_form_assets,postgres_v14_session_offers,postgres_v15_form_themes,postgres_v16_response_attribution', added.join());
+  check(S, 'upgrade: applies exactly the five new steps', added.join() === 'postgres_v13_form_assets,postgres_v14_session_offers,postgres_v15_form_themes,postgres_v16_response_attribution,postgres_v17_respondent_signin', added.join());
+  check(S, 'upgrade: every existing form stays public and no response gains an identity', Number((await q('rh_upgrade', "SELECT COUNT(*) AS count FROM forms WHERE access <> 'public'"))[0].count) === 0 && Number((await q('rh_upgrade', 'SELECT COUNT(*) AS count FROM responses WHERE respondent IS NOT NULL'))[0].count) === 0);
   check(S, 'upgrade: forms, published versions and responses are byte for byte unchanged', (await snapshot()) === before);
   check(S, 'upgrade: existing responses have no attribution', Number((await q('rh_upgrade', 'SELECT COUNT(*) AS count FROM responses WHERE attribution IS NOT NULL'))[0].count) === 0);
   await stopServer();

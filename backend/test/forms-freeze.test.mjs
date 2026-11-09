@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, publicConfig } from '../src/config.mjs';
 import { setup, signUp } from './helpers.mjs';
 
-const FROZEN = ['POST /forms', 'POST /forms/import', 'PATCH /forms/:id', 'DELETE /forms/:id', 'PUT /forms/:id/routing', 'POST /forms/:id/publish', 'POST /forms/:id/unpublish', 'POST /form-themes', 'PATCH /form-themes/:id', 'DELETE /form-themes/:id', 'POST /form-assets'];
+const FROZEN = ['POST /forms', 'POST /forms/import', 'PUT /forms/:id/access', 'PATCH /forms/:id', 'DELETE /forms/:id', 'PUT /forms/:id/routing', 'POST /forms/:id/publish', 'POST /forms/:id/unpublish', 'POST /form-themes', 'PATCH /form-themes/:id', 'DELETE /form-themes/:id', 'POST /form-assets'];
 // Not authoring: checking changes nothing, respondents keep responding, and removing a response is a data request.
-const ALLOWED = ['POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses'];
+const ALLOWED = ['POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses', 'POST /public/forms/:slug/signout'];
 const definition = (title = 'Frozen') => ({ title, description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] });
 
 function writeRoutes() {

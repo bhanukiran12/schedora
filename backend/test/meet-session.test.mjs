@@ -103,6 +103,12 @@ test('session offer: host attaches a published form; attendees and late joiners 
     assert.equal((await host.post(`${path}/offer`, { form_id: draft.id, mode: 'auto' })).status, 400, 'drafts cannot be offered');
     assert.equal((await host.post(`${path}/offer`, { form_id: foreign.id, mode: 'auto' })).status, 400, 'another workspace form cannot be offered');
     assert.equal((await host.post(`${path}/offer`, { form_id: brief.id, mode: 'sometimes' })).status, 400);
+    // A form that requires respondent sign-in cannot be offered: attendees answer with a meeting ticket instead.
+    const signinForm = await form('Sign-in only');
+    env.app.db.run("UPDATE forms SET access = 'signin' WHERE id = ?", signinForm.id);
+    const refused = await host.post(`${path}/offer`, { form_id: signinForm.id, mode: 'auto' });
+    assert.equal(refused.status, 400);
+    assert.match(refused.body.error.message, /requires respondents to sign in/);
 
     const early = await guest('Early guest');
     const attached = await host.post(`${path}/offer`, { form_id: brief.id, mode: 'auto' });

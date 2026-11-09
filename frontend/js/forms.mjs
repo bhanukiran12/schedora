@@ -365,14 +365,26 @@ const submissionStore = {
   clear(slug) { try { sessionStorage.removeItem(this.key(slug)); } catch { /* nothing to clear */ } }
 };
 
+const pendingKey = slug => `schedora.pending-answers.${slug}`;
 const unavailablePage = (title, body) => html`<div class="container page"><div class="card public-form-card"><div class="public-form"><h1>${title}</h1>${body}</div></div></div>`;
 
 export async function publicForm(ctx) {
   mount(ctx.main, html`<div class="container page">${loading('Loading form…')}</div>`);
   const slug = ctx.params[0];
   let form;
+  const signinUrl = `/api/public/forms/${encodeURIComponent(slug)}/signin?return=${encodeURIComponent(location.search)}`;
   try { form = await api('GET', `/api/public/forms/${slug}`); }
   catch (error) {
+    if (error.code === 'signin_required') {
+      setTitle('Sign in to answer · Forms by Schedora');
+      const problem = ctx.query.get('signin_error');
+      const owner = error.details.workspace_name;
+      return mount(ctx.main, unavailablePage('Sign in to answer this form', html`<p><strong>${owner || 'The form owner'}</strong> asks respondents to sign in with their organisation account before answering.</p>
+        ${problem ? notice('bad', html`<p><strong>Sign-in did not complete.</strong> ${problem}</p>`) : ''}
+        <p class="hint">Signing in confirms who you are for this form only. It does not create a Schedora account or give you access to ${owner ? `${owner}'s` : 'their'} workspace. Your sign-in lasts up to two hours on this device.</p>
+        <p><a class="btn btn-primary" id="respondent-signin" data-external href="${signinUrl}">Sign in to continue</a></p>`));
+    }
+    if (error.code === 'signin_unavailable') return mount(ctx.main, unavailablePage('Sign-in is not available', html`<p>${error.message}</p>`));
     if (error.status === 404) return mount(ctx.main, unavailablePage('This form is not available', html`<p>The link may be mistyped, or the form has not been published.</p>`));
     if (error.status === 410) return mount(ctx.main, unavailablePage('This form is closed', html`<p>It is no longer accepting responses. Responses sent before it closed are not affected.</p>`));
     return mount(ctx.main, unavailablePage('We could not load this form', html`${notice('bad', html`<p>${error.status ? 'The form service had a problem.' : 'Schedora could not be reached.'} Nothing has been submitted from this page.</p>`)}<a class="btn" data-external href="${location.pathname + location.search}">Try again</a>`));
@@ -380,7 +392,11 @@ export async function publicForm(ctx) {
   if (!ctx.alive()) return;
   setTitle(form.definition.title + ' · Forms by Schedora');
   const mode = ['classic', 'conversational'].includes(ctx.query.get('mode')) ? ctx.query.get('mode') : form.definition.presentation;
-  mount(ctx.main, html`<div class="form-page"><div class="container page"><div class="card public-form-card" id="form-root"></div><p class="muted public-form">${form.workspace_name} · Powered by Forms by Schedora</p></div></div>`);
+  mount(ctx.main, html`<div class="form-page"><div class="container page">${form.respondent ? html`<p class="respondent-bar public-form">Signed in as <strong>${form.respondent.email}</strong> · <button class="btn btn-link btn-small" type="button" id="respondent-signout">Sign out</button></p>` : ''}<div class="card public-form-card" id="form-root"></div><p class="muted public-form">${form.workspace_name} · Powered by Forms by Schedora</p></div></div>`);
+  $('#respondent-signout')?.addEventListener('click', async () => {
+    try { await api('POST', `/api/public/forms/${slug}/signout`); } catch { /* the reload shows the result either way */ }
+    location.reload();
+  });
   applyTheme($('.form-page', ctx.main), form.definition.theme);
   const root = $('#form-root');
   if (form.availability === 'capacity_reached') return mount(root, html`<div class="public-form"><h1>${form.definition.title}</h1>${notice('warn', html`<p>This form has reached its response limit for now and is not accepting new responses. Please try again later or contact ${form.workspace_name}.</p>`)}</div>`);
@@ -388,7 +404,10 @@ export async function publicForm(ctx) {
 
   // Starting answers from a prefilled link: only questions this version allows, only valid values.
   const { answers: prefill } = prefillAnswers(form.definition, ctx.query);
-  respondTo(root, form, { mode, urlParams: ctx.query, prefill });
+  // Answers kept on this tab when a sign-in expired at submit, restored once after signing in again.
+  let restored = null;
+  try { restored = JSON.parse(sessionStorage.getItem(pendingKey(slug)) || 'null'); sessionStorage.removeItem(pendingKey(slug)); } catch { restored = null; }
+  respondTo(root, form, { mode, urlParams: ctx.query, prefill, restored: restored && typeof restored === 'object' && !Array.isArray(restored) ? restored : null, signinUrl });
 }
 
 /**
@@ -396,7 +415,7 @@ export async function publicForm(ctx) {
  * and by meeting rooms (docs/MEET_SESSION_OFFERS.md), which pass a session ticket in `extra`, their
  * own storage key, link-only videos and `onAccepted`, called only after the server confirms.
  */
-export function respondTo(root, form, { mode = form.definition.presentation, storeKey = form.slug, extra = {}, embedVideo = true, onAccepted, pageTitle = true, urlParams = null, prefill = {} } = {}) {
+export function respondTo(root, form, { mode = form.definition.presentation, storeKey = form.slug, extra = {}, embedVideo = true, onAccepted, pageTitle = true, urlParams = null, prefill = {}, restored = null, signinUrl = null } = {}) {
   const slug = form.slug;
   let submissionId = submissionStore.get(storeKey);
   // An id kept from before a reload may belong to an attempt that reached the server.
@@ -411,6 +430,10 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
       return { retry: true, message: html`<p><strong>We could not confirm that your response was received.</strong> Your answers are still here. Submit again: if the first attempt got through, it will not be counted twice.</p>` };
     }
     if (error.code === 'form_version_changed') { reloadVersion(); return { replaced: true }; }
+    if (error.code === 'signin_required' && signinUrl) {
+      try { sessionStorage.setItem(pendingKey(slug), JSON.stringify(start.answers())); } catch { /* answers stay on the page */ }
+      return { message: html`<p><strong>Your sign-in expired, so nothing was submitted.</strong> Sign in again and your answers on this tab come back.</p><p><a class="btn btn-small" data-external href="${signinUrl}">Sign in again</a></p>` };
+    }
     if (error.code === 'rate_limited') return { retry: true, message: html`<p>Too many attempts from this connection. Wait a minute, then submit again. ${uncertain ? 'We still cannot confirm whether an earlier attempt was received; submitting again will not create a duplicate.' : 'Nothing has been saved yet.'}</p>` };
     const known = { form_closed: 'This form stopped accepting responses before your answers arrived.', quota_exceeded: 'This form has reached its response limit for now.', entitlement_required: 'This form is not accepting responses right now.',
       session_already_submitted: 'You already answered this form in this meeting.', not_in_meeting: 'You are no longer in this meeting.', session_invalid: 'This meeting form is no longer valid. Close it and open it again from the meeting card.' }[error.code];
@@ -447,8 +470,8 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
     });
     return { answers: () => latest };
   }
-  let start = Object.keys(prefill).length
-    ? begin(prefill, notice('info', html`<p>Some answers are already filled in from your link. Check them before you submit; you can change any of them.</p>`))
+  let start = restored ? begin({ ...prefill, ...restored }, notice('info', html`<p>Your answers from before you signed in again are back. Check them, then submit.</p>`))
+    : Object.keys(prefill).length ? begin(prefill, notice('info', html`<p>Some answers are already filled in from your link. Check them before you submit; you can change any of them.</p>`))
     : begin();
 
   function showReceipt(result) {
@@ -686,7 +709,7 @@ export async function builder(ctx) {
       <aside class="workflow-editor" id="workflow-editor" aria-label="Jump rules"></aside>
       <section class="url-params" id="url-params" aria-labelledby="url-params-heading"></section>
     </div>
-    <div class="builder-surface surface-settings"><div id="settings"></div><div id="routing"></div></div>
+    <div class="builder-surface surface-settings"><div id="settings"></div><div id="access"></div><div id="routing"></div></div>
     <div class="builder-surface surface-share">
       <p class="hint" id="save-hint">Changes are kept on this page until you select Save draft. The live form changes only when you publish.</p>
       <section class="card card-plain share-panel" id="share-panel" aria-labelledby="share-heading"></section>
@@ -736,7 +759,7 @@ export async function builder(ctx) {
     const attribute = value => value.replace(/[&"<>]/g, char => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[char]);
     const embed = `<iframe src="${url}?embed=1" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0"></iframe>`;
     mount($('#share-panel'), html`${heading}
-      <p class="hint">Anyone with this link can open the live form and respond without signing in.</p>
+      <p class="hint">${form.access === 'signin' ? `Respondents must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they see any question. Change this under Settings → Who can respond.` : 'Anyone with this link can open the live form and respond without signing in.'}</p>
       <label for="share-link">Respondent link</label>
       <div class="share-row"><input id="share-link" readonly value="${url}"><button class="btn btn-primary btn-small" type="button" data-copy-target="share-link">Copy link</button><a class="btn btn-small" id="open-live" href="${url}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a></div>
       <p class="copy-status" id="share-status" role="status"></p>
@@ -772,6 +795,20 @@ export async function builder(ctx) {
       <label class="check"><input type="radio" name="presentation" value="classic" data-setting="presentation" ${draft.presentation === 'classic' ? raw('checked') : ''}> Classic: questions grouped into pages</label>
       <label class="check"><input type="radio" name="presentation" value="conversational" data-setting="presentation" ${draft.presentation === 'conversational' ? raw('checked') : ''}> Conversational: one question at a time</label></fieldset>
     <label for="f-submit">Submit button text</label><input id="f-submit" data-setting="submit_label" maxlength="40" value="${draft.submit_label || 'Submit'}"></div></div></div>`);
+
+  // Who can respond (docs/FORMS.md, "Respondent sign-in"). It belongs to the form, not the draft, so it applies
+  // to the live form at once and is confirmed first.
+  const renderAccess = () => {
+    const signin = form.signin;
+    const protectedForm = form.access === 'signin';
+    mount($('#access'), html`<div class="card card-plain access-card"><h2 id="access-heading" tabindex="-1">Who can respond</h2>
+      <fieldset><legend class="visually-hidden">Who can respond</legend>
+        <label class="check"><input type="radio" name="form-access" value="public" ${protectedForm ? '' : raw('checked')}> Anyone with the link</label>
+        <label class="check"><input type="radio" name="form-access" value="signin" ${protectedForm ? raw('checked') : ''} ${signin || protectedForm ? '' : raw('disabled')} aria-describedby="access-signin-hint"> Only people who sign in${signin ? html` with <strong>${signin.issuer_host}</strong> (@${signin.email_domain} accounts)` : ''}</label></fieldset>
+      ${signin ? '' : notice('info', html`<p id="access-signin-hint">Sign-in uses this workspace's single sign-on, which is not set up. A workspace owner can connect your identity provider in <a href="/account">Account &amp; settings</a>.</p>`)}
+      <p class="hint">Changes apply to the live form straight away, without publishing. People who sign in are not added to this workspace and cannot see or edit anything in it. Their verified email is stored with each response, separate from their answers, and prefilled links never stand in for it.</p>
+      <p class="copy-status" id="access-status" role="status"></p></div>`);
+  };
 
   // ---- Media editor: one image or one video per question, and pictures on choice options ----
   const mediaEditor = (field, index) => {
@@ -1305,12 +1342,25 @@ export async function builder(ctx) {
   const renderAll = () => {
     $('#builder-title').textContent = draft.title || 'Untitled form';
     knownConflicts = new Set(conflictMessages());
-    renderStatus(); renderShare(); readiness?.check(); renderSettings(); renderFields();
+    renderStatus(); renderShare(); readiness?.check(); renderSettings(); renderAccess(); renderFields();
     renderPreviewParams();
     $('#preview-mode').value = draft.presentation;
     renderPreview();
   };
 
+  $('#access').addEventListener('change', async event => {
+    if (event.target.name !== 'form-access') return;
+    const access = event.target.value;
+    const ok = await ask(access === 'signin'
+      ? { title: 'Require sign-in to respond?', body: `From now on, people must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they can see the questions. Anyone using the link without signing in is asked to sign in first. This applies to the live form immediately.`, confirm: 'Require sign-in' }
+      : { title: 'Let anyone with the link respond?', body: 'People will no longer need to sign in, and new responses will have no verified email. This applies to the live form immediately.', confirm: 'Allow anyone' });
+    if (!ok) return renderAccess();
+    try {
+      form = await api('PUT', wsPath(`/forms/${form.id}/access`), { access });
+      renderAccess(); renderShare();
+      $('#access-status').textContent = access === 'signin' ? 'Saved. Respondents now sign in before answering.' : 'Saved. Anyone with the link can respond.';
+    } catch (error) { renderAccess(); $('#access-status').textContent = `Not changed. ${error.message}`; }
+  });
   $('#settings').addEventListener('input', event => {
     const key = event.target.dataset.setting;
     if (!key) return;
@@ -2139,6 +2189,8 @@ export async function responses(ctx) {
   const cell = (row, column) => answerText(fieldIn(row, column.id) || column, row.answers[column.id]);
   const shortLabel = label => label.replace(/\{\{.*?\}\}/g, '…').slice(0, 60);
   // Attribution comes from the link and is shown apart from answers, labelled as such.
+  // A verified sign-in is identity from the workspace's provider, shown apart from answers and attribution.
+  const verifiedColumn = () => rows.some(row => row.respondent);
   const attributionKeys = () => attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), rows);
 
   const draw = () => {
@@ -2149,10 +2201,10 @@ export async function responses(ctx) {
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
         <span class="muted" role="status">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. Follow-ups cover every loaded response.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
       ${shown.length ? html`<div class="table-wrap"><table><caption class="visually-hidden">Responses to ${form.draft.title}</caption>
-      <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
+      <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}${verifiedColumn() ? html`<th scope="col" data-verified-column>Verified sign-in</th>` : ''}</tr></thead>
       <tbody>${shown.map(row => html`<tr><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
           <button class="btn btn-small" data-view-response="${row.id}">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
-        <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}</tr>`)}</tbody></table></div>
+        <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}${verifiedColumn() ? html`<td class="answer-cell">${row.respondent?.email ?? html`<span class="muted">Not signed in</span>`}</td>` : ''}</tr>`)}</tbody></table></div>
       `
       : html`<div class="empty"><h2>Nothing needs attention</h2><p>None of the loaded responses has a booking problem, a failed follow-up or an open follow-up task.</p></div>`}
       ${more ? html`<div class="actions"><button class="btn" id="more">Load older responses</button></div>` : ''}`
@@ -2173,6 +2225,8 @@ export async function responses(ctx) {
       <p class="muted">Receipt ${row.id.replace(/-/g, '').slice(0, 8).toUpperCase()} · Answered version ${row.form_version}${form.published_version && form.published_version !== row.form_version ? ` (live version is ${form.published_version})` : ''}</p>
       ${context ? trailList(trailOf(row)) : html`<p class="muted" role="status">Checking what happened next…</p>`}
       <dl class="response-answers">${[...fields, ...extra].map(field => html`<dt>${pipe(field.label, definition || { fields: [] }, row.answers)}</dt><dd>${answerText(field, row.answers[field.id]) || html`<span class="muted">Not answered or not shown</span>`}</dd>`)}</dl>
+      ${row.respondent ? html`<h3>Verified sign-in</h3><p class="hint">Confirmed by your workspace's identity provider when this response was submitted. Unlike answers and link values, the respondent could not type or change it.</p>
+        <dl class="response-answers" data-verified><dt>Email</dt><dd>${row.respondent.email}</dd>${row.respondent.name ? html`<dt>Name</dt><dd>${row.respondent.name}</dd>` : ''}<dt>Account ID</dt><dd><code>${row.respondent.subject}</code></dd><dt>Signed in</dt><dd>${fmtDateTime(row.respondent.verified_at)}</dd></dl>` : ''}
       ${row.attribution ? html`<h3>Attribution</h3><p class="hint">From the link this person used. Anyone can edit a link, so treat these as unverified.</p><dl class="response-answers" data-attribution>${Object.entries(row.attribution).map(([key, value]) => html`<dt>${key}</dt><dd>${value}</dd>`)}</dl>` : ''}
       ${isAdmin() ? html`<div class="actions"><button class="btn btn-danger btn-small" data-delete="${row.id}">Delete this response</button></div>` : ''}</section>`);
     if (focus) $('#detail-title').focus();
