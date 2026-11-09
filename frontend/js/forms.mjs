@@ -376,6 +376,17 @@ export async function publicForm(ctx) {
   const signinUrl = `/api/public/forms/${encodeURIComponent(slug)}/signin?return=${encodeURIComponent(location.search)}`;
   try { form = await api('GET', `/api/public/forms/${slug}`); }
   catch (error) {
+    // Inside another site's frame, sign-in cannot work: identity providers refuse to load in frames and the
+    // respondent cookie is not sent there. Say so, and offer the same form in a tab of its own.
+    if (error.code === 'signin_required' && document.body.dataset.embed === '1') {
+      setTitle('Open this form in a new tab · Forms by Schedora');
+      const own = new URLSearchParams(location.search);
+      own.delete('embed');
+      const owner = error.details.workspace_name;
+      return mount(ctx.main, unavailablePage('Open this form in a new tab', html`<p><strong>${owner || 'The form owner'}</strong> asks respondents to sign in with their organisation account, and that can't happen inside another website.</p>
+        <p><a class="btn btn-primary" id="respondent-open-tab" data-external href="/f/${encodeURIComponent(slug)}${own.size ? '?' + own : ''}" target="_blank" rel="noopener">Open the form in a new tab</a></p>
+        <p class="hint">You sign in there, then answer. Nothing is sent from this page.</p>`));
+    }
     if (error.code === 'signin_required') {
       setTitle('Sign in to answer · Forms by Schedora');
       const problem = ctx.query.get('signin_error');
@@ -495,7 +506,7 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
     const endingTitle = ending && pipe(ending.title, form.definition, answered);
     const offered = booking && next.status === 'offered';
     mount(root, html`<div role="status" class="public-form receipt"><h1 tabindex="-1">${offered ? 'Response received — choose a time' : endingTitle || 'Response received'}</h1>
-      ${offered && endingTitle ? html`<p><strong>${endingTitle}</strong></p>` : ''}${ending?.message ? html`<p>${pipe(ending.message, form.definition, answered)}</p>` : ''}
+      ${offered && endingTitle ? html`<p><strong>${endingTitle}</strong></p>` : ''}${ending?.message ? html`<p class="ending-message">${pipe(ending.message, form.definition, answered)}</p>` : ''}
       <p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
       <dl class="confirm-facts"><dt>Receipt</dt><dd>${result.reference}</dd><dt>Received</dt><dd>${fmtDateTime(result.created_at)}</dd></dl>
       ${step}</div>`);
@@ -760,7 +771,7 @@ export async function builder(ctx) {
       <div class="actions"><button class="btn" type="button" data-share-publish>${closed ? 'Publish again' : 'Publish form'}</button><button class="btn" type="button" data-share-preview>Preview first</button></div>`);
     const email = `mailto:?subject=${encodeURIComponent(form.draft.title)}&body=${encodeURIComponent(`Please fill in this form: ${url}`)}`;
     const attribute = value => value.replace(/[&"<>]/g, char => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' })[char]);
-    const embed = `<iframe src="${url}?embed=1" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0"></iframe>`;
+    const embedCode = mode => `<iframe src="${url}?embed=1${mode ? '&mode=' + mode : ''}" title="${attribute(form.draft.title)}" width="100%" height="680" style="border:0;max-width:100%"></iframe>`;
     mount($('#share-panel'), html`${heading}
       <p class="hint">${form.access === 'signin' ? `Respondents must sign in with ${form.signin?.issuer_host || 'your identity provider'} before they see any question. Change this under Settings → Who can respond.` : 'Anyone with this link can open the live form and respond without signing in.'}</p>
       <label for="share-link">Respondent link</label>
@@ -771,8 +782,11 @@ export async function builder(ctx) {
       <p class="hint">Email the link opens a new message in your own email app; Schedora does not send it. Copying or sharing does not show that anyone has responded. Accepted responses appear under <a href="/forms/${form.id}/responses">Responses</a>.</p>
       <details class="share-embed"><summary>Conversational link and embed code</summary>
         <label for="share-conv">Conversational link (one question at a time)</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy-target="share-conv">Copy</button></div>
-        <label for="embed">Embed code for your website</label><textarea id="embed" class="embed-code" readonly>${embed}</textarea>
-        <button class="btn btn-small" type="button" data-copy-target="embed">Copy embed code</button></details>
+        ${form.access === 'signin' ? html`<p class="hint" id="embed-signin-note"><strong>No embed code for this form.</strong> It asks respondents to sign in, which can't happen inside another website. An embedded copy would only show a button to open the form in a new tab. Share the link instead.</p>`
+          : html`<label for="embed-mode">Embed layout</label><select id="embed-mode"><option value="">Form default (${form.draft.presentation === 'conversational' ? 'one question at a time' : 'classic'})</option><option value="classic">Classic</option><option value="conversational">One question at a time</option></select>
+        <label for="embed">Embed code for your website</label><textarea id="embed" class="embed-code" readonly>${embedCode('')}</textarea>
+        <p class="hint">The frame is 680 pixels tall and as wide as the space you place it in; longer forms scroll inside it. Links to booking pages and next steps open in the full window.</p>
+        <button class="btn btn-small" type="button" data-copy-target="embed">Copy embed code</button>`}</details>
       <section class="share-prefill" aria-labelledby="prefill-heading"><h3 id="prefill-heading">Prefilled link</h3>
         <p class="hint">Start respondents with answers you already know, such as their programme. They can change them, and a link never proves who someone is. Separate from URL parameters, which record where a response came from.</p>
         <button class="btn btn-small" type="button" data-build-prefill>Build prefilled link</button></section>
@@ -1040,8 +1054,18 @@ export async function builder(ctx) {
         <div class="canvas-tools"><button class="btn btn-icon btn-danger" type="button" data-ending-remove aria-label="Remove ending ${index + 1}" title="Remove ending">${formIcon('trash')}</button></div>
         <div class="canvas-frame"><div class="canvas-body"><label for="et-${index}">Title</label><input id="et-${index}" class="canvas-question" data-ending-prop="title" maxlength="150" value="${ending.title}">
         <label for="em-${index}">Message <span class="muted">(optional)</span></label><textarea id="em-${index}" data-ending-prop="message" maxlength="2000">${ending.message || ''}</textarea>
-        <p class="hint">Earlier answers can be inserted with {{question_key}}. The receipt reference is always shown with it.</p></div></div></section>
-      <aside class="question-settings" data-ending="${index}" aria-label="Ending settings"><div class="inspector-section" ><p class="hint">${index === 0 ? 'This is the default: respondents see it unless a jump chooses another ending.' : 'Respondents see this only when a jump goes to it.'}</p>${index === 0 ? '' : html`<button class="btn btn-small" type="button" data-ending-default>Make default</button>`}</div></aside>`);
+        <p class="hint">Earlier answers can be inserted with {{question_key}}. Line breaks are kept.</p>
+        <div class="ending-fixed" aria-label="Always shown below the ending"><p>Your answers were saved.</p><dl class="confirm-facts"><dt>Receipt</dt><dd>A1B2C3D4</dd><dt>Received</dt><dd>Date and time</dd></dl><p class="hint">Always shown below your ending, with each respondent's own receipt. A routing step, such as choosing a time, follows when one applies.</p></div></div></div></section>
+      <aside class="question-settings" data-ending="${index}" aria-label="Ending settings"><div class="inspector-section"><h3 class="inspector-title">When respondents see it</h3>${endingRoutes(ending, index)}${index === 0 ? '' : html`<button class="btn btn-small" type="button" data-ending-default>Make default</button>`}</div></aside>`);
+  };
+  // Which jumps lead to an ending, in words; the default also closes every path no jump ends early.
+  const endingRoutes = (ending, index) => {
+    const routes = [];
+    draft.fields.forEach((field, fieldIndex) => rulesFor(draft, field.id).forEach((rule, position) => {
+      if (rule.to?.type === 'ending' && rule.to.id === ending.id) routes.push(html`<li><strong>After ${itemName(fieldIndex)}</strong>: ${jumpSentence(rule, draft, position === 0)}</li>`);
+    }));
+    return html`<p class="hint">${index === 0 ? 'The default: shown at the end of the form unless a jump chooses another ending.' : routes.length ? 'Shown only when one of these jumps applies.' : 'No jump leads here yet, so nobody sees it. Add a jump to it in Workflow, or make it the default.'}</p>
+      ${routes.length ? html`<ul class="ending-routes">${routes}</ul>` : ''}`;
   };
   // Workflow: the map of what leads where, and the same jump editor as the inspector beside it, so one
   // set of rules is edited and drawn. Selecting here selects in Content too.
@@ -1990,6 +2014,12 @@ export async function builder(ctx) {
     }
   };
   // Copy reports what actually happened; when the clipboard is unavailable the text is selected instead.
+  // The embed layout only changes the code shown; nothing is saved.
+  $('#share-panel').addEventListener('change', event => {
+    if (event.target.id !== 'embed-mode') return;
+    const code = $('#embed');
+    code.value = code.value.replace(/\?embed=1(&mode=\w+)?/, `?embed=1${event.target.value ? '&mode=' + event.target.value : ''}`);
+  });
   $('#share-panel').addEventListener('click', async event => {
     const button = event.target.closest('button');
     if (!button) return;

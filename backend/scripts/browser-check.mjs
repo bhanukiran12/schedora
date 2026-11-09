@@ -1866,6 +1866,32 @@ try {
     const csv = await evaluate(`fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/forms/${formId}/responses.csv')).then(r => r.text())`);
     if (!csv.includes('A garden redesign') || !csv.includes('"Form version"')) throw new Error('CSV missing answer or version column');
   });
+  await step('embedded forms: no site chrome, and a sign-in-only form refuses inside a frame with a link to open it in a tab', async () => {
+    await open(`/f/${formSlug}?embed=1`, "document.querySelector('form [type=submit]')");
+    if (await evaluate("Boolean(document.querySelector('#site-header')?.offsetHeight || document.querySelector('#site-footer')?.offsetHeight)")) throw new Error('embedded form shows the site header or footer');
+    await layoutCheck('embedded form');
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return { status: r.status, body: await r.json().catch(() => null) }; })()`);
+    const issuer = 'https://idp.browser-check.test';
+    const realProvider = app.fetchProvider;
+    app.fetchProvider = async url => new Response(JSON.stringify(url.endsWith('/.well-known/openid-configuration') ? { issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`, jwks_uri: `${issuer}/jwks` } : { keys: [] }), { headers: { 'Content-Type': 'application/json' } });
+    try {
+      if ((await formApi('PUT', '/sso', { issuer, client_id: 'browser-check', client_secret: 'browser-check-secret', email_domain: 'example.com' })).status !== 200) throw new Error('could not configure SSO');
+      const protectedForm = (await formApi('POST', '/forms', { title: 'Sign-in only check' })).body;
+      await formApi('POST', `/forms/${protectedForm.id}/publish`, {});
+      if ((await formApi('PUT', `/forms/${protectedForm.id}/access`, { access: 'signin' })).status !== 200) throw new Error('could not require sign-in');
+      await open(`/f/${protectedForm.slug}?embed=1&mode=conversational`, "document.querySelector('#respondent-open-tab')");
+      if (await evaluate("Boolean(document.querySelector('#respondent-signin, form [type=submit]'))")) throw new Error('an embedded sign-in-only form offers sign-in or questions inside the frame');
+      if ((await evaluate("document.querySelector('#respondent-open-tab').target + ' ' + document.querySelector('#respondent-open-tab').getAttribute('href')")) !== `_blank /f/${protectedForm.slug}?mode=conversational`) throw new Error('the embedded refusal does not open the same form in a new tab');
+      await layoutCheck('embedded sign-in-only form');
+      await open(`/f/${protectedForm.slug}?mode=conversational`, "document.querySelector('#respondent-signin')");
+      await open(`/forms/${protectedForm.id}`, "document.querySelector('#publish')");
+      await click('#builder-index [data-section="share"]');
+      await waitFor("document.querySelector('#embed-signin-note')", 'no embed code for a sign-in-only form');
+      if (await evaluate("Boolean(document.querySelector('#embed'))")) throw new Error('Share offers embed code for a sign-in-only form');
+      await formApi('DELETE', `/forms/${protectedForm.id}`);
+      app.db.run('DELETE FROM sso_configs WHERE issuer = ?', issuer); // test configuration only; later steps sign in with passwords
+    } finally { app.fetchProvider = realProvider; }
+  });
   await step('route a response to Meet and book through the handoff', async () => {
     await open(`/forms/${formId}`, "document.querySelector('#routing details')");
     await evaluate("document.querySelector('#routing details').open = true");

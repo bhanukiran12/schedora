@@ -869,3 +869,30 @@ There was no overflow at 320, 375, 768 or 1280 px.
 - desktop unchanged, with arrow keys moving through the outline column
 
 There was no overflow at 320, 375, 768 or 1280 px.
+
+## Embeds and endings (9 November 2026, local only)
+
+- **Embed code** (*Share → Conversational link and embed code*). An *Embed layout* choice (form default, Classic, One question at a time) changes the code, which adds `&mode=` when needed. The iframe is `width="100%"`, `max-width:100%` and 680 px tall; longer forms scroll inside it. Inside a frame, the page drops its site header and footer and uses tighter margins. Booking and *Continue* links on the receipt open in the full window (`target="_top"`), as before.
+- **Sign-in-only forms are refused in embeds, clearly.**
+  - **Share:** it shows *No embed code for this form* and explains why.
+  - **An existing embed:** if someone embeds the form anyway, or it becomes sign-in-only after being embedded, the frame never shows a sign-in button or any question. It says *Open this form in a new tab*, explains that sign-in can't happen inside another website, and links to the same form (prefilled answers and `mode` kept, `embed` dropped) in a new tab, where the normal sign-in page appears.
+  - **Meetings:** the meeting refusal from Milestone 3 is unchanged (`attachOffer`, covered by `meet-session.test.mjs`).
+- **Endings.**
+  - **Line breaks:** the receipt keeps the line breaks the author typed in an ending's message.
+  - **Ending canvas:** it shows, greyed, what is always added below the ending: the saved line and a sample receipt. Authors see the whole screen respondents get.
+  - **Inspector:** under *When respondents see it* it lists, in words, every jump that leads to the ending ("After question 39: If Python Proficiency Level is Advanced, go to Advanced Python track"). It also says plainly when nothing leads to an ending, so nobody would see it.
+
+**Evidence (local, headless Chrome):** the browser suite has a new step. It checks an embedded form without site chrome, then an embedded sign-in-only form refusing inside the frame with a new-tab link (`mode` kept). It also checks the same link at top level showing sign-in, and Share showing no embed code for that form.
+
+A scratchpad journey used a host page served from `localhost`, a different site from the form's `127.0.0.1`, so cookies behaved as on a real customer site. It used the Technical Profile Details fixture with two endings and a jump, and covered:
+- embed code per layout
+- no embed code for a sign-in-only form
+- both layouts loading inside frames with no site chrome or overflow
+- the protected frame refusing with the right new-tab link
+- Classic inside the frame: 7 pages answered, ending "Thanks, Embed Student 1" with its line break
+- Conversational inside the frame on a 375 px host page: the frame fits, one question per screen with the button visible, 38 screens answered, and the jump picked "Advanced Python track"
+- both responses stored
+- the protected form's new-tab link showing normal sign-in
+- the ending inspector at phone and desktop widths
+
+There was no overflow at 320, 375, 768 or 1280 px.

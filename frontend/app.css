@@ -439,6 +439,15 @@ pre.preview { white-space: pre-wrap; background: var(--surface-2); border-radius
 }
 .home-connect { margin-top: 40px; }
 body[data-embed] .site-header, body[data-embed] .site-footer, body[data-embed] .cookie-banner { display: none; }
+/* Embedded: the host page provides the margins, so the form starts at the top of the frame. */
+body[data-embed] .page { padding-top: 12px; padding-bottom: 16px; }
+body[data-embed] .container { padding-inline: 12px; }
+.receipt .ending-message { white-space: pre-line; overflow-wrap: anywhere; }
+.ending-fixed { margin-top: 20px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); }
+.ending-fixed .confirm-facts { opacity: .8; }
+.inspector-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.ending-routes { margin: 8px 0 12px; padding-inline-start: 18px; font-size: 13px; }
+.ending-routes li + li { margin-top: 6px; }
 dialog.card { max-width: min(520px, calc(100vw - 32px)); width: 100%; color: var(--ink); }
 dialog::backdrop { background: #0008; }
 .key-input { width: 170px; min-height: 36px; padding: 6px 10px; font-size: 14px; }

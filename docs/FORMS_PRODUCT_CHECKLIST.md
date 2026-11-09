@@ -23,14 +23,14 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
 | Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
 | Builder · Settings (presentation, access, routing) | Form-wide behaviour | — | Browser: sign-in journey | **Who can respond done (M3)** |
-| Builder · Share + readiness | Get the link and the embed code | The embed sits in a disclosure | Browser: prefill journey | **Prefilled links done (M2)**; layout polish M4 |
+| Builder · Share + readiness | Get the link and the embed code | — | Browser: prefill journey; embed code per layout; no embed code for sign-in-only forms | **Done (M2, M4 part 5)** |
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |
 | Preview (builder pane, both layouts) | See what respondents see | Works. Device toggle present. | Browser: classic and conversational render after reopen | Verified in M1 |
 | `/forms/:id/responses` and detail | Scan, filter, inspect, export | — | Server tests (also on PostgreSQL); browser: loading, filtered, no-match, search-error, empty, other-workspace and signed-out states; side panel and phone sheet keep the row; filtered and full CSVs | **Done (M4 part 3)** |
 | `/f/:slug` Classic | Answer and submit | Works. Respondent pages now show only the Forms lockup in the header (M4 part 1). | Browser: 9-error summary, conditional question, Loom description, receipt, sign-in states | Verified in M1 and M3 |
 | `/f/:slug?mode=conversational` | One question at a time | Works | Browser: required error, conditional question, receipt | Verified in M1 |
-| `/f/:slug?embed=1` | Embedded on another site | Not re-checked this milestone | Browser inside an iframe host page | Planned (M4) |
-| Endings | Custom completion screens | Edited in the outline's *Endings* card | Existing jumps/endings tests | Planned (M4 polish) |
+| `/f/:slug?embed=1` | Embedded on another site | — | Browser: host page on another site, Classic and Conversational submitted to an ending, 375 px host, sign-in-only refusal with new-tab link | **Done (M4 part 5)** |
+| Endings | Custom completion screens | — | Browser: jump to a second ending in an embed, line breaks on the receipt, inspector lists what leads to each ending | **Done (M4 part 5)** |
 | `/enquiries` | Cross-product inbox | Out of Forms scope except the links into it | — | Not in scope |
 
 ## Milestone 1: Import JSON and export (done)
@@ -88,9 +88,33 @@ This uses the workspace's own OIDC provider, as you decided. Respondents never b
 1. ~~The `/setup/forms` creation flow joined to the same picker.~~ Done (part 2).
 2. ~~Responses: search, filters and a side detail panel.~~ Done (part 3).
 3. ~~Builder outline on phones and toolbar hierarchy.~~ Done (part 4).
-4. An embed check (`?embed=1` inside a host page).
-5. Endings polish.
+4. ~~An embed check (`?embed=1` inside a host page).~~ Done (part 5).
+5. ~~Endings polish.~~ Done (part 5).
 
 None of these depends on SSO.
+
+**Still open in the route table:** *Builder · Workflow* (dense logic map) and *Builder · Design* (discoverability) were not part of this pass and stay as recorded.
+
+### Full journey with the fixture (local, 9 November)
+
+The Technical Profile Details file (39 questions, 7 pages) was used across the scratchpad journeys:
+- **Import:** through the picker on `/forms` (M1) and in guided setup in a second workspace (part 2).
+- **Mobile editing:** outline, keyboard, add, reorder and a multi-question page at 375 px (part 4).
+- **Preview:** Classic and Conversational (M1), and the phone *Edit | Preview* switch (part 4).
+- **Local publish:** part 4 and part 5.
+- **Submission:** Classic and Conversational top-level (M1), and inside frames on another site (part 5).
+- **Response review:** 56 responses over two versions, with search, filters, the side panel and the phone sheet (part 3).
+- **Export:** the definition (M1), and filtered and full CSVs (part 3).
+
+## Release gates (not run; production deployment is left for review)
+
+These are separate from the milestones. Each needs a staging environment and the owner, not this local checkout.
+
+| Gate | What must be shown | Status |
+|---|---|---|
+| **Real identity provider** | On staging, with the workspace's real OIDC provider (not the stand-in used in tests):<br>• a student account from the allowed domain signs in from a protected form and returns to it with prefilled answers kept<br>• the response shows the verified email and subject<br>• an account outside the domain is refused with the reason<br>• the respondent never appears among workspace members<br>• sign-out ends the session<br>• the provider's consent screen and logout behave as expected | **Not run.** Needs staging and a test account at the provider. |
+| **Rollback keeps protected forms private** | Rehearse the rollback documented in `docs/FORMS.md` ("Respondent sign-in", rollback hazard) on a staging copy:<br>1. Create a protected form with responses.<br>2. Apply the pre-rollback step: close every `access = 'signin'` form, or switch it to public only if the owner accepts that.<br>3. Deploy the previous backend.<br>4. Confirm the protected form's public link and `GET /api/public/forms/:slug` return *closed* (410), never questions, and that submissions are refused.<br>5. Roll forward and confirm the form is still sign-in-only and can be reopened. | **Not run.** The hazard is real: the previous backend ignores `forms.access`. |
+
+SSO domain rules and plan restrictions are unchanged in this pass.
 
 Production deployment is not part of any milestone. Nothing has been deployed.
