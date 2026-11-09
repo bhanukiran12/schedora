@@ -187,6 +187,72 @@ export function attributionColumns(definitions, responses) {
   return [...new Set(keys)];
 }
 
+// ---- Prefilled links (docs/FORMS.md, "Prefilled links") ----
+// A link may carry starting answers as answer.<question key>=value. They only fill editable answers: the
+// respondent can change them, the server validates what is finally submitted like any typed answer, and
+// they are never identity or attribution. Keys cannot contain a dot, so they never meet url_params.
+// Contact details, long answers and anything that looks like a personal identifier are kept out of
+// links, because query strings end up in browser history, logs and shared screenshots.
+export const PREFILL_PREFIX = 'answer.';
+const PREFILL_IDENTIFIER = /\b(?:student|employee|staff|roll|registration|enrol(?:l)?ment|admission|member(?:ship)?|customer|account|candidate|applicant|application|national|voter|tax|licen[cs]e|hall ?ticket)\b[\s\w./-]*\b(?:id|no|number|code)\b|\b(?:aadhaa?r|passport|pan(?: card)?|password|passcode|otp|cvv|iban|ssn|social security|date of birth|dob|birth ?date)\b/i;
+
+/** Why a question cannot be filled from a link, or null when it can. */
+export function prefillProblem(field) {
+  if (!field || field.type === 'page_break') return 'Pages have no answer to fill.';
+  if (field.type === 'email' || field.type === 'phone') return 'Contact details are kept out of links, where they would end up in browser history and logs.';
+  if (field.type === 'long_text') return 'Long answers are kept out of links.';
+  if (!['short_text', 'single_choice', 'multiple_choice', 'date'].includes(field.type)) return 'This question type cannot be filled from a link.';
+  if (['short_text', 'date'].includes(field.type) && (PREFILL_IDENTIFIER.test(field.label || '') || PREFILL_IDENTIFIER.test(String(field.id).replace(/_/g, ' ')))) return 'This looks like a personal identifier, so it is kept out of links.';
+  return null;
+}
+
+/** One value as a link would fill it: { value } when it is a valid answer, otherwise { error }. */
+export function prefillValue(field, raw) {
+  const problem = prefillProblem(field);
+  if (problem) return { error: problem };
+  const result = checkAnswer({ ...field, required: false }, field.type === 'multiple_choice' ? raw : Array.isArray(raw) ? raw[0] : raw);
+  if (result.error) return result;
+  return isAnswered(result.value) ? { value: result.value } : { error: 'Empty values are not filled in.' };
+}
+
+/**
+ * The starting answers a link carries for this version, from a URLSearchParams or a plain object. Only
+ * questions this version has and allows are read; an invalid value is ignored, never an error for the
+ * respondent. A choice question reads option ids; several choices repeat the key.
+ */
+export function prefillAnswers(definition, source) {
+  const answers = Object.create(null);
+  const ignored = [];
+  if (!source || typeof source !== 'object') return { answers: {}, ignored };
+  const read = typeof source.getAll === 'function' ? key => source.getAll(key) : key => Object.hasOwn(source, key) ? [].concat(source[key]) : [];
+  for (const field of definition?.fields || []) {
+    if (field.type === 'page_break') continue;
+    const values = read(PREFILL_PREFIX + field.id).filter(value => typeof value === 'string');
+    if (!values.length) continue;
+    const result = prefillValue(field, field.type === 'multiple_choice' ? values : values[0]);
+    if (result.error) ignored.push({ id: field.id, reason: result.error }); else answers[field.id] = result.value;
+  }
+  return { answers: { ...answers }, ignored };
+}
+
+/** The query string for these starting answers: only questions that allow it and values that are valid, in form order. */
+export function prefillQuery(definition, answers) {
+  const query = new URLSearchParams();
+  for (const field of definition?.fields || []) {
+    if (field.type === 'page_break' || !Object.hasOwn(answers, field.id)) continue;
+    const result = prefillValue(field, answers[field.id]);
+    if (result.error) continue;
+    for (const value of [].concat(result.value)) query.append(PREFILL_PREFIX + field.id, value);
+  }
+  return query.toString();
+}
+
+/** A respondent link with these starting answers added; the link itself when none apply. */
+export function prefilledLink(baseUrl, definition, answers) {
+  const query = prefillQuery(definition, answers);
+  return query ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${query}` : baseUrl;
+}
+
 export function conditionHolds(condition, answers, params = null) {
   if (!condition) return true;
   const value = condition.param != null ? params?.[condition.param] : answers[condition.field];

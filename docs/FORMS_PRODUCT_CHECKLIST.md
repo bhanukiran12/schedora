@@ -23,7 +23,7 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
 | Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
 | Builder · Settings (presentation, routing) | Form-wide behaviour | No per-form access setting (M3) | — | Planned (M3) |
-| Builder · Share + readiness | Get the link and the embed code | No prefilled-link builder (M2). The embed sits in a disclosure. | — | Planned (M2) |
+| Builder · Share + readiness | Get the link and the embed code | The embed sits in a disclosure | Browser: prefill journey | **Prefilled links done (M2)**; layout polish M4 |
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |
 | Preview (builder pane, both layouts) | See what respondents see | Works. Device toggle present. | Browser: classic and conversational render after reopen | Verified in M1 |
 | `/forms/:id/responses` and detail | Scan, filter, inspect, export | Table without filters or search. The detail opens below the table, far from the clicked row on phones. | Browser at all widths. CSV contents checked. | Planned (M4); export verified in M1 |
@@ -67,14 +67,9 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
   9. Open the responses and the response detail, then export the CSV.
 - Layout: no horizontal overflow at 320/375/768/1280 px in both colour preferences, for the picker, the dialog (empty, error and preview states), the builder, the public form and the responses. No runtime errors.
 
-## Milestone 2: Entry IDs and prefilled links (planned)
+## Milestone 2: Entry IDs and prefilled links (done)
 
-- Add a *Copy ID* button next to each question key in the inspector, plus an IDs view in Share with label, ID, type, page and published lock.
-- In Share, add *Build prefilled link*: pick questions, enter sample values, see each value validated with `checkAnswer` (the same rule as typed answers), preview the form with them, and copy the link.
-- The link uses an `a.<question_id>=` namespace, so answer prefill is separate from the `url_params` attribution keys. The server re-validates prefilled values like any typed answer. A prefilled value is an editable starting answer, never identity.
-- Prefill is refused for email, phone and long text by default (*keep sensitive values out of ordinary query strings*). Authors see why.
-- The link targets the published version's IDs. A renamed label keeps its ID. A question deleted since publishing shows as *not in the live form*.
-- Edge cases to test: grouped fields, renamed labels, duplicated questions (new keys), invalid values, a hidden choice, and an older published version.
+Built as `Share → Build prefilled link` with `answer.<key>=value` links. The contract and evidence are in `docs/FORMS.md`, "Prefilled links and question IDs". Sensitive and contact questions are never offered, and the respondent page ignores them even in a hand-written link. Verified in a fresh browser context: grouped questions, conditional logic, a renamed label, republishing, invalid values, and editing a prefilled answer through to the stored response.
 
 ## Milestone 3: Respondent sign-in (design; needs your decision)
 

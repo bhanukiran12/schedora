@@ -1261,3 +1261,27 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
 /* The default style with the author's own font: typography only, so colours and dark mode are untouched. */
 [data-typography] { font-family: var(--t-font); }
 [data-typography] :is(input, textarea, select, button) { font-family: inherit; }
+/* Forms: Share → Build prefilled link */
+.share-prefill { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.share-prefill h3 { margin: 0 0 4px; font-size: 16px; }
+dialog.prefill-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+dialog.prefill-dialog h2 { margin: 0; font-size: 20px; }
+.prefill-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.prefill-row { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); min-width: 0; }
+.prefill-row.is-blocked { background: var(--surface-2); }
+.prefill-head { display: grid; gap: 4px; min-width: 0; }
+.prefill-head > .muted { font-size: 13px; overflow-wrap: anywhere; }
+.prefill-label { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+.prefill-key { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.prefill-key code { padding: 1px 6px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.prefill-reason { margin: 6px 0 0; }
+.prefill-value { margin-top: 8px; }
+.prefill-value input:not([type=checkbox]), .prefill-value select { width: 100%; max-width: 420px; }
+.prefill-value .field-error[hidden] { display: none; }
+.prefill-choices { border: 0; margin: 0; padding: 0; min-width: 0; }
+.prefill-choices .check { margin: 4px 0; font-weight: 500; }
+.prefill-output { position: sticky; bottom: -1px; padding: 12px 0 4px; background: var(--surface); border-top: 1px solid var(--line); }
+#prefill-link { width: 100%; font: 13px/1.5 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.prefill-preview { margin-top: 14px; padding: 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
+.prefill-preview h3 { margin: 0 0 4px; font-size: 16px; }
+@media (max-width: 480px) { dialog.prefill-dialog { padding: 16px; } .prefill-output { position: static; } }

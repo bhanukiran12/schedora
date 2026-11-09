@@ -8,6 +8,7 @@ import { hostInfo, productOrigin } from './context.mjs';
 import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
 import { exportDefinition, openImportDialog } from './forms-import.mjs';
+import { openPrefillBuilder } from './forms-prefill.mjs';
 
 export const trailList = (trail, headingId = 'trail-heading') => html`<section class="trail" aria-labelledby="${headingId}"><h3 id="${headingId}">What happened next</h3>
   <ol class="trail-steps">${trail.steps.map(step => html`<li class="trail-step" data-state="${step.state}"><span class="trail-state">${STATE_LABELS[step.state]}</span><div>
@@ -18,7 +19,7 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
 import { blockEnd, canMove, contactInfoBlock, dropIsNoop, dropItem, duplicateBlock, isHead, moveItem, outlineMarks } from './forms-groups.mjs';
-import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, prefillAnswers, prefillProblem, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 import { TYPE_KIND, formIcon } from './forms-icons.mjs';
 import { designPanel } from './forms-design.mjs';
 import { logicMapModel } from './forms-logicmap.mjs';
@@ -385,7 +386,9 @@ export async function publicForm(ctx) {
   if (form.availability === 'capacity_reached') return mount(root, html`<div class="public-form"><h1>${form.definition.title}</h1>${notice('warn', html`<p>This form has reached its response limit for now and is not accepting new responses. Please try again later or contact ${form.workspace_name}.</p>`)}</div>`);
   if (!form.accepting) return mount(root, html`<div class="public-form"><h1>${form.definition.title}</h1>${notice('warn', html`<p>This form is not accepting responses right now.</p>`)}</div>`);
 
-  respondTo(root, form, { mode, urlParams: ctx.query });
+  // Starting answers from a prefilled link: only questions this version allows, only valid values.
+  const { answers: prefill } = prefillAnswers(form.definition, ctx.query);
+  respondTo(root, form, { mode, urlParams: ctx.query, prefill });
 }
 
 /**
@@ -393,7 +396,7 @@ export async function publicForm(ctx) {
  * and by meeting rooms (docs/MEET_SESSION_OFFERS.md), which pass a session ticket in `extra`, their
  * own storage key, link-only videos and `onAccepted`, called only after the server confirms.
  */
-export function respondTo(root, form, { mode = form.definition.presentation, storeKey = form.slug, extra = {}, embedVideo = true, onAccepted, pageTitle = true, urlParams = null } = {}) {
+export function respondTo(root, form, { mode = form.definition.presentation, storeKey = form.slug, extra = {}, embedVideo = true, onAccepted, pageTitle = true, urlParams = null, prefill = {} } = {}) {
   const slug = form.slug;
   let submissionId = submissionStore.get(storeKey);
   // An id kept from before a reload may belong to an attempt that reached the server.
@@ -444,7 +447,9 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
     });
     return { answers: () => latest };
   }
-  let start = begin();
+  let start = Object.keys(prefill).length
+    ? begin(prefill, notice('info', html`<p>Some answers are already filled in from your link. Check them before you submit; you can change any of them.</p>`))
+    : begin();
 
   function showReceipt(result) {
     const next = result.next;
@@ -742,6 +747,9 @@ export async function builder(ctx) {
         <label for="share-conv">Conversational link (one question at a time)</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy-target="share-conv">Copy</button></div>
         <label for="embed">Embed code for your website</label><textarea id="embed" class="embed-code" readonly>${embed}</textarea>
         <button class="btn btn-small" type="button" data-copy-target="embed">Copy embed code</button></details>
+      <section class="share-prefill" aria-labelledby="prefill-heading"><h3 id="prefill-heading">Prefilled link</h3>
+        <p class="hint">Start respondents with answers you already know, such as their programme. They can change them, and a link never proves who someone is. Separate from URL parameters, which record where a response came from.</p>
+        <button class="btn btn-small" type="button" data-build-prefill>Build prefilled link</button></section>
       <p class="hint">Not for respondents: this editor page needs a workspace sign-in, and Preview runs only in your browser and saves nothing.</p>
       <div class="actions"><button class="btn btn-danger btn-small" type="button" id="unpublish">Stop collecting responses</button></div>`);
   };
@@ -1113,6 +1121,7 @@ export async function builder(ctx) {
             <p class="hint" id="fl-${index}-hint">Insert an earlier answer with {{question_key}}${earlier.length ? `, for example {{${earlier[0].id}}}` : ''}.</p>
             <span class="hint" id="key-hint-${index}">Used in exports, logic and {{${field.id}}} insertions. Lowercase letters, numbers and underscores.</span>
             <input data-prop="id" value="${field.id}" maxlength="40" pattern="[a-z0-9_]+" aria-label="Question key" aria-describedby="key-hint-${index}${locked.has(field.id) ? ' key-locked-' + index : ''}" class="key-input" ${locked.has(field.id) ? raw('readonly') : ''}>
+            <p class="hint">${prefillProblem(field) ? html`Prefilled links: not available. ${prefillProblem(field)}` : html`Prefilled links fill this question with <code>answer.${field.id}=…</code>. Build one under Share.`}</p>
             ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}</details>`)}
         ${pageBreak ? '' : inspectorSection('answer', 'Answer', html`<label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required</label>${['short_text', 'long_text', 'email', 'phone'].includes(field.type) ? html`<label for="fp-${index}">Placeholder <span class="muted">(optional)</span></label><input id="fp-${index}" data-prop="placeholder" maxlength="100" value="${field.placeholder || ''}">` : ''}`)}
         ${pageBreak ? '' : inspectorSection('media', 'Media', mediaEditor(field, index), Boolean(field.media))}
@@ -1873,6 +1882,16 @@ export async function builder(ctx) {
     } else if (button.id === 'share-native') {
       try { await navigator.share({ title: form.draft.title, url: publicUrl(form) }); status.textContent = 'Passed to your device’s share menu. Schedora cannot see whether it was sent.'; }
       catch (error) { status.textContent = error.name === 'AbortError' ? 'Sharing cancelled. Nothing was sent.' : 'Your device could not open its share menu. Copy the link instead.'; }
+    } else if (button.dataset.buildPrefill !== undefined) {
+      // Links are built against what respondents get: the live version, not the draft.
+      let live;
+      try { live = await api('GET', `/api/public/forms/${form.slug}`); }
+      catch (error) { status.textContent = `The live form could not be loaded, so no link was built. ${error.message}`; return; }
+      const copy = async (field, what) => {
+        try { await navigator.clipboard.writeText(field.value); return `${what} copied. Nothing has been sent.`; }
+        catch { if (field.select) { field.focus(); field.select(); } return `Copy failed. ${field.select ? 'The text is selected: press Ctrl+C (⌘C on a Mac).' : `Copy it by hand: ${field.value}`}`; }
+      };
+      openPrefillBuilder({ live: live.definition, version: live.version, draftDiffers: form.has_unpublished_changes, baseUrl: publicUrl(form), renderForm, copy });
     } else if (button.dataset.sharePublish !== undefined) $('#publish').click();
     else if (button.dataset.sharePreview !== undefined) goTo('preview-' + draft.presentation);
     else if (button.id === 'unpublish') {
