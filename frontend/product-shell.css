@@ -118,7 +118,7 @@ body.auth-page > #site-header, body.auth-page > #site-footer { display:none; }
 
 /* ---- Shared shell, matched to the demo's hierarchy (9 November 2026) ----
    Type scale: switcher trigger, product names and workspace name 15px/600; navigation 15px/500 (600 when
-   current); section labels 11px/600 uppercase; descriptions 13px/400; "Current" 12px/600. Dashboard pages
+   current); section labels 12px/600 uppercase; descriptions 13px/400; "Current" 12px/600. Dashboard pages
    share one header: an uppercase eyebrow, a 32px/680 title and the page's actions. Form builder and
    respondent typography are separate and not set here. */
 .side-workspace { display:grid; grid-template-columns:32px minmax(0,1fr); align-items:center; gap:10px; margin:12px 0 4px; padding:10px 12px; }
@@ -126,9 +126,12 @@ body.auth-page > #site-header, body.auth-page > #site-footer { display:none; }
 .side-workspace-text { min-width:0; }
 .side-workspace-name { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; font-size:0.9375rem; font-weight:600; line-height:1.3; overflow-wrap:anywhere; }
 .side-workspace select { margin-top:2px; min-height:36px; font-size:0.9375rem; font-weight:600; width:100%; text-overflow:ellipsis; }
-.side-group { margin:20px 10px 6px; font-size:0.6875rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
+.side-group { margin:20px 10px 6px; font-size:0.75rem; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); }
 .side-link { border-left:0; font-weight:500; }
 .side-link[aria-current=page] { color:var(--accent); font-weight:600; }
+.side-workspace-toggle { display:-webkit-box; width:100%; padding:0; border:0; background:none; color:var(--ink); font:inherit; font-size:0.9375rem; font-weight:600; text-align:left; cursor:pointer; border-radius:4px; }
+.side-workspace-toggle.is-expanded { display:block; -webkit-line-clamp:unset; overflow:visible; }
+.side-workspace-toggle:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
 /* "Schedora apps" floats over the sidebar, so opening it never moves the workspace or navigation. */
 .side-apps { position:relative; }
 .side-apps-toggle { min-height:44px; font-size:0.9375rem; font-weight:600; }

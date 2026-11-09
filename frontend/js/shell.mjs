@@ -37,7 +37,7 @@ export function renderShell({ product, current, links, onWorkspaceChange }) {
         <p class="side-apps-note">Same account and workspace. Access follows your workspace plan.</p></div></div>`}
     ${ws ? html`<div class="side-workspace"><span class="side-workspace-avatar" aria-hidden="true">${initials(ws.name)}</span><div class="side-workspace-text">${session.workspaces.length > 1
       ? html`<label for="side-workspace-select">Workspace</label><select id="side-workspace-select" title="${ws.name}">${session.workspaces.map(entry => html`<option value="${entry.id}" ${entry.id === session.workspaceId ? raw('selected') : ''}>${entry.name}</option>`)}</select>`
-      : html`<span class="side-label">Workspace</span><strong class="side-workspace-name" title="${ws.name}">${ws.name}</strong>`}</div></div>` : ''}
+      : html`<span class="side-label" id="side-workspace-label">Workspace</span><strong class="side-workspace-name" id="side-workspace-name">${ws.name}</strong>`}</div></div>` : ''}
     <nav class="side-nav" aria-label="${PRODUCT_INFO[product].name}">${groups.map(([title, items], index) => html`<h2 class="side-group" id="side-group-${index}">${title}</h2><ul aria-labelledby="side-group-${index}">${items.map(entry => item(entry, current))}</ul>`)}</nav>
     <div class="side-bottom">
       <nav aria-label="Account"><ul>
@@ -51,6 +51,7 @@ export function renderShell({ product, current, links, onWorkspaceChange }) {
     <a class="side-brand" href="${PRODUCT_INFO[product].dashboard}" aria-label="${PRODUCT_INFO[product].name}${product === 'suite' ? '' : ' by Schedora'}, home">${lockup(product)}</a><span class="topbar-section" aria-hidden="true">${sectionLabel(product, current)}</span>`);
   bindDrawer();
   bindApps();
+  bindWorkspaceName();
   $('#side-workspace-select')?.addEventListener('change', event => { selectWorkspace(event.target.value); onWorkspaceChange(); });
 }
 
@@ -74,6 +75,7 @@ function bindDrawer() {
     toggle.setAttribute('aria-expanded', 'true');
     sidebar.setAttribute('role', 'dialog'); sidebar.setAttribute('aria-modal', 'true'); sidebar.setAttribute('aria-label', 'Product navigation');
     behind.forEach(element => { element.inert = true; });
+    bindWorkspaceName(); // measurable only once the drawer is shown
     $('#side-close').focus();
   };
   $('#side-close').onclick = () => close();
@@ -111,6 +113,24 @@ function bindApps() {
   };
   const outside = event => { if (!root.isConnected) return document.removeEventListener('pointerdown', outside); if (!panel.hidden && !root.contains(event.target)) set(false); };
   document.addEventListener('pointerdown', outside);
+}
+
+// A long workspace name is shortened to two lines. When it is cut off, the name becomes a button that
+// shows it in full, so keyboard and touch users can read it without a hover tooltip.
+function bindWorkspaceName() {
+  const name = $('#side-workspace-name');
+  if (!name || name.tagName === 'BUTTON' || name.scrollHeight <= name.clientHeight + 1) return;
+  const full = name.textContent;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'side-workspace-name side-workspace-toggle';
+  button.id = 'side-workspace-name';
+  button.setAttribute('aria-expanded', 'false');
+  button.setAttribute('aria-describedby', 'side-workspace-label');
+  button.textContent = full;
+  button.title = full;
+  button.onclick = () => { const open = button.getAttribute('aria-expanded') !== 'true'; button.setAttribute('aria-expanded', String(open)); button.classList.toggle('is-expanded', open); };
+  name.replaceWith(button);
 }
 
 let drawerCleanup;
