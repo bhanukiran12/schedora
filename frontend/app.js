@@ -129,7 +129,8 @@ export function navigate(path, { replace = false } = {}) {
   render();
 }
 
-export async function render() {
+// quiet: refresh what is on screen (say, once the account has loaded) without moving focus or scroll.
+export async function render({ quiet = false } = {}) {
   const token = ++renderToken;
   document.head.querySelectorAll('[data-page-meta]').forEach(element => element.remove()); // per-page tags such as noindex
   video.leaveMeeting(); // releases camera, microphone and the connection before any other view renders
@@ -150,6 +151,10 @@ export async function render() {
   const entry = query.get('product');
   if (product === 'suite' && ['meet', 'forms', 'flow'].includes(entry)) product = entry;
   if (product === 'suite' && /^\/(account|login|signup)$/.test(currentPath)) product = productFor(safeReturnPath(query.get('next'), '/'));
+  // A demo path describes the product being explored, even on another product's host.
+  const demoProduct = /^\/demo\/(meet|forms|flow)(?:\/|$)/.exec(currentPath)?.[1];
+  if (demoProduct) product = demoProduct;
+  else if (/^\/demo(?:\/|$)/.test(currentPath) && ['suite', 'meet', 'forms', 'flow'].includes(entry)) product = entry;
   boot.context = product;
   if (currentPath === '/' && product !== 'suite' && session.user) return navigate(PRODUCT_INFO[product].dashboard, { replace: true });
   document.body.classList.toggle('auth-page', !session.user && /^\/(account|login|signup)$/.test(currentPath));
@@ -178,8 +183,8 @@ export async function render() {
     if (ctx.alive()) mount(main, html`<div class="container page"><h1>Something went wrong</h1><div class="notice notice-bad" role="alert"><p>${error.message}</p></div><a class="btn" href="${currentPath}">Try again</a></div>`);
   }
   if (!ctx.alive()) return;
-  if (!firstRender) (main.querySelector('h1') ? main : main).focus({ preventScroll: true });
-  if (!firstRender) window.scrollTo(0, 0);
+  if (!firstRender && !quiet) main.focus({ preventScroll: true });
+  if (!firstRender && !quiet) window.scrollTo(0, 0);
   if (location.hash) { try { document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView(); } catch { /* Ignore malformed hash links. */ } }
   firstRender = false;
   countPage();
@@ -207,20 +212,41 @@ window.addEventListener('beforeunload', event => { if (document.body.dataset.dir
 // ---- Start ----
 // Product subdomains (meet./forms./flow.) open their product at the root path, and product
 // navigation uses absolute, allowlisted subdomain links when served from the product domain.
-async function start() {
-  const fallback = { productDomain: 'schedora.in', analytics: false, billingMode: 'open', operator: {}, providers: { email: 'outbox', calendar: 'ICS feed', billing: 'none' } };
-  mount($('#main'), html`<div class="container page" role="status"><h1>Connecting to Schedora…</h1><p>The service may take a moment to start.</p></div>`);
-  if (/^\/(demo|start)(\/|$)/.test(location.pathname)) Object.assign(boot, fallback, { offline: false });
-  else try { Object.assign(boot, fallback, await loadStartupConfig(() => api('GET', '/api/config')), { offline: false }); } catch { Object.assign(boot, fallback, { offline: true }); }
+const STARTUP_FALLBACK = { productDomain: 'schedora.in', analytics: false, billingMode: 'open', operator: {}, providers: { email: 'outbox', calendar: 'ICS feed', billing: 'none' } };
+// Marketing pages need neither the account nor the service's settings to show their content, so they
+// render at once and refresh quietly when those arrive. Demos never contact the service.
+const LOCAL_ONLY = /^\/(demo|start)(\/|$)/;
+const MARKETING = /^\/(products\/(meet|forms|flow)|privacy|terms)?$/;
+const setLinks = () => {
   boot.links = Object.fromEntries(Object.keys(PRODUCT_INFO).map(key => [key, productUrl(key, PRODUCT_INFO[key].dashboard, location, boot.productDomain)]));
   boot.landings = Object.fromEntries(['meet', 'forms', 'flow'].map(key => [key, landingUrl(key, location, boot.productDomain)]));
+};
+const readConfig = () => loadStartupConfig(() => api('GET', '/api/config'));
+const readAccount = () => loadMe().catch(() => { /* signed-out experience still works */ });
+async function start() {
   if (location.pathname === '/book' || location.pathname === '/form') { history.replaceState(null, '', location.pathname === '/book' ? '/meet' : '/forms'); currentPath = location.pathname; }
+  Object.assign(boot, STARTUP_FALLBACK, { offline: false });
+  if (LOCAL_ONLY.test(location.pathname) || MARKETING.test(location.pathname)) return setLinks();
+  mount($('#main'), html`<div class="container page" role="status"><h1>Connecting to Schedora…</h1><p>The service may take a moment to start.</p></div>`);
+  // Settings and the account load together rather than one after the other.
+  const [config] = await Promise.all([readConfig().catch(() => null), readAccount()]);
+  if (config) Object.assign(boot, config); else boot.offline = true;
+  setLinks();
 }
+const fastStart = !LOCAL_ONLY.test(location.pathname) && MARKETING.test(location.pathname);
 await start();
 // Installable app (PWA). Skipped where service workers are unavailable.
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('/sw.js').catch(() => {});
 renderFooter();
-if (!/^\/(demo|start)(\/|$)/.test(location.pathname)) try { await loadMe(); } catch { /* signed-out experience still works */ }
 if (!consent()) consentBanner(false);
 await render();
+if (fastStart) {
+  const shown = location.pathname + location.search;
+  const domain = boot.productDomain;
+  const [config] = await Promise.all([readConfig().catch(() => null), readAccount()]);
+  if (config) { Object.assign(boot, config); setLinks(); }
+  // Refresh only when it changes what the page shows: a signed-in visitor, or another product domain.
+  if (location.pathname + location.search === shown && (session.user || boot.productDomain !== domain)) await render({ quiet: true });
+  else if (config?.analytics) countPage();
+}
 export { api, workspace };

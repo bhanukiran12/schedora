@@ -171,9 +171,10 @@ export async function billing(ctx) {
   setTitle('Plans and billing · Schedora');
   const catalog = await api('GET', '/api/billing/plans');
   const priceText = price => price ? `${new Intl.NumberFormat('en-IN', { style: 'currency', currency: price.currency }).format(price.amount_cents / 100)} / month` : 'Not yet published';
-  const comparison = html`<div class="table-wrap"><table><caption class="visually-hidden">Product access by plan</caption>
+  // Phones see ✓ and —; the words stay for screen readers, so the table fits without sideways scrolling.
+  const comparison = html`<div class="table-wrap"><table class="plan-table"><caption class="visually-hidden">Product access by plan</caption>
     <thead><tr><th scope="col">Plan</th><th scope="col">Meet</th><th scope="col">Forms</th><th scope="col">Flow</th><th scope="col">Price</th></tr></thead><tbody>
-    ${catalog.map(plan => html`<tr><th scope="row">${plan.name}</th>${['meet','forms','flow'].map(product => html`<td>${plan.products.includes(product) ? '✓ Included' : '—'}</td>`)}<td>${priceText(plan.price)}</td></tr>`)}
+    ${catalog.map(plan => html`<tr><th scope="row">${plan.name}</th>${['meet','forms','flow'].map(product => html`<td>${plan.products.includes(product) ? html`<span aria-hidden="true">✓</span><span class="plan-word"> Included</span>` : html`<span aria-hidden="true">—</span><span class="plan-word visually-hidden-narrow"> Not included</span>`}</td>`)}<td>${priceText(plan.price)}</td></tr>`)}
     </tbody></table></div>
     <p class="muted">Prices will be shown once they are approved. Our goal is a lower price than comparable paid plans elsewhere, measured against the same features and usage, without cutting reliability or privacy.</p>`;
   if (!session.user || !workspace()) {
@@ -192,10 +193,13 @@ export async function billing(ctx) {
   const owner = data.role === 'owner';
   const testMode = data.provider === 'test';
   mount(ctx.main, html`<div class="container page"><span class="tag">Plans · ${workspace().name}</span><h1>Plans and billing</h1>
-    ${data.mode === 'open' ? notice('info', html`<p><strong>Evaluation mode.</strong> Every product is available to this workspace and nothing is charged. Usage is still measured so allowances can be tested.</p>`) : ''}
+    ${data.mode === 'open' && Object.values(data.entitlements).every(entitlement => entitlement.active && entitlement.source === 'evaluation')
+      // Evaluation: one plain statement instead of three identical cards.
+      ? notice('info', html`<p><strong>Evaluation mode.</strong> ${Object.keys(data.entitlements).map(product => PRODUCT_NAMES[product]).join(', ').replace(/, ([^,]*)$/, ' and $1')} are all available to this workspace, and nothing is charged. Usage is still measured so allowances can be tested.</p>`)
+      : html`${data.mode === 'open' ? notice('info', html`<p><strong>Evaluation mode.</strong> Every product is available to this workspace and nothing is charged. Usage is still measured so allowances can be tested.</p>`) : ''}
     <section class="grid-3">${Object.entries(data.entitlements).map(([product, entitlement]) => html`<div class="card card-plain"><h2>${PRODUCT_NAMES[product]}</h2>
       ${entitlement.active ? badge('active', entitlement.source === 'evaluation' ? 'Evaluation access' : `Active via ${entitlement.source}`) : badge('canceled', 'No access')}
-      ${entitlement.status === 'past_due' ? html`<p class="muted">Payment failed. Access continues until ${fmtDateTime(entitlement.grace_until)} while payment is retried.</p>` : ''}</div>`)}</section>
+      ${entitlement.status === 'past_due' ? html`<p class="muted">Payment failed. Access continues until ${fmtDateTime(entitlement.grace_until)} while payment is retried.</p>` : ''}</div>`)}</section>`}
     <section class="card card-plain"><h2>Usage this month</h2>${Object.entries(data.usage).map(([metric, usage]) => html`<div><div class="row-between"><span>${metric.replace('_', ' ')}</span><span>${usage.used}${usage.limit ? ` of ${usage.limit}` : ''}</span></div>
       ${usage.limit ? html`<div class="meter" role="meter" aria-label="${metric.replace('_', ' ')} used" aria-valuemin="0" aria-valuemax="${usage.limit}" aria-valuenow="${usage.used}"><span data-width="${Math.min(100, Math.round(usage.used / usage.limit * 100))}"></span></div>` : ''}</div>`)}
       <p class="hint">Allowances reset on the first day of each month (UTC). Allowances shown are proposed fair-use limits.</p></section>

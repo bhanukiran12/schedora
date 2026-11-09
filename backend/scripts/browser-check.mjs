@@ -141,6 +141,7 @@ async function step(name, fn) {
 }
 
 try {
+  if (!process.argv.includes('--public-only')) {
   await step('Suite split-screen authentication and safe switching', async () => {
     await open('/signup', "document.querySelector('#signup')");
     if ((await evaluate("document.querySelectorAll('.auth-layout .ds-signup-benefit').length")) !== 3) throw new Error('Suite auth must show three products');
@@ -2696,7 +2697,7 @@ try {
       if (await evaluate("Boolean(document.querySelector('#instant'))")) throw new Error('non-pilot workspace can start a pilot meeting');
     } finally { app.config.video = previous; }
   });
-  await step('product hosts: landing, auth, account, onboarding and demo retain one product', async () => {
+  await step('product hosts: auth retains product and demo offers consistent product navigation', async () => {
     const port = app.server.address().port;
     for (const product of ['meet', 'forms', 'flow']) {
       const origin = `http://${product}.localhost:${port}`;
@@ -2748,7 +2749,7 @@ try {
       if ((await text()).includes('Everything is in place')) throw new Error('setup overclaims verification');
       await layoutCheck(product + ' setup outcome');
       await open(origin + '/demo', "document.querySelector('.ds-workspace')");
-      if ((await evaluate(`document.querySelectorAll('nav[aria-label="Workspace products"] a').length`)) !== 1) throw new Error('demo shows other product navigation');
+      if ((await evaluate(`document.querySelectorAll('nav[aria-label="Workspace products"] a').length`)) !== 4) throw new Error('demo product navigation is incomplete');
       await layoutCheck(product + ' scoped demo');
     }
     await open('/start/products', "document.querySelector('#product-selection')");
@@ -2911,6 +2912,67 @@ try {
       if (await evaluate("Boolean(document.querySelector('[data-host-readiness]')) || document.querySelector('[data-host-evidence-error]').innerText.includes('Private provider error')")) throw new Error('failed refresh retained success or leaked raw error');
     } finally { await evaluate("window.fetch=window.originalReadinessFetch;delete window.originalReadinessFetch"); }
     if (effects() !== before) throw new Error('readiness reads changed bookings, email, busy times or outbox');
+  });
+
+
+  }
+  await step('public pages: readable demos, consistent navigation and safe signup handoff', async () => {
+    // A fresh anonymous browser context at a separate loopback host; no production service involved.
+    const origin = `http://localhost:${app.server.address().port}`;
+    app.config.allowedOrigins.add(origin);
+    for (const path of ['/', '/products/meet', '/products/forms', '/products/flow', '/login?product=suite&next=%2F', '/signup?next=%2F', '/billing']) {
+      await open(origin + path, "document.querySelector('#main h1') && !document.querySelector('#main h1').textContent.includes('Connecting')");
+      if (await evaluate("Boolean(document.querySelector('.cookie-banner'))")) await click('.cookie-banner [data-choice=rejected]');
+      await layoutCheck('public ' + path);
+    }
+    const apiRequests = [];
+    const observe = ({data}) => { const event = JSON.parse(data); if (event.method === 'Network.requestWillBeSent' && new URL(event.params.request.url).pathname.startsWith('/api/')) apiRequests.push(event.params.request.url); };
+    await send('Network.enable');
+    socket.addEventListener('message', observe);
+    try {
+      for (const product of ['suite', 'meet', 'forms', 'flow']) {
+        await open(origin + (product === 'suite' ? '/demo' : '/demo/' + product), "document.querySelector('.ds-workspace')");
+        await layoutCheck('public demo ' + product);
+        await send('Emulation.setDeviceMetricsOverride', {width:1440, height:900, deviceScaleFactor:1, mobile:false});
+        if (await evaluate('document.documentElement.scrollWidth > innerWidth')) throw new Error('Wide demo overflows');
+        await send('Emulation.setDeviceMetricsOverride', {width:640, height:450, deviceScaleFactor:1, mobile:false});
+        if (await evaluate('document.documentElement.scrollWidth > innerWidth')) throw new Error('Demo fails 200% equivalent reflow');
+        await send('Emulation.setDeviceMetricsOverride', {width:1280, height:900, deviceScaleFactor:1, mobile:false});
+        if ((await evaluate("document.querySelectorAll('nav[aria-label=\"Workspace products\"] a').length")) !== 4) throw new Error('Missing demo products');
+        if (!(await evaluate(`new URL(document.querySelector('[data-demo-signup]').href).searchParams.get('next') === '${product === 'suite' ? '/setup' : '/setup/' + product}'`))) throw new Error('Signup lost setup destination');
+        await click('.ds-sidebar-bottom a[href^="/demo/settings"]');
+        await waitFor("document.querySelector('#profile-form')", 'demo settings');
+        if ((await evaluate("document.querySelectorAll('nav[aria-label=\"Workspace products\"] a').length")) !== 4) throw new Error('Settings removed products');
+        await layoutCheck('public demo settings ' + product);
+      }
+      const productOrigin = `http://forms.localhost:${app.server.address().port}`;
+      await open(productOrigin + '/demo/flow', "document.querySelector('.ds-attention')");
+      await click('.ds-sidebar-bottom a[href^="/demo/settings"]');
+      await waitFor("document.querySelector('#profile-form')", 'cross-product settings');
+      if (!(await evaluate("document.body.dataset.product === 'flow'"))) throw new Error('Product host overrode selected demo');
+      await click('nav[aria-label="Workspace products"] a[href="/demo?product=suite"]');
+      await waitFor("document.querySelector('#main h1')?.textContent.includes('Good things ahead')", 'suite overview from product host');
+      await open(origin + '/demo/flow', "document.querySelector('.ds-attention')");
+      if (!(await evaluate("document.querySelector('.ds-attention').getBoundingClientRect().top < document.querySelector('.ds-metrics').getBoundingClientRect().top"))) throw new Error('Attention buried below metrics');
+      await open(origin + '/demo/forms', "document.querySelector('.ds-row-actions')");
+      await layoutCheck('public Forms actions', '.ds-forms-table');
+      await click('.ds-row-actions a[href*="/responses"]');
+      await waitFor("location.search.includes('form=client-intake')", 'form-specific responses');
+      await layoutCheck('public demo filtered responses');
+      await send('Emulation.setDeviceMetricsOverride', {width:375, height:900, deviceScaleFactor:1, mobile:true});
+      await click('[data-action="menu"]');
+      await waitFor("document.querySelector('.ds-sidebar.is-open')", 'phone navigation');
+      await send('Input.dispatchKeyEvent', {type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27});
+      await send('Input.dispatchKeyEvent', {type:'keyUp', key:'Escape', code:'Escape', windowsVirtualKeyCode:27});
+      if (!(await evaluate("document.activeElement.matches('[data-action=menu]') && !document.querySelector('.ds-sidebar.is-open')"))) throw new Error('Escape did not restore menu focus');
+      if (apiRequests.length) throw new Error('Demo contacted the backend: ' + apiRequests.join(', '));
+    } finally { socket.removeEventListener('message', observe); }
+    await click('[data-demo-signup]');
+    await waitFor("document.querySelector('#signup')", 'real signup');
+    if (!(await evaluate("new URLSearchParams(location.search).get('next') === '/setup/forms'"))) throw new Error('Signup navigation lost destination');
+    await click('.ds-signin-link a');
+    await waitFor("document.querySelector('#signin')", 'switch to login');
+    if (!(await evaluate("new URLSearchParams(location.search).get('next') === '/setup/forms'"))) throw new Error('Login switch lost destination');
   });
 
 } finally {

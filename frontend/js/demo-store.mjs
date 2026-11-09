@@ -1,6 +1,22 @@
 // The design preview has its own local data boundary. It never calls a service or stores credentials.
 export const DEMO_KEY = 'schedora.design-preview.v1';
-export const makeDemo = () => ({
+// Sample dates are relative to today, so "upcoming" sample bookings are always ahead and sample
+// responses recent. Dates are local calendar days (YYYY-MM-DD).
+export const isoDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+export function nextWorkingDays(now, count) {
+  const days = [];
+  const day = new Date(now);
+  day.setHours(12, 0, 0, 0);
+  while (days.length < count) { day.setDate(day.getDate() + 1); if (day.getDay() !== 0 && day.getDay() !== 6) days.push(isoDay(day)); }
+  return days;
+}
+const hoursAgo = (now, hours) => new Date(now.getTime() - hours * 3600000).toISOString();
+const sampleBookings = now => { const [first] = nextWorkingDays(now, 1); return [
+  { id: 'sample-maya', name: 'Maya Chen', email: 'maya@example.com', event: 'discovery', date: first, time: '10:00', status: 'confirmed', sample: true },
+  { id: 'sample-daniel', name: 'Daniel Ross', email: 'daniel@example.com', event: 'consultation', date: first, time: '11:30', status: 'confirmed', sample: true },
+  { id: 'sample-priya', name: 'Priya Shah', email: 'priya@example.com', event: 'discovery', date: first, time: '14:00', status: 'confirmed', sample: true }
+]; };
+export const makeDemo = (now = new Date()) => ({
   version: 1, profile: { name: 'Alex Morgan', email: 'alex@example.com', workspace: 'Northstar Studio' },
   products: ['meet'], calendar: false, timezone: 'Asia/Kolkata',
   hours: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, i) => ({ day, enabled: i < 5, start: '09:00', end: '17:00' })),
@@ -9,11 +25,7 @@ export const makeDemo = () => ({
     { id: 'consultation', title: 'Project consultation', duration: 45, location: 'Google Meet', description: 'Let’s talk through your next project.', published: true, buffer: 15, notice: 2 },
     { id: 'check-in', title: 'Quick check-in', duration: 15, location: 'Phone', description: 'A little time to catch up.', published: true, buffer: 5, notice: 2 }
   ],
-  bookings: [
-    { id: 'sample-maya', name: 'Maya Chen', email: 'maya@example.com', event: 'discovery', date: '2026-10-26', time: '10:00', status: 'confirmed' },
-    { id: 'sample-daniel', name: 'Daniel Ross', email: 'daniel@example.com', event: 'consultation', date: '2026-10-26', time: '11:30', status: 'confirmed' },
-    { id: 'sample-priya', name: 'Priya Shah', email: 'priya@example.com', event: 'discovery', date: '2026-10-26', time: '14:00', status: 'confirmed' }
-  ],
+  bookings: sampleBookings(now),
   forms: [
     { id: 'client-intake', title: 'Client intake', description: 'Connected to Discovery call', status: 'published', presentation: 'classic', fields: [{ id: 'name', label: 'Your name', type: 'text', required: true }, { id: 'email', label: 'Email address', type: 'email', required: true }, { id: 'goals', label: 'What would you like to work on?', type: 'textarea', required: true }] },
     { id: 'project-feedback', title: 'Project feedback', description: 'After every finished project', status: 'published', presentation: 'conversational', fields: [{ id: 'name', label: 'Your name', type: 'text', required: true }, { id: 'feedback', label: 'How was your experience?', type: 'textarea', required: true }] },
@@ -21,9 +33,9 @@ export const makeDemo = () => ({
     { id: 'brand-discovery', title: 'Brand discovery', description: 'A new project questionnaire', status: 'draft', presentation: 'classic', fields: [{ id: 'name', label: 'Your name', type: 'text', required: true }] }
   ],
   responses: [
-    { id: 'r1', form: 'client-intake', name: 'Maya Chen', answers: { name: 'Maya Chen', email: 'maya@example.com', goals: 'Brand identity · New launch · November' }, received: '2026-10-26T09:42:00+05:30' },
-    { id: 'r2', form: 'project-feedback', name: 'Isabel Torres', answers: { name: 'Isabel Torres', feedback: 'Clear process and a thoughtful result.' }, received: '2026-10-25T16:12:00+05:30' },
-    { id: 'r3', form: 'workshop-signup', name: 'Jamie Kim', answers: { name: 'Jamie Kim', email: 'jamie@example.com' }, received: '2026-10-24T11:05:00+05:30' }
+    { id: 'r1', form: 'client-intake', name: 'Maya Chen', answers: { name: 'Maya Chen', email: 'maya@example.com', goals: 'Brand identity · New launch · November' }, received: hoursAgo(now, 3) },
+    { id: 'r2', form: 'project-feedback', name: 'Isabel Torres', answers: { name: 'Isabel Torres', feedback: 'Clear process and a thoughtful result.' }, received: hoursAgo(now, 26) },
+    { id: 'r3', form: 'workshop-signup', name: 'Jamie Kim', answers: { name: 'Jamie Kim', email: 'jamie@example.com' }, received: hoursAgo(now, 50) }
   ],
   workflows: [
     { id: 'client-welcome', title: 'Client welcome', trigger: 'booking', action: 'email', status: 'active', subject: 'A little context before we meet', message: 'Thanks for booking. Please share your goals before our conversation.' },
@@ -39,13 +51,25 @@ export const makeDemo = () => ({
   ], tasks: [], people: [{ name: 'Alex Morgan', email: 'alex@example.com', role: 'Owner' }]
 });
 
-export function loadDemo(storage) {
+export function loadDemo(storage, now = new Date()) {
   try {
     const value = JSON.parse(storage.getItem(DEMO_KEY));
-    if (value?.version === 1 && ['events', 'bookings', 'forms', 'responses', 'workflows', 'runs', 'hours', 'people', 'tasks'].every(key => Array.isArray(value[key])) && value.profile) return value;
+    if (value?.version === 1 && ['events', 'bookings', 'forms', 'responses', 'workflows', 'runs', 'hours', 'people', 'tasks'].every(key => Array.isArray(value[key])) && value.profile) return refreshSamples(value, now);
   } catch { /* Corrupt or unavailable storage starts a clean in-memory preview. */ }
-  return makeDemo();
+  return makeDemo(now);
 }
+// A saved demo keeps everything the visitor made. Only the original sample bookings that have slipped
+// into the past move forward again, so the demo never calls a past date "upcoming".
+export function refreshSamples(value, now = new Date()) {
+  const today = isoDay(now);
+  const fresh = new Map(sampleBookings(now).map(booking => [booking.id, booking]));
+  value.bookings = value.bookings.map(booking => fresh.has(booking.id) && booking.date < today ? { ...booking, date: fresh.get(booking.id).date, time: fresh.get(booking.id).time, sample: true } : booking);
+  return value;
+}
+/** Confirmed bookings from today on, soonest first. */
+export const upcomingBookings = (bookings, now = new Date()) => bookings.filter(booking => booking.status === 'confirmed' && booking.date >= isoDay(now)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+/** "Tue 10 Nov" for a YYYY-MM-DD day. */
+export const demoDay = day => /^\d{4}-\d{2}-\d{2}$/.test(day || '') ? new Date(day + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }) : day;
 export function saveDemo(storage, value) {
   try { storage.setItem(DEMO_KEY, JSON.stringify(value)); return true; } catch { return false; }
 }
