@@ -914,3 +914,38 @@ While it is off:
 - `backend/test/forms-respondent-switch.test.mjs` (4 tests, also in the PostgreSQL CI job) covers: the default and exact-value parsing, refusal with and without a valid respondent session, no stored response, no sign-in flow, authors refused, publish refused, public forms working, reopening, and member SSO unchanged.
 - Each of the four checks was removed in turn, and the tests failed every time. The two `sso.mjs` checks were removed together in one run; the finish-side check is not tested on its own.
 - `forms-respondent-signin.test.mjs` runs with the switch on.
+
+## Local rollback rehearsal for respondent sign-in (9 November 2026)
+
+Run on this computer only, with synthetic data and a stand-in identity provider. **It does not replace the staging gates.** Respondent sign-in verification on staging is **paused** until an isolated staging environment and a real NxtWave test identity provider are available. `FORMS_RESPONDENT_SIGNIN` stays unset (off) in production.
+
+**Setup.**
+- **Builds:** the release build `f7c5859`, with respondent sign-in switched on, and the rollback build `1bbb67e`, run from a separate worktree with authoring frozen.
+- **Database:** both builds ran against the same SQLite database.
+- **Forms:**
+  - P1: sign-in-only, published, with a response.
+  - P2: sign-in-only, published: the **control**, deliberately left without the rollback protection.
+  - A public form.
+
+| Phase | Check | Result |
+|---|---|---|
+| Before rollback (`f7c5859`) | Signed out: reading P1 through the API is refused (401), and so is direct submission (401) | Pass |
+| | A signed-in respondent reads and submits; no user or membership is created | Pass |
+| | The public form accepts a submission | Pass |
+| Protection | *Stop collecting* on P1 | Pass |
+| Rollback (`1bbb67e`, frozen) | The older backend starts on the upgraded database | Pass |
+| | P1: API read 410, direct submission 410, with or without the earlier respondent cookie | Pass |
+| | P1 in a browser: *This form is closed*, no questions | Pass |
+| | **Control P2 (no protection): the older backend served it publicly. API read 200 with its questions, and a submission was accepted (201).** | **Exposed, as expected.** This is the hazard |
+| | The public form accepts a submission | Pass |
+| Recovery (`f7c5859`) | P1 is still sign-in-only and closed; its responses are intact | Pass |
+| | Republished: signed-out read and submission refused again (401); signed-in submission works | Pass |
+| | With the switch off: P1 fails closed even with a respondent session (503) | Pass |
+
+**Rule before any future rollback.** The older backend ignores `forms.access`, so every sign-in-only form must stop collecting first:
+1. On the running release, choose *Stop collecting* on **every published sign-in-only form**.
+2. Confirm none are left: `SELECT id FROM forms WHERE access = 'signin' AND published_version IS NOT NULL` returns no rows.
+3. For each of those forms, verify in a browser (`/f/:slug` shows the form is closed, with no questions) and through the direct API (`GET /api/public/forms/:slug` and `POST /api/public/forms/:slug/responses` are both refused) that it cannot be read or submitted.
+4. Only then switch to the older backend, with authoring frozen.
+
+While `FORMS_RESPONDENT_SIGNIN` has never been enabled in an environment, no form there can be sign-in-only, so steps 1–3 find nothing. Run them anyway.
