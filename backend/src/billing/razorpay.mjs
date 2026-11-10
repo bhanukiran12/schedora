@@ -1,6 +1,6 @@
 import { randomUUID, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { fail } from '../http.mjs';
-import { PLANS } from './plans.mjs';
+import { ANNUAL_DISCOUNT_PERCENT, PLANS, PLAN_CURRENCY } from './plans.mjs';
 import { applyBillingEvent } from './webhooks.mjs';
 import { rechargeWebhook } from '../video/recharge.mjs';
 
@@ -20,14 +20,18 @@ export const configured = app => app.config.billingProvider === 'razorpay' &&
 function planConfig(app, id) {
   const plan = cfg(app).plans?.[id];
   return PLANS[id] && plan && /^plan_[A-Za-z0-9]+$/.test(plan.id || '') &&
-    Number.isSafeInteger(plan.amount_cents) && plan.amount_cents > 0 && plan.currency === 'INR' &&
+    Number.isSafeInteger(plan.amount_cents) && plan.amount_cents > 0 && plan.currency === PLAN_CURRENCY &&
     Number.isInteger(plan.cycles) && plan.cycles >= 1 && plan.cycles <= 1200 ? plan : null;
 }
 export function subscriptionCatalog(app) {
   return Object.entries(PLANS).map(([id, plan]) => {
-    const price = planConfig(app, id);
-    return { id, ...plan, price: price ? { amount_cents: price.amount_cents, currency: price.currency, interval: 'month', cycles: price.cycles } : null,
-      checkout_available: Boolean(configured(app) && cfg(app).checkoutEnabled && app.config.commercialBillingConfirmed && app.config.billingMode === 'enforced' && price) };
+    const configuredPlan = planConfig(app, id);
+    const monthlyAmount = configuredPlan?.amount_cents || plan.monthly_amount_cents;
+    const annualMonthlyAmount = monthlyAmount * (100 - ANNUAL_DISCOUNT_PERCENT) / 100;
+    return { id, ...plan,
+      price: { amount_cents: monthlyAmount, currency: configuredPlan?.currency || PLAN_CURRENCY, interval: 'month', ...(configuredPlan ? { cycles: configuredPlan.cycles } : {}) },
+      annual_price: { amount_cents: Math.round(annualMonthlyAmount * 12), monthly_equivalent_cents: Math.round(annualMonthlyAmount), savings_cents: Math.round((monthlyAmount - annualMonthlyAmount) * 12), currency: configuredPlan?.currency || PLAN_CURRENCY, interval: 'year', discount_percent: ANNUAL_DISCOUNT_PERCENT },
+      checkout_available: Boolean(configured(app) && cfg(app).checkoutEnabled && app.config.commercialBillingConfirmed && app.config.billingMode === 'enforced' && configuredPlan) };
   });
 }
 function checkoutUrl(value) {

@@ -3,7 +3,7 @@ import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
 import { PRODUCT_INFO } from './products.mjs';
 import { safeReturnPath, hostInfo } from './context.mjs';
-import { brand, mark, productNames } from './design-system.mjs';
+import { brand, icon, mark, productNames } from './design-system.mjs';
 import { creditsSection } from './meet-video.mjs';
 
 const safeNext = value => typeof value === 'string' && /^\/(?!\/)[^\s]*$/.test(value) ? value : '/meet';
@@ -170,58 +170,105 @@ function signedOut(ctx) {
 export async function billing(ctx) {
   setTitle('Plans and billing · Schedora');
   const catalog = await api('GET', '/api/billing/plans');
-  const priceText = price => price ? `${new Intl.NumberFormat('en-IN', { style: 'currency', currency: price.currency }).format(price.amount_cents / 100)} / month` : 'Not yet published';
-  // Phones see ✓ and —; the words stay for screen readers, so the table fits without sideways scrolling.
-  const comparison = html`<div class="table-wrap"><table class="plan-table"><caption class="visually-hidden">Product access by plan</caption>
-    <thead><tr><th scope="col">Plan</th><th scope="col">Meet</th><th scope="col">Forms</th><th scope="col">Flow</th><th scope="col">Price</th></tr></thead><tbody>
-    ${catalog.map(plan => html`<tr><th scope="row">${plan.name}</th>${['meet','forms','flow'].map(product => html`<td>${plan.products.includes(product) ? html`<span aria-hidden="true">✓</span><span class="plan-word"> Included</span>` : html`<span aria-hidden="true">—</span><span class="plan-word visually-hidden-narrow"> Not included</span>`}</td>`)}<td>${priceText(plan.price)}</td></tr>`)}
-    </tbody></table></div>
-    <p class="muted">Prices will be shown once they are approved. Our goal is a lower price than comparable paid plans elsewhere, measured against the same features and usage, without cutting reliability or privacy.</p>`;
+  const prices = (amount, currency = 'INR', exact = false) => new Intl.NumberFormat('en-IN', { style: 'currency', currency, minimumFractionDigits: exact ? 2 : 0, maximumFractionDigits: exact ? 2 : 0 }).format(amount / 100);
+  const billingTermControl = html`<div class="plans-billing-control"><div class="plans-term-switch" role="group" aria-label="Billing frequency"><button type="button" data-billing-term="monthly" aria-pressed="true">Monthly</button><button type="button" data-billing-term="annual" aria-pressed="false">Annual</button></div><span class="plans-saving-note">Save 12% with annual billing</span></div>`;
+  const details = {
+    meet: { eyebrow: 'Scheduling', description: 'Make it easy for people to book time with you.', features: ['Booking pages and event types', 'Appointment and meeting management'] },
+    forms: { eyebrow: 'Forms', description: 'Create forms and keep every response organized.', features: ['Form builder and JSON import', 'Conditional questions and logic', 'Response inbox and exports'] },
+    flow: { eyebrow: 'Automation', description: 'Keep follow-ups and everyday work moving.', features: ['Automated follow-up workflows', 'Tasks and team handoffs', 'Connect your Schedora workspace'] },
+    suite: { eyebrow: 'All-in-one', description: 'Bring scheduling, forms and follow-up together.', features: ['Everything in Meet, Forms and Flow', 'One shared Schedora workspace'] }
+  };
+  const planCard = (plan, action = '') => {
+    const info = details[plan.id];
+    return html`<article class="plans-card plans-card--${plan.id} ${plan.id === 'suite' ? 'plans-card--featured' : ''}">
+      <div class="plans-card__top"><div class="plans-card__identity">${mark(plan.id, 'small')}<span class="plans-card__eyebrow">${info.eyebrow}</span></div></div>
+      <h3>${plan.name}</h3><p class="plans-card__description">${info.description}</p>
+      <div class="plans-card__price" data-monthly-price><strong>${prices(plan.price.amount_cents, plan.price.currency)}</strong><span> / month</span></div>
+      <div class="plans-card__price" data-annual-price hidden><strong>${prices(plan.annual_price.monthly_equivalent_cents, plan.annual_price.currency, true)}</strong><span> / month</span></div>
+      <p class="plans-card__unit" data-monthly-detail>Per workspace, billed monthly</p>
+      <p class="plans-card__unit plans-card__annual-detail" data-annual-detail hidden>${prices(plan.annual_price.amount_cents, plan.annual_price.currency, true)} billed yearly <span>Save ${prices(plan.annual_price.savings_cents, plan.annual_price.currency, true)} / year</span></p>
+      <ul class="plans-card__features">${[...info.features, ...(plan.included_video_credits ? [`${plan.included_video_credits} Meet credits each month`] : [])].map(feature => html`<li>${icon('Check')}<span>${feature}</span></li>`)}</ul>
+      ${action}
+    </article>`;
+  };
+  const bindBillingTerm = (root, { checkout = false } = {}) => {
+    root.querySelectorAll('[data-billing-term]').forEach(button => button.addEventListener('click', () => {
+      const term = button.dataset.billingTerm;
+      root.querySelectorAll('[data-billing-term]').forEach(option => option.setAttribute('aria-pressed', String(option.dataset.billingTerm === term)));
+      root.querySelectorAll('[data-monthly-price], [data-monthly-detail]').forEach(item => { item.hidden = term !== 'monthly'; });
+      root.querySelectorAll('[data-annual-price], [data-annual-detail]').forEach(item => { item.hidden = term !== 'annual'; });
+      const annualNote = root.querySelector('[data-annual-checkout-note]');
+      if (annualNote) annualNote.hidden = term !== 'annual';
+      if (checkout) root.querySelectorAll('[data-subscribe]').forEach(subscribe => {
+        const monthlyAvailable = subscribe.dataset.monthlyAvailable === 'true';
+        subscribe.disabled = term === 'annual' || !monthlyAvailable;
+        subscribe.textContent = term === 'annual' ? 'Annual checkout unavailable' : monthlyAvailable ? 'Subscribe' : 'Not available yet';
+      });
+    }));
+  };
+  const publicCards = html`<div class="plans-grid">${catalog.map(plan => planCard(plan, html`<a class="btn btn-primary plans-card__action" href="/account?mode=signup&next=/billing">Create account</a>`))}</div>`;
+  const comparison = html`<section class="plans-compare" aria-labelledby="plans-compare-title"><div class="plans-section-heading"><div><span class="plans-card__eyebrow">Plan comparison</span><h2 id="plans-compare-title">One workspace. The tools you need.</h2><p>See how each Schedora plan fits your work.</p></div><span class="plans-compare-caption">All plans are per workspace</span></div>
+    <div class="table-wrap"><table class="plan-table"><caption class="visually-hidden">Features included in each Schedora plan</caption>
+      <thead><tr><th scope="col">What’s included</th>${catalog.map(plan => html`<th scope="col"><span class="plans-compare-plan plans-compare-plan--${plan.id}">${plan.name}</span></th>`)}</tr></thead><tbody>
+        ${[['Scheduling and booking pages', 'meet'], ['Forms and responses', 'forms'], ['Workflow automation', 'flow']].map(([label, product]) => html`<tr><th scope="row">${label}</th>${catalog.map(plan => html`<td>${plan.products.includes(product) ? html`<span class="plans-check" role="img" aria-label="Included">✓</span>` : html`<span class="plans-dash" aria-label="Not included">—</span>`}</td>`)}</tr>`)}
+        <tr><th scope="row">Meet credits each month</th>${catalog.map(plan => html`<td>${plan.included_video_credits ? html`<span class="plans-credit-pill">${plan.included_video_credits} credits</span>` : html`<span class="plans-dash" aria-label="Not included">—</span>`}</td>`)}</tr>
+      </tbody></table></div>
+    <div class="plans-footnote"><strong>Meet credits</strong><span>Monthly included credits renew with your plan. Purchased credits carry forward without automatic expiry.</span></div></section>`;
   if (!session.user || !workspace()) {
     const product = ctx.product || 'suite'; const info = PRODUCT_INFO[product] || PRODUCT_INFO.suite;
-    return mount(ctx.main, html`<div class="container page"><span class="tag">${product === 'suite' ? 'Plans' : `${info.name} · Plans`}</span><h1>One account. Your choice of tools.</h1><p class="lead">Subscribe to one product or to the Suite for all three. One workspace, one bill.</p>${comparison}
-      <div class="actions"><a class="btn btn-primary" href="/account?mode=signup${product !== 'suite' ? '&product=' + product : ''}&next=/billing">Create an account</a></div></div>`);
+    mount(ctx.main, html`<div id="plans-page" class="container page plans-page"><span class="tag">${product === 'suite' ? 'Schedora plans' : `${info.name} plans`}</span><div class="plans-hero"><div><h1>Find the plan that fits your work.</h1><p class="lead">Choose one Schedora product or bring all three together. Every price is per workspace.</p></div>${billingTermControl}</div>
+      ${publicCards}${comparison}<p class="plans-evaluation" data-annual-checkout-note hidden>Annual prices are billed once per year. Annual checkout is not available yet.</p>${boot.billingMode === 'open' ? html`<p class="plans-evaluation">All products are available during evaluation. No payment is taken during evaluation.</p>` : ''}</div>`);
+    bindBillingTerm($('#plans-page'));
+    return;
   }
   mount(ctx.main, html`<div class="container page">${loading()}</div>`);
   let data;
   try { data = await api('GET', wsPath('/billing')); }
   catch (error) {
-    if (error.status === 403) return mount(ctx.main, html`<div class="container page"><h1>Plans and billing</h1>${notice('info', html`<p>Only workspace owners and administrators can see billing for ${workspace().name}.</p>`)}${comparison}</div>`);
+    if (error.status === 403) {
+      mount(ctx.main, html`<div id="plans-page" class="container page plans-page billing-dashboard"><header class="billing-page__header"><div><span class="tag">Billing · ${workspace().name}</span><h1>Plans and billing</h1><p class="lead">Review your plan, workspace usage and payment history.</p></div></header>${notice('info', html`<p>Only workspace owners and administrators can see billing for ${workspace().name}.</p>`)}${billingTermControl}${publicCards}${comparison}<p class="plans-evaluation" data-annual-checkout-note hidden>Annual prices are billed once per year. Annual checkout is not available yet.</p></div>`);
+      bindBillingTerm($('#plans-page'));
+      return;
+    }
     throw error;
   }
   if (!ctx.alive()) return;
   const owner = data.role === 'owner';
   const testMode = data.provider === 'test';
-  mount(ctx.main, html`<div class="container page"><span class="tag">Plans · ${workspace().name}</span><h1>Plans and billing</h1>
+  mount(ctx.main, html`<div id="plans-page" class="container page plans-page billing-dashboard"><header class="plans-hero billing-page__header"><div><span class="tag">Billing · ${workspace().name}</span><h1>Plans and billing</h1><p class="lead">Manage your subscription, track usage and review Meet credits.</p></div>${data.provider === 'razorpay' ? billingTermControl : ''}</header>
     ${data.mode === 'open' && Object.values(data.entitlements).every(entitlement => entitlement.active && entitlement.source === 'evaluation')
       // Evaluation: one plain statement instead of three identical cards.
       ? notice('info', html`<p><strong>Evaluation mode.</strong> ${Object.keys(data.entitlements).map(product => PRODUCT_NAMES[product]).join(', ').replace(/, ([^,]*)$/, ' and $1')} are all available to this workspace, and nothing is charged. Usage is still measured so allowances can be tested.</p>`)
       : html`${data.mode === 'open' ? notice('info', html`<p><strong>Evaluation mode.</strong> Every product is available to this workspace and nothing is charged. Usage is still measured so allowances can be tested.</p>`) : ''}
-    <section class="grid-3">${Object.entries(data.entitlements).map(([product, entitlement]) => html`<div class="card card-plain"><h2>${PRODUCT_NAMES[product]}</h2>
+    <section class="grid-3 billing-entitlements" aria-label="Product access">${Object.entries(data.entitlements).map(([product, entitlement]) => html`<div class="card card-plain"><h2>${PRODUCT_NAMES[product]}</h2>
       ${entitlement.active ? badge('active', entitlement.source === 'evaluation' ? 'Evaluation access' : `Active via ${entitlement.source}`) : badge('canceled', 'No access')}
       ${entitlement.status === 'past_due' ? html`<p class="muted">Payment failed. Access continues until ${fmtDateTime(entitlement.grace_until)} while payment is retried.</p>` : ''}</div>`)}</section>`}
-    <section class="card card-plain"><h2>Usage this month</h2>${Object.entries(data.usage).map(([metric, usage]) => html`<div><div class="row-between"><span>${metric.replace('_', ' ')}</span><span>${usage.used}${usage.limit ? ` of ${usage.limit}` : ''}</span></div>
+    <section class="card card-plain billing-usage"><div class="billing-section-heading"><div><span class="account-panel__eyebrow">Workspace activity</span><h2>Usage this month</h2></div><span class="billing-reset-note">Resets monthly · UTC</span></div>${Object.entries(data.usage).map(([metric, usage]) => html`<div class="billing-usage__metric"><div class="row-between"><span>${metric.replace('_', ' ')}</span><strong>${usage.used}${usage.limit ? ` of ${usage.limit}` : ''}</strong></div>
       ${usage.limit ? html`<div class="meter" role="meter" aria-label="${metric.replace('_', ' ')} used" aria-valuemin="0" aria-valuemax="${usage.limit}" aria-valuenow="${usage.used}"><span data-width="${Math.min(100, Math.round(usage.used / usage.limit * 100))}"></span></div>` : ''}</div>`)}
       <p class="hint">Allowances reset on the first day of each month (UTC). Allowances shown are proposed fair-use limits.</p></section>
-    ${(workspace()?.video?.enabled ?? boot.video?.enabled) ? html`<div id="video-credits"></div>` : ''}
-    <section class="card card-plain"><h2>Subscriptions</h2>
-      ${data.subscriptions.length ? html`<ul class="list">${data.subscriptions.map(subscription => html`<li class="row-between"><div><div class="list-title">${PRODUCT_NAMES[subscription.plan] || 'Suite'} plan</div>
-        <div class="meta">${subscription.current_period_end ? html`<span>${subscription.cancel_at_period_end ? 'Ends' : 'Renews'} ${fmtDateTime(subscription.current_period_end)}</span>` : ''}${subscription.grace_until ? html`<span>Grace until ${fmtDateTime(subscription.grace_until)}</span>` : ''}</div></div>
-        <div class="row">${badge(subscription.status, subscription.status.replace('_', ' '))}${owner && testMode && subscription.status !== 'canceled' ? html`
-          <button class="btn btn-small" data-action="renew" data-sub="${subscription.id}">Simulate renewal</button>
-          <button class="btn btn-small" data-action="payment_failed" data-sub="${subscription.id}">Simulate failed payment</button>
-          ${subscription.cancel_at_period_end ? '' : html`<button class="btn btn-small" data-action="cancel" data-sub="${subscription.id}">Cancel at period end</button>`}
-          <button class="btn btn-small btn-danger" data-action="end" data-sub="${subscription.id}">End now</button>` : ''}
-          ${owner && subscription.provider === 'razorpay' ? html`<button class="btn btn-small" data-billing-refresh="${subscription.id}">Refresh payment status</button>${!subscription.cancel_at_period_end && subscription.status !== 'canceled' ? html`<button class="btn btn-small" data-billing-cancel="${subscription.id}">Cancel renewal</button>` : ''}` : ''}</div></li>`)}</ul>` : html`<p class="muted">No subscriptions.</p>`}
-      ${owner && data.provider === 'razorpay' ? html`<h3>Subscribe with Razorpay</h3><p>Review the recurring amount and billing schedule before authorizing payment at Razorpay.</p>
-        <div class="grid-2">${data.plans.map(plan => html`<div class="card"><h3>${plan.name}</h3><p>${priceText(plan.price)}</p>${plan.price ? html`<p class="hint">Up to ${plan.price.cycles} monthly payments. Cancel renewal before your next billing date.</p>` : ''}<button class="btn" data-subscribe="${plan.id}" ${!plan.checkout_available ? raw('disabled') : ''}>Subscribe to ${plan.name}</button></div>`)}</div>
+    ${['meet', 'suite'].includes(ctx.product || 'suite') && (workspace()?.video?.enabled ?? boot.video?.enabled) ? html`<div id="video-credits"></div>` : ''}
+    <section class="card card-plain billing-subscriptions"><div class="billing-section-heading"><div><span class="account-panel__eyebrow">Workspace billing</span><h2>Your subscriptions</h2><p>Check what’s active and when each plan renews.</p></div></div>
+      ${data.subscriptions.length ? html`<ul class="billing-subscription-list">${data.subscriptions.map(subscription => html`<li class="billing-subscription billing-subscription--${subscription.plan || 'suite'}">
+        <div class="billing-subscription__plan">${mark(subscription.plan in PRODUCT_NAMES ? subscription.plan : 'suite', 'small')}<div><strong>${PRODUCT_NAMES[subscription.plan] || 'Suite'}</strong><span>Workspace plan</span></div></div>
+        <div class="billing-subscription__renewal">${subscription.current_period_end ? html`${icon('CalendarDays')}<span><strong>${subscription.cancel_at_period_end ? 'Ends' : 'Renews'}</strong><small>${fmtDateTime(subscription.current_period_end)}</small></span>` : html`<span class="muted">Renewal date not available</span>`}${subscription.grace_until ? html`<small class="billing-subscription__grace">Payment retry until ${fmtDateTime(subscription.grace_until)}</small>` : ''}</div>
+        <div class="billing-subscription__status">${badge(subscription.status, subscription.status.replace('_', ' '))}</div>
+        ${owner && ((testMode && subscription.status !== 'canceled') || (subscription.provider === 'razorpay' && subscription.status !== 'canceled')) ? html`<details class="billing-subscription__actions"><summary class="btn btn-small" aria-label="Manage ${PRODUCT_NAMES[subscription.plan] || 'Suite'} subscription">Manage</summary><div class="billing-subscription__menu">
+          ${owner && testMode && subscription.status !== 'canceled' ? html`<p>Test subscription actions</p><button class="btn btn-small" data-action="renew" data-sub="${subscription.id}">Simulate renewal</button><button class="btn btn-small" data-action="payment_failed" data-sub="${subscription.id}">Simulate failed payment</button>${subscription.cancel_at_period_end ? '' : html`<button class="btn btn-small" data-action="cancel" data-sub="${subscription.id}">Cancel at period end</button>`}<button class="btn btn-small btn-danger" data-action="end" data-sub="${subscription.id}">End now</button>` : ''}
+          ${owner && subscription.provider === 'razorpay' ? html`<p>Payment provider</p><button class="btn btn-small" data-billing-refresh="${subscription.id}">Refresh payment status</button>${!subscription.cancel_at_period_end && subscription.status !== 'canceled' ? html`<button class="btn btn-small" data-billing-cancel="${subscription.id}">Cancel renewal</button>` : ''}` : ''}
+        </div></details>` : ''}
+      </li>`)}</ul>` : html`<div class="billing-subscriptions__empty">${icon('History')}<div><strong>No subscriptions yet</strong><p>Choose a plan below to get started.</p></div></div>`}
+      ${!owner ? html`<p class="hint">Only the workspace owner can change subscriptions.</p>` : ''}
+    </section>
+    ${owner && (data.provider === 'razorpay' || testMode) ? html`<section class="card card-plain billing-plan-picker"><div class="billing-section-heading"><div><span class="account-panel__eyebrow">Plans</span><h2>Choose a plan</h2><p>${testMode ? 'Compare the options for this workspace.' : 'Review the price and billing terms before continuing to Razorpay.'}</p></div></div>
+      ${testMode ? notice('warn', html`<div class="billing-test-notice">${icon('Info')}<p><strong>Test mode</strong><span>No payment provider is connected. Starting a test subscription moves no money; it sends a signed test event through the same verification path used by a real provider.</span></p></div>`) : ''}
+      ${data.provider === 'razorpay' ? html`<div class="plans-grid">${data.plans.map(plan => planCard(plan, html`<div class="plans-card__checkout">${plan.price?.cycles ? html`<p class="hint">Up to ${plan.price.cycles} monthly payments.</p>` : ''}<button class="btn plans-card__action ${plan.checkout_available ? 'btn-primary' : ''}" data-subscribe="${plan.id}" data-monthly-available="${plan.checkout_available}" ${!plan.checkout_available ? raw('disabled') : ''}>${plan.checkout_available ? 'Subscribe' : 'Not available yet'}</button></div>`))}</div>
+        <p class="plans-evaluation" data-annual-checkout-note hidden>Annual prices are billed once per year. Annual checkout is not available yet.</p>
         ${data.plans.some(plan => plan.checkout_available) ? '' : notice('info', html`<p>Subscription checkout is being configured. No payment can be taken yet.</p>`)}
         ${(data.checkouts || []).map(checkout => html`<p>${checkout.plan} checkout: ${checkout.status}. ${checkout.status === 'open' && checkout.checkout_url ? html`<a class="btn" href="${checkout.checkout_url}">Continue authorization at Razorpay</a><button class="btn" data-checkout-refresh="${checkout.id}">Refresh checkout status</button>` : 'Payment setup is pending review. Contact support before starting another checkout.'}</p>`)}` : ''}
-      ${owner && testMode ? html`<h3 class="label">Start a subscription (test provider)</h3>${notice('warn', html`<p>No payment provider is connected. These buttons send signed test events through the same verified webhook path a real provider will use. No money moves.</p>`)}
-        <div class="row">${data.plans.map(plan => html`<button class="btn" data-action="checkout" data-plan="${plan.id}">Start ${plan.name}</button>`)}</div>` : ''}
-      ${!owner ? html`<p class="hint">Only the workspace owner can change subscriptions.</p>` : !testMode && data.provider !== 'razorpay' ? html`<p class="hint">Online checkout opens once a payment provider is connected.</p>` : ''}
-    </section>
-    <section><h2>Compare plans</h2>${comparison}</section></div>`);
+      ${testMode ? html`<div class="billing-test-plans"><div class="plans-grid">${data.plans.map(plan => planCard(plan, html`<button class="btn plans-card__action" data-action="checkout" data-plan="${plan.id}">Start test subscription</button>`))}</div></div>` : ''}
+    </section>` : !owner && !testMode && data.provider !== 'razorpay' ? html`<p class="hint">Online checkout opens once a payment provider is connected.</p>` : ''}
+    ${comparison}</div>`);
+  bindBillingTerm($('#plans-page'), { checkout: true });
   $$('[data-width]').forEach(bar => { bar.style.width = bar.dataset.width + '%'; });
   if ($('#video-credits')) creditsSection(ctx, $('#video-credits'));
   $$('[data-action]').forEach(button => button.onclick = async () => {
