@@ -2223,7 +2223,7 @@ try {
       await open('/billing', "document.querySelector('[data-action=checkout]')");
       await layoutCheck('billing');
       await click('[data-action="checkout"][data-plan="suite"]');
-      await waitFor("document.body.innerText.includes('Meet Active via suite')", 'suite entitlements listed');
+      await waitFor("Boolean(document.querySelector('.billing-subscription--suite'))", 'suite subscription listed');
     } finally {
       app.config.billingMode = originalBillingMode;
     }
