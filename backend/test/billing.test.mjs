@@ -55,7 +55,7 @@ test('purchase, renewal, failed payment with grace, cancellation and downgrade',
     const subscription = billing.subscriptions[0];
     assert.equal(subscription.status, 'active');
     assert.ok(Object.values(billing.entitlements).every(value => value.active && value.source === 'suite'));
-    assert.ok(billing.plans.every(plan => plan.price === null), 'no invented prices');
+    assert.deepEqual(Object.fromEntries(billing.plans.map(plan => [plan.id, plan.price.amount_cents])), { meet: 39900, forms: 49900, flow: 69900, suite: 119900 }, 'the approved monthly catalog prices are shown even while checkout is disabled');
 
     await testEvent({ action: 'payment_failed', subscription: subscription.id });
     billing = (await owner.get(`/api/workspaces/${ws.id}/billing`)).body;
@@ -101,3 +101,4 @@ test('monthly quotas are metered and enforced', async () => {
     assert.equal(env.app.db.get('SELECT COUNT(*) AS count FROM bookings').count, 1, 'no booking without allowance');
   } finally { await env.close(); }
 });
+
