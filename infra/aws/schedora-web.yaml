@@ -1,0 +1,391 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Schedora web/API on ECS Fargate behind an HTTPS Application Load Balancer. Supabase remains external; LiveKit is deployed separately.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC with public subnets and an Internet Gateway route.
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet in one Availability Zone.
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet in a different Availability Zone.
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN in this region covering the Schedora production hostname.
+  ImageUri:
+    Type: String
+    Description: Immutable ECR image URI including a release tag, such as account.dkr.ecr.region.amazonaws.com/schedora-web:release-tag.
+  AppSecretArn:
+    Type: String
+    NoEcho: true
+    Description: Secrets Manager secret ARN containing a JSON object with the secret keys listed in docs/AWS_DEPLOYMENT.md.
+  BaseUrl:
+    Type: String
+    Default: https://staging.schedora.in
+    AllowedPattern: '^https://[A-Za-z0-9.-]+$'
+  ProductDomain:
+    Type: String
+    Default: staging.schedora.in
+    AllowedPattern: '^[A-Za-z0-9.-]+$'
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 1
+    Description: Keep one task until background jobs and rate limiting are shared across replicas.
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['512', '1024', '2048']
+  TaskMemory:
+    Type: String
+    Default: '2048'
+    AllowedValues: ['1024', '2048', '3072', '4096', '5120', '6144', '7168', '8192']
+
+Resources:
+  SchedoraLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/schedora-web
+      RetentionInDays: 30
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTPS entry point for Schedora
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: schedora-web-alb
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: App task accepts traffic only from the load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 10000
+          ToPort: 10000
+          SourceSecurityGroupId: !GetAtt AlbSecurityGroup.GroupId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: schedora-web-task
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: 'false'
+      Tags:
+        - Key: Name
+          Value: schedora-web
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: schedora-web
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 10000
+      HealthCheckEnabled: true
+      HealthCheckPath: /api/health
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: '200'
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      Tags:
+        - Key: Name
+          Value: schedora-web
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  SchedoraCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: schedora
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: schedora
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: schedora-web-execution
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/SchedoraRuntimeBoundary
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadSchedoraRuntimeSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AppSecretArn
+      Tags:
+        - Key: Name
+          Value: schedora-web-execution
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: schedora-web
+      Tags:
+        - Key: Name
+          Value: schedora-web
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: schedora
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 10000
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: RELEASE_MODE
+              Value: evaluation
+            - Name: RELEASE_ENVIRONMENT
+              Value: staging
+            - Name: HOST
+              Value: 0.0.0.0
+            - Name: PORT
+              Value: '10000'
+            - Name: SERVE_FRONTEND
+              Value: 'true'
+            - Name: FRONTEND_DIR
+              Value: /app/frontend
+            - Name: TRUST_PROXY
+              Value: 'true'
+            - Name: TRUST_PROXY_HOPS
+              Value: '1'
+            - Name: BASE_URL
+              Value: !Ref BaseUrl
+            - Name: PRODUCT_DOMAIN
+              Value: !Ref ProductDomain
+            - Name: DATABASE_PATH
+              Value: /tmp/schedora-unused.sqlite
+            - Name: MEET_VIDEO_PROVIDER
+              Value: none
+            - Name: MEET_VIDEO_ENABLED
+              Value: 'false'
+            - Name: MEET_VIDEO_KILL_SWITCH
+              Value: off
+            - Name: MEET_VIDEO_WEBHOOK_CONFIRMED
+              Value: 'false'
+            - Name: MEET_VIDEO_SMOKE_CONFIRMED
+              Value: 'false'
+            - Name: MEET_VIDEO_DEPLOYMENT
+              Value: livekit-aws-staging
+            - Name: LIVEKIT_HOSTING
+              Value: self_hosted
+            - Name: BILLING_MODE
+              Value: open
+            - Name: BILLING_PROVIDER
+              Value: none
+            - Name: EMAIL_PROVIDER
+              Value: outbox
+            - Name: SMS_PROVIDER
+              Value: outbox
+            - Name: ALLOW_TEST_PAYMENTS
+              Value: 'true'
+            - Name: LOG_LEVEL
+              Value: info
+            - Name: PERSISTENT_STORAGE_CONFIRMED
+              Value: 'false'
+            - Name: BACKUPS_CONFIRMED
+              Value: 'false'
+            - Name: MONITORING_CONFIRMED
+              Value: 'false'
+            - Name: EMAIL_DOMAIN_VERIFIED
+              Value: 'false'
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Sub '${AppSecretArn}:DATABASE_URL::'
+            - Name: APP_ENCRYPTION_KEY
+              ValueFrom: !Sub '${AppSecretArn}:APP_ENCRYPTION_KEY::'
+            - Name: ALLOWED_ORIGINS
+              ValueFrom: !Sub '${AppSecretArn}:ALLOWED_ORIGINS::'
+            - Name: EMAIL_HTTP_URL
+              ValueFrom: !Sub '${AppSecretArn}:EMAIL_HTTP_URL::'
+            - Name: EMAIL_HTTP_TOKEN
+              ValueFrom: !Sub '${AppSecretArn}:EMAIL_HTTP_TOKEN::'
+            - Name: EMAIL_FROM
+              ValueFrom: !Sub '${AppSecretArn}:EMAIL_FROM::'
+            - Name: COOKIE_DOMAIN
+              ValueFrom: !Sub '${AppSecretArn}:COOKIE_DOMAIN::'
+            - Name: ASSIST_ADDRESS
+              ValueFrom: !Sub '${AppSecretArn}:ASSIST_ADDRESS::'
+            - Name: OPERATOR_NAME
+              ValueFrom: !Sub '${AppSecretArn}:OPERATOR_NAME::'
+            - Name: OPERATOR_CONTACT
+              ValueFrom: !Sub '${AppSecretArn}:OPERATOR_CONTACT::'
+            - Name: OPERATOR_JURISDICTION
+              ValueFrom: !Sub '${AppSecretArn}:OPERATOR_JURISDICTION::'
+            - Name: ALERT_WEBHOOK_URL
+              ValueFrom: !Sub '${AppSecretArn}:ALERT_WEBHOOK_URL::'
+            - Name: ALERT_EMAIL
+              ValueFrom: !Sub '${AppSecretArn}:ALERT_EMAIL::'
+            - Name: ALERT_EMAIL_PROVIDER
+              ValueFrom: !Sub '${AppSecretArn}:ALERT_EMAIL_PROVIDER::'
+            - Name: BILLING_WEBHOOK_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:BILLING_WEBHOOK_SECRET::'
+            - Name: GOOGLE_CLIENT_ID
+              ValueFrom: !Sub '${AppSecretArn}:GOOGLE_CLIENT_ID::'
+            - Name: GOOGLE_CLIENT_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:GOOGLE_CLIENT_SECRET::'
+            - Name: MICROSOFT_CLIENT_ID
+              ValueFrom: !Sub '${AppSecretArn}:MICROSOFT_CLIENT_ID::'
+            - Name: MICROSOFT_CLIENT_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:MICROSOFT_CLIENT_SECRET::'
+            - Name: ZOOM_CLIENT_ID
+              ValueFrom: !Sub '${AppSecretArn}:ZOOM_CLIENT_ID::'
+            - Name: ZOOM_CLIENT_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:ZOOM_CLIENT_SECRET::'
+            - Name: ANTHROPIC_API_KEY
+              ValueFrom: !Sub '${AppSecretArn}:ANTHROPIC_API_KEY::'
+            - Name: INBOUND_EMAIL_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:INBOUND_EMAIL_SECRET::'
+            - Name: TWILIO_ACCOUNT_SID
+              ValueFrom: !Sub '${AppSecretArn}:TWILIO_ACCOUNT_SID::'
+            - Name: TWILIO_AUTH_TOKEN
+              ValueFrom: !Sub '${AppSecretArn}:TWILIO_AUTH_TOKEN::'
+            - Name: TWILIO_FROM
+              ValueFrom: !Sub '${AppSecretArn}:TWILIO_FROM::'
+            - Name: LIVEKIT_API_KEY
+              ValueFrom: !Sub '${AppSecretArn}:LIVEKIT_API_KEY::'
+            - Name: LIVEKIT_API_SECRET
+              ValueFrom: !Sub '${AppSecretArn}:LIVEKIT_API_SECRET::'
+            - Name: LIVEKIT_URL
+              ValueFrom: !Sub '${AppSecretArn}:LIVEKIT_URL::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref SchedoraLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command: [CMD-SHELL, 'node -e "fetch(\"http://127.0.0.1:10000/api/health\").then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"']
+            Interval: 30
+            Timeout: 10
+            Retries: 3
+            StartPeriod: 60
+
+  SchedoraService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpsListener
+      - HttpListener
+    Properties:
+      ServiceName: schedora-web
+      Cluster: !Ref SchedoraCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: schedora
+          ContainerPort: 10000
+          TargetGroupArn: !Ref AppTargetGroup
+      HealthCheckGracePeriodSeconds: 90
+      EnableExecuteCommand: false
+      Tags:
+        - Key: Name
+          Value: schedora-web
+
+Outputs:
+  LoadBalancerDnsName:
+    Description: Point the app's DNS record here after validating the staging service.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+  EcrImageUri:
+    Description: Image URI configured for this ECS revision.
+    Value: !Ref ImageUri
+  EcsClusterName:
+    Value: !Ref SchedoraCluster
+  EcsServiceName:
+    Value: !GetAtt SchedoraService.Name
+  LogGroupName:
+    Value: !Ref SchedoraLogGroup
