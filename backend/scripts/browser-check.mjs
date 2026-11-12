@@ -2217,10 +2217,12 @@ try {
     if (await evaluate("Boolean(document.querySelector('#more'))")) throw new Error('extra history page incorrectly offered');
   });
   await step('billing test checkout', async () => {
+    app.config.billingMode = 'enforced';
     await open('/billing', "document.querySelector('[data-action=checkout]')");
     await layoutCheck('billing');
     await click('[data-action="checkout"][data-plan="suite"]');
     await waitFor("document.body.innerText.includes('Suite plan')", 'subscription listed');
+    app.config.billingMode = 'open';
   });
   await step('proposed pricing prototype: labelled, not purchasable, exact annual totals, honest limits', async () => {
     await open('/pricing/proposal', "document.querySelector('.proposal-plans .proposal-plan')");
@@ -2245,7 +2247,8 @@ try {
     await layoutCheck('proposed pricing');
     await open('/billing', "document.querySelector('#main h1')");
     if (await evaluate("Boolean(document.head.querySelector('meta[data-page-meta]'))")) throw new Error('noindex leaked to the next page');
-    if ((await text()).includes('₹399')) throw new Error('proposed prices appear on the live Plans page');
+    const livePlans = await text();
+    if (!['₹399', '₹499', '₹699', '₹1,199'].every(price => livePlans.includes(price))) throw new Error('approved prices are missing from the live Plans page: ' + livePlans);
   });
   await step('account page and settings', async () => {
     await open('/account', "document.querySelector('#members .list') && document.querySelector('#brand-form')");
