@@ -2217,12 +2217,16 @@ try {
     if (await evaluate("Boolean(document.querySelector('#more'))")) throw new Error('extra history page incorrectly offered');
   });
   await step('billing test checkout', async () => {
-    app.config.billingMode = 'enforced';
-    await open('/billing', "document.querySelector('[data-action=checkout]')");
-    await layoutCheck('billing');
-    await click('[data-action="checkout"][data-plan="suite"]');
-    await waitFor("document.body.innerText.includes('Suite plan')", 'subscription listed');
-    app.config.billingMode = 'open';
+    const originalBillingMode = app.config.billingMode;
+    try {
+      app.config.billingMode = 'enforced';
+      await open('/billing', "document.querySelector('[data-action=checkout]')");
+      await layoutCheck('billing');
+      await click('[data-action="checkout"][data-plan="suite"]');
+      await waitFor("document.body.innerText.includes('Meet Active via suite')", 'suite entitlements listed');
+    } finally {
+      app.config.billingMode = originalBillingMode;
+    }
   });
   await step('proposed pricing prototype: labelled, not purchasable, exact annual totals, honest limits', async () => {
     await open('/pricing/proposal', "document.querySelector('.proposal-plans .proposal-plan')");
