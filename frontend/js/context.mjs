@@ -9,7 +9,7 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 // Signed-in workspace pages that belong to one product.
 const APP_ROUTES = {
   meet: new RegExp(`^/meet(?:/event-types/(?:new|${UUID})|/contacts/${UUID})?$`),
-  forms: new RegExp(`^/forms(?:/${UUID}(?:/responses)?)?$`),
+  forms: new RegExp(`^/(?:forms(?:/${UUID}(?:/responses)?)?|sheets/${UUID})$`),
   flow: new RegExp(`^/flow(?:/(?:runs|tasks|new|${UUID}))?$`)
 };
 // Shared signed-in pages: they take the context of the host (Suite on the apex domain).
@@ -30,7 +30,7 @@ export function routeProduct(path) {
   const landing = /^\/products\/(meet|forms|flow)$/.exec(path)?.[1];
   if (landing) return landing;
   if (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap')) return 'meet';
-  if (path.startsWith('/forms') || path.startsWith('/f/')) return 'forms';
+  if (path.startsWith('/forms') || path.startsWith('/f/') || path.startsWith('/sheets/')) return 'forms';
   if (path.startsWith('/flow')) return 'flow';
   const demo = /^\/(?:demo|start|setup)\/(meet|forms|flow)(?:\/|$)/.exec(path)?.[1];
   return demo || 'suite';

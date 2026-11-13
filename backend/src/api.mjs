@@ -6,6 +6,7 @@ import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/theme
 import { parseResponseFilter } from './forms/response-filter.mjs';
 import { exportDefinition, exportFilename, IMPORT_MAX_BYTES, importForm, inspectDefinition } from './forms/definition-io.mjs';
 import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { getWorkbook, saveWorkbook } from './forms/workbooks.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
@@ -324,6 +325,8 @@ export function createApi(app) {
     const { filename, body, count } = exportCsv(app, workspace.id, ctx.params.id, parseResponseFilter(ctx.query));
     return { raw: body, type: 'text/csv; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-z0-9.-]/gi, '_')}"`, 'Cache-Control': 'no-store', 'X-Response-Count': String(count) } };
   });
+  get('/api/workspaces/:ws/forms/:id/workbook', ctx => getWorkbook(app, member(ctx, 'responses.read').workspace.id, ctx.params.id));
+  put('/api/workspaces/:ws/forms/:id/workbook', async ctx => saveWorkbook(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json(1100 * 1024)));
   del('/api/workspaces/:ws/forms/:id/responses/:rid', ctx => { deleteResponse(app, member(ctx, 'responses.delete').workspace.id, ctx.params.id, ctx.params.rid); return { status: 204 }; });
 
   // Reusable form themes. Forms hold their own copy, so changing one here restyles nothing (forms/themes.mjs).

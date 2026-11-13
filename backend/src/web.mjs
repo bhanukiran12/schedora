@@ -17,6 +17,7 @@ const PAGES = [
   /^\/setup(?:\/(?:meet|forms|flow))?$/, /^\/products\/(?:meet|forms|flow)$/, /^\/pricing\/proposal$/, /^\/enquiries$/, /^\/demo(?:\/[a-z0-9-]+)*$/, /^\/start(?:\/[a-z0-9-]+)*$/,
   new RegExp(`^/meet/event-types/(new|${UUID})$`), /^\/meet\/manage\/[A-Za-z0-9_-]{20,100}$/,
   new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`),
+  new RegExp(`^/sheets/${UUID}$`),
   /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/room\/[A-Za-z0-9_-]{20,30}$/, /^\/meet\/join\/[A-Za-z0-9_-]{40,60}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
 ];
 

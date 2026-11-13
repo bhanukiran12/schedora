@@ -1,5 +1,6 @@
 import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
+import { mountWorkbookTabs } from './workbook-tabs.mjs';
 import { buildTrail, responseTrailContext, STATE_LABELS } from './enquiry-trail.mjs';
 import { assessFormReadiness, conditionSentence } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
@@ -2455,7 +2456,9 @@ const SINCE_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
 const SIGNIN_FILTERS = [['', 'Anyone'], ['verified', 'Verified sign-in'], ['anonymous', 'Not signed in']];
 const wideResponses = () => window.matchMedia('(min-width: 1200px)').matches;
 
-export async function responses(ctx) {
+export const responseWorkbook = ctx => responses(ctx, { workbook: true });
+
+export async function responses(ctx, { workbook = false } = {}) {
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Sign in to see responses', lead: 'Responses are visible only to members of the form\'s workspace.' }));
   if (!needsSession(ctx)) return;
   // Search and filters live in the address, so a reload or a shared link keeps them. The server
@@ -2491,6 +2494,7 @@ export async function responses(ctx) {
   }
   if (!ctx.alive()) return;
   const { form, versions } = data;
+  let formulaResponses = active() ? null : data.responses;
   let rows = data.responses;
   let matched = data.matched ?? null;
   let total = form.response_count;
@@ -2504,7 +2508,13 @@ export async function responses(ctx) {
   let listState = 'ready'; // 'loading' while a new search runs, 'error' when it failed
   let listError = null;
   const trailOf = row => context ? buildTrail(row, context) : null;
-  setTitle(`Responses: ${form.draft.title} · Forms by Schedora`);
+  setTitle(workbook ? `${form.draft.title} · Schedora Sheets` : `Responses: ${form.draft.title} · Forms by Schedora`);
+  if (workbook) document.body.classList.add('form-editor');
+  const columnLetter = index => {
+    let label = '';
+    for (let n = index + 1; n; n = Math.floor((n - 1) / 26)) label = String.fromCharCode(65 + (n - 1) % 26) + label;
+    return label;
+  };
   // Every question any version asked, latest version first; each answer is shown with the labels
   // of the version it was given in.
   const columns = [];
@@ -2520,7 +2530,24 @@ export async function responses(ctx) {
   const offersSignin = form.access === 'signin' || data.has_verified || rows.some(row => row.respondent);
   const verifiedColumn = () => rows.some(row => row.respondent);
   const attributionKeys = () => attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), rows);
-  const shownRows = () => filter === 'attention' && context ? rows.filter(row => trailOf(row).attention.length) : rows;
+  let oldestFirst = false;
+  const shownRows = () => {
+    const matching = filter === 'attention' && context ? rows.filter(row => trailOf(row).attention.length) : rows;
+    return oldestFirst ? matching.toReversed() : matching;
+  };
+  // Keep formula coordinates independent of interactive search, filters and sorting.
+  const linkedResponseCells = () => {
+    if (!formulaResponses) return null;
+    const verified = formulaResponses.some(row => row.respondent);
+    const attribution = attributionColumns(versionNumbers.map(version => versions[version]), formulaResponses);
+    const fields = ['Submitted', 'Next step', ...(verified ? ['Verified sign-in'] : []), ...columns.map(column => shortLabel(column.label)), ...attribution.map(key => `Attribution: ${key}`)];
+    const values = [fields, ...formulaResponses.slice(0, 49).map(row => [
+      fmtDateTime(row.created_at), row.next_step ? STEP_LABELS[row.next_step.status]?.[1] || row.next_step.status : '',
+      ...(verified ? [row.respondent?.email ?? ''] : []), ...columns.map(column => cell(row, column)),
+      ...attribution.map(key => row.attribution?.[key] ?? '')
+    ])];
+    return Object.fromEntries(values.flatMap((row, index) => row.slice(0, 12).map((value, column) => [columnLetter(column) + (index + 1), value])));
+  };
   const plural = (count, one, many = one + 's') => `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
   const filterWords = () => [
     filters.q.trim() ? `search “${filters.q.trim()}”` : null,
@@ -2551,6 +2578,10 @@ export async function responses(ctx) {
 
   const draw = () => {
     drawExport();
+    if (workbook) {
+      $('#workbook-address').textContent = '—';
+      $('#workbook-value').textContent = 'Select a cell to read its value';
+    }
     const list = $('#responses');
     list.setAttribute('aria-busy', String(listState === 'loading'));
     if (listState === 'loading') return mount(list, loading('Searching responses…'));
@@ -2564,9 +2595,9 @@ export async function responses(ctx) {
         <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
         <span class="muted">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. It checks the loaded responses.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
-      ${shown.length ? html`<div class="table-wrap"><table class="responses-table"><caption class="visually-hidden">Responses to ${form.draft.title}${active() ? `, matching ${filterWords()}` : ''}</caption>
-      <thead><tr><th scope="col">Submitted</th><th scope="col">Next step</th>${verifiedColumn() ? html`<th scope="col" class="col-verified" data-verified-column>Verified sign-in <span class="col-note">identity, not an answer</span></th>` : ''}${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
-      <tbody>${shown.map(row => html`<tr data-row="${row.id}" class="${row.id === openRow ? 'is-open' : ''}" ${row.id === openRow ? raw('aria-current="true"') : ''}><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
+      ${shown.length ? html`<div class="table-wrap response-sheet" tabindex="0" role="region" aria-label="Response spreadsheet"><table class="responses-table"><caption class="visually-hidden">Responses to ${form.draft.title}${active() ? `, matching ${filterWords()}` : ''}</caption>
+      <thead>${workbook ? html`<tr class="workbook-letters" aria-hidden="true"><th></th>${Array.from({ length: 2 + Number(verifiedColumn()) + columns.length + attributionKeys().length }, (_, index) => html`<th>${columnLetter(index)}</th>`)}</tr>` : ''}<tr>${workbook ? html`<th scope="col"><span class="visually-hidden">Row</span><span aria-hidden="true">1</span></th>` : ''}<th scope="col" aria-sort="${oldestFirst ? 'ascending' : 'descending'}"><button class="response-sort" type="button" id="sort-submitted" aria-label="Sort loaded responses by submission time, ${oldestFirst ? 'newest' : 'oldest'} first">Submitted <span aria-hidden="true">${oldestFirst ? '↑' : '↓'}</span></button></th><th scope="col">Next step</th>${verifiedColumn() ? html`<th scope="col" class="col-verified" data-verified-column>Verified sign-in <span class="col-note">identity, not an answer</span></th>` : ''}${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
+      <tbody>${shown.map((row, index) => html`<tr data-row="${row.id}" class="${row.id === openRow ? 'is-open' : ''}" ${row.id === openRow ? raw('aria-current="true"') : ''}>${workbook ? html`<th scope="row">${index + 2}</th>` : ''}<td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
           <button class="btn btn-small" data-view-response="${row.id}" aria-expanded="${row.id === openRow}" aria-controls="response-detail">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
         <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${verifiedColumn() ? html`<td class="answer-cell col-verified">${row.respondent?.email ?? html`<span class="muted">Not signed in</span>`}</td>` : ''}${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}</tr>`)}</tbody></table></div>
       `
@@ -2608,7 +2639,7 @@ export async function responses(ctx) {
     const shown = shownRows();
     const index = shown.findIndex(item => item.id === row.id);
     mount(panel(), html`<section aria-labelledby="detail-title"><div class="detail-head"><h2 id="detail-title" tabindex="-1">Response from ${fmtDateTime(row.created_at)}</h2><button class="btn btn-small" type="button" id="close-detail">Close<span class="visually-hidden"> response</span></button></div>
-      ${index >= 0 ? html`<div class="detail-nav" role="group" aria-label="Move between responses"><button class="btn btn-small" type="button" data-step-detail="-1" ${index > 0 ? '' : raw('disabled')}>← Newer</button><span class="muted">${index + 1} of ${shown.length} shown</span><button class="btn btn-small" type="button" data-step-detail="1" ${index < shown.length - 1 ? '' : raw('disabled')}>Older →</button></div>` : ''}
+      ${index >= 0 ? html`<div class="detail-nav" role="group" aria-label="Move between responses"><button class="btn btn-small" type="button" data-step-detail="-1" ${index > 0 ? '' : raw('disabled')}>← ${oldestFirst ? 'Older' : 'Newer'}</button><span class="muted">${index + 1} of ${shown.length} shown</span><button class="btn btn-small" type="button" data-step-detail="1" ${index < shown.length - 1 ? '' : raw('disabled')}>${oldestFirst ? 'Newer' : 'Older'} →</button></div>` : ''}
       <p class="muted">Receipt ${row.id.replace(/-/g, '').slice(0, 8).toUpperCase()} · Answered version ${row.form_version}${form.published_version && form.published_version !== row.form_version ? ` (live version is ${form.published_version})` : ''}</p>
       ${row.respondent ? html`<section class="detail-identity" aria-labelledby="detail-identity-title"><h3 id="detail-identity-title">Verified sign-in</h3><p class="hint">Confirmed by your workspace's identity provider when this response was submitted. It is not an answer: the respondent could not type or change it.</p>
         <dl class="response-answers" data-verified><dt>Email</dt><dd>${row.respondent.email}</dd>${row.respondent.name ? html`<dt>Name</dt><dd>${row.respondent.name}</dd>` : ''}<dt>Account ID</dt><dd><code>${row.respondent.subject}</code></dd><dt>Signed in</dt><dd>${fmtDateTime(row.respondent.verified_at)}</dd></dl></section>`
@@ -2636,9 +2667,26 @@ export async function responses(ctx) {
   let reopening = false; // closed only to reopen in the other layout: keep the content
   const closeDetail = ({ restore = true } = {}) => { if (!panel().open) return; restoreFocus = restore; panel().close(); };
 
-  mount(ctx.main, html`<div class="container page responses-page" id="responses-page"><a href="/forms/${form.id}">← Back to form</a>
-    <div class="row-between responses-head"><h1>Responses</h1><div class="row export-actions" id="export-actions"></div></div>
-    <p class="muted">${form.draft.title} · ${total} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>
+  mount(ctx.main, html`<div class="container page responses-page ${workbook ? 'sheets-workbook' : ''}" id="responses-page">
+    ${workbook ? html`<header class="workbook-heading"><div class="workbook-title"><span class="workbook-mark" aria-hidden="true">▦</span><div><h1>${form.draft.title}</h1><small>Schedora Sheets</small></div></div><a class="btn btn-small" href="/forms/${form.id}/responses">Open source form responses</a><div class="row export-actions" id="export-actions"></div></header>`
+      : html`<a href="/forms/${form.id}">← Back to form</a>
+      <div class="row-between responses-head"><h1>Responses</h1><div class="row"><a class="btn" href="/sheets/${form.id}">Open in Sheets</a><div class="row export-actions" id="export-actions"></div></div></div>`}
+    ${workbook ? '' : html`<p class="muted">${form.draft.title} · ${total} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>`}
+    ${workbook ? html`<nav class="workbook-menu" aria-label="Workbook menu">
+      <details><summary>File</summary><div><button type="button" data-scope="all">Download CSV</button></div></details>
+      <details><summary>Edit</summary><div><button type="button" data-sheet-action="copy">Copy selected cell</button><button type="button" data-edit-sheet="undo">Undo cell edit</button><button type="button" data-edit-sheet="redo">Redo cell edit</button><button type="button" data-edit-sheet="delete">Delete editable sheet</button></div></details>
+      <details><summary>View</summary><div><button type="button" data-sheet-action="gridlines">Toggle gridlines</button><a href="/forms/${form.id}/responses">Open Forms responses</a></div></details>
+      <details><summary>Insert</summary><div><button type="button" data-edit-sheet="add">New sheet</button></div></details>
+      <details><summary>Format</summary><div><button type="button" data-sheet-action="wrap">Toggle text wrapping</button></div></details>
+      <details><summary>Data</summary><div><button type="button" data-sheet-action="filter">Show or hide filters</button><button type="button" data-sheet-action="sort">Reverse submission order</button></div></details>
+      <details><summary>Tools</summary><div><button type="button" data-sheet-action="refresh">Refresh responses</button><button type="button" data-refresh-workbook>Refresh workbook</button></div></details>
+    </nav><div class="workbook-toolbar" role="group" aria-label="Spreadsheet toolbar">
+      <button type="button" data-sheet-action="filter">⌕ <span>Filters</span></button>
+      <button type="button" data-sheet-action="copy">▣ <span>Copy cell</span></button>
+      <button type="button" data-sheet-action="sort">↕ <span>Sort</span></button>
+      <button type="button" data-sheet-action="refresh">↻ <span>Refresh</span></button>
+    </div>` : ''}
+    ${workbook ? raw('<div class="workbook-responses">') : ''}
     <form class="responses-filters" id="responses-filters" role="search" aria-label="Search and filter responses">
       <div class="filter-search"><label for="response-search">Search responses</label><input type="search" id="response-search" maxlength="200" autocomplete="off" value="${filters.q}" placeholder="Answer, receipt or verified email" aria-describedby="responses-summary"></div>
       <div><label for="response-since">Submitted</label><select id="response-since">${SINCE.map(([key, label]) => html`<option value="${key}" ${filters.since === key ? raw('selected') : ''}>${label}</option>`)}</select></div>
@@ -2649,11 +2697,52 @@ export async function responses(ctx) {
     <p class="responses-summary" id="responses-summary"></p>
     <div id="export-status" tabindex="-1"></div>
     <p id="responses-status" class="visually-hidden" role="status"></p>
+    ${workbook ? html`<div class="workbook-cell-bar" role="status"><span id="workbook-address">—</span><span class="workbook-fx" aria-hidden="true">ƒx</span><span id="workbook-value">Select a cell to read its value</span></div>` : ''}
     <div class="responses-layout" id="responses-layout">
       <div id="responses"></div>
       <dialog class="response-panel" id="response-detail" aria-labelledby="detail-title"></dialog>
-    </div></div>`);
+    </div>${workbook ? raw('</div><div class="workbook-editor" hidden></div><footer class="workbook-footer workbook-tabs" aria-label="Workbook sheets"></footer>') : ''}</div>`);
+  if (workbook) $('#responses-filters').hidden = !active();
   draw();
+
+  if (workbook) {
+    const recalculate = mountWorkbookTabs($('#responses-page'), {
+      storageKey: `schedora.sheets.${session.user.id}.${workspace().id}.${form.id}`,
+      endpoint: wsPath(`/forms/${form.id}/workbook`),
+      alive: ctx.alive,
+      responseCells: linkedResponseCells
+    });
+    if (!formulaResponses) {
+      void api('GET', wsPath(`/forms/${form.id}/responses`)).then(page => {
+        if (!ctx.alive()) return;
+        formulaResponses = page.responses;
+        recalculate();
+      }).catch(() => { /* Linked formulas show a reference error until responses are available. */ });
+    }
+    const selectCell = cell => {
+      if (!cell) return;
+      $('.workbook-selected')?.classList.remove('workbook-selected');
+      cell.classList.add('workbook-selected');
+      $('#workbook-address').textContent = columnLetter(cell.cellIndex - 1) + cell.parentElement.rowIndex;
+      $('#workbook-value').textContent = cell.innerText.trim();
+    };
+    $('#responses').addEventListener('click', event => {
+      if (!event.target.closest('button, a')) selectCell(event.target.closest('.response-sheet tbody td'));
+    });
+    $('#responses').addEventListener('keydown', event => {
+      const table = event.target.matches('.response-sheet') && $('.responses-table', event.target);
+      if (!table || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      const selected = $('.workbook-selected', table);
+      const row = selected?.parentElement.sectionRowIndex ?? 0;
+      const col = selected?.cellIndex ?? 1;
+      const nextRow = Math.min(table.tBodies[0].rows.length - 1, Math.max(0, row + (selected && event.key === 'ArrowDown' ? 1 : selected && event.key === 'ArrowUp' ? -1 : 0)));
+      const nextCol = Math.min(table.tBodies[0].rows[nextRow].cells.length - 1, Math.max(1, col + (selected && event.key === 'ArrowRight' ? 1 : selected && event.key === 'ArrowLeft' ? -1 : 0)));
+      const next = table.tBodies[0].rows[nextRow].cells[nextCol];
+      event.preventDefault();
+      selectCell(next);
+      next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+  }
 
   panel().addEventListener('close', () => {
     if (reopening || panel().open) { reopening = false; return; }
@@ -2742,6 +2831,37 @@ export async function responses(ctx) {
     const target = event.target.closest('button');
     if (!target || target.closest('#responses-filters') && target.id !== 'clear-filters') return;
     if (target.dataset.scope) return exportCsv(target.dataset.scope);
+    if (target.dataset.sheetAction) {
+      const action = target.dataset.sheetAction;
+      const menu = target.closest('details');
+      if (menu) { menu.open = false; menu.querySelector('summary').focus(); }
+      const workbookPage = $('#responses-page');
+      if (action === 'filter') {
+        const filtersForm = $('#responses-filters');
+        filtersForm.hidden = !filtersForm.hidden;
+        if (!filtersForm.hidden) $('#response-search').focus();
+      } else if (action === 'copy') {
+        const selected = $('.workbook-selected');
+        if (!selected) return toast('Select a cell first.');
+        try { await navigator.clipboard.writeText($('#workbook-value').textContent); toast('Cell copied.'); }
+        catch { toast('Could not copy the cell.'); }
+      } else if (action === 'sort') {
+        $('#sort-submitted')?.click();
+      } else if (action === 'refresh') {
+        await applyFilters();
+        toast(listState === 'ready' ? 'Responses refreshed.' : 'Could not refresh responses.');
+      } else {
+        workbookPage.classList.toggle(action === 'wrap' ? 'workbook-wrap' : 'workbook-no-gridlines');
+      }
+      return;
+    }
+    if (target.id === 'sort-submitted') {
+      closeDetail({ restore: false });
+      oldestFirst = !oldestFirst;
+      draw();
+      $('#sort-submitted').focus();
+      return;
+    }
     if (target.dataset.clearFilters !== undefined) {
       Object.assign(filters, { q: '', since: '', version: '', signin: '' });
       $('#response-search').value = '';

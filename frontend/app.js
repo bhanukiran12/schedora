@@ -41,6 +41,7 @@ const routes = [
   [/^\/forms$/, forms.dashboard],
   [new RegExp(`^/forms/${UUID}$`), forms.builder],
   [new RegExp(`^/forms/${UUID}/responses$`), forms.responses],
+  [new RegExp(`^/sheets/${UUID}$`), forms.responseWorkbook],
   [/^\/f\/([a-z0-9-]{3,60})$/, forms.publicForm],
   [/^\/flow$/, flow.dashboard],
   [/^\/flow\/(runs|tasks)$/, flow.dashboard],
