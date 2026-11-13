@@ -311,40 +311,19 @@ try {
   let formId;
   const responseCount = () => app.db.get('SELECT COUNT(*) AS count FROM responses').count;
   const focused = selector => evaluate(`Boolean(document.activeElement?.matches(${JSON.stringify(selector)}))`);
-  await step('Forms templates: goal starting points create unpublished drafts', async () => {
-    // With no forms yet, the starting points are shown directly; nothing is created by viewing them.
-    await open('/forms', "document.querySelector('#form-templates:not([hidden]) [data-template]')");
-    if ((await evaluate("document.querySelectorAll('#form-templates [data-template]').length")) !== 11) throw new Error('expected blank plus ten goal templates');
-    for (const id of ['proposal-questions', 'renewal-feedback']) {
-      if (!(await evaluate(`Boolean(document.querySelector('#form-templates [data-template="${id}"]'))`))) throw new Error('missing sales/client template: ' + id);
-    }
-    const starts = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[0].querySelectorAll('h3')].map(h => h.textContent)");
-    if (starts.join('|') !== 'Blank form|Import JSON') throw new Error('unexpected own starting points: ' + starts.join('|'));
-    const featured = await evaluate("[...document.querySelectorAll('#form-templates .template-grid')[1].querySelectorAll('h3')].map(h => h.textContent)");
-    if (featured.join('|') !== 'Sales discovery|Demo request|Client onboarding|Client review|Proposal questions|Support and renewal feedback') throw new Error('unexpected featured templates: ' + featured.join('|'));
-    // Preview runs the template's questions without creating a draft; Escape returns focus to its card.
-    await evaluate("document.querySelector('[data-preview-template=\"client-review\"]').focus()");
-    await click('[data-preview-template="client-review"]');
-    await waitFor("document.querySelector('dialog.template-preview[open] .template-preview-form form')", 'template preview');
-    if (!(await focused('#template-preview-title'))) throw new Error('template preview does not take focus');
-    await layoutCheck('Forms template preview', 'dialog.template-preview');
-    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-    await waitFor("!document.querySelector('dialog.template-preview')", 'preview closed');
-    if (!(await focused('[data-preview-template="client-review"]'))) throw new Error('closing the preview loses focus');
-    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 0) throw new Error('previewing a template created a form');
-    await layoutCheck('Forms starting points');
+  await step('Forms create: one action opens an unpublished blank draft; Import JSON stays in the builder', async () => {
+    // Viewing the list creates nothing, and the retired template gallery is gone.
+    await open('/forms?tab=all', "document.querySelector('#new-form') && document.querySelector('#form-list .empty')");
+    if (await evaluate("Boolean(document.querySelector('#form-templates, [data-preview-template]'))")) throw new Error('the retired template gallery is still shown');
+    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 0) throw new Error('viewing the forms list created a form');
+    await layoutCheck('Forms list, no forms');
     await click('#new-form');
-    if (!(await evaluate("document.querySelector('#form-templates').hidden && document.querySelector('#new-form').getAttribute('aria-expanded') === 'false'"))) throw new Error('Create form does not toggle the picker');
-    await click('#new-form');
-    if (!(await evaluate("document.activeElement.id === 'templates-heading'"))) throw new Error('opening the picker does not move focus to it');
-    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 0) throw new Error('viewing templates created a form');
-    await click('[data-template="consultation"]');
-    await waitFor("document.querySelector('#publish') && document.querySelector('#builder-notice').innerText.includes('Draft created from the “Consultation request” template')", 'builder with template notice');
-    if (!(await evaluate("document.querySelector('#builder-status').innerText.includes('Not published') && document.querySelector('#f-title').value === 'Consultation request'"))) throw new Error('template draft is not shown as unpublished');
-    const created = app.db.get("SELECT published_version FROM forms WHERE draft LIKE '%Consultation request%'");
-    if (!created || created.published_version !== null || app.db.get('SELECT COUNT(*) AS count FROM form_versions').count !== 0) throw new Error('choosing a template published something');
-    await layoutCheck('Forms builder from template');
+    await waitFor("document.querySelector('#publish') && document.querySelector('#builder-notice').innerText.includes('Draft created from a blank form')", 'builder with blank-draft notice');
+    if (!(await evaluate("document.querySelector('#builder-status').innerText.includes('Not published')"))) throw new Error('the new draft is not shown as unpublished');
+    if (app.db.get('SELECT COUNT(*) AS count FROM forms').count !== 1) throw new Error('Create form did not create exactly one draft');
+    if (app.db.get('SELECT published_version FROM forms').published_version !== null || app.db.get('SELECT COUNT(*) AS count FROM form_versions').count !== 0) throw new Error('creating a form published something');
+    if (!(await evaluate("Boolean(document.querySelector('.overflow-menu #import-form'))"))) throw new Error('Import JSON is missing from the builder More actions menu');
+    await layoutCheck('Forms builder from Create form');
   });
   await step('build and publish form', async () => {
     await open('/forms', "document.querySelector('#new-form')");
@@ -1153,7 +1132,7 @@ try {
       const members = await memberKeys();
       if (pageKey !== 'contact_info' || members.join() !== 'first_name,last_name,phone,email_2,company') throw new Error('unexpected keys: ' + pageKey + ' ' + members.join());
       if (!(await focused('[data-prop="label"].canvas-question')) || (await evaluate('document.activeElement.value')) !== 'Contact Info') throw new Error('adding the page did not focus its title');
-      await waitFor("document.querySelector('#builder-live').innerText.includes('Contact Info page added with 5 questions')", 'page announced');
+      await waitFor("document.querySelector('#builder-live').innerText.includes('Contact details page added with 5 questions')", 'page announced');
       if ((await evaluate("document.querySelectorAll('.canvas-member').length")) !== 5) throw new Error('the canvas does not show the whole page');
       await fill('.canvas-question', 'How can we reach you?');
       await fill('.canvas-description', 'We only use this to reply.');
@@ -2129,10 +2108,16 @@ try {
   await step('Enquiries: one list across Forms, Meet and Flow, attention first, read-only', async () => {
     const records = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM responses) AS responses, (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM flow_runs) AS runs, (SELECT COUNT(*) FROM tasks) AS tasks'));
     const before = records();
-    // Enquiries lives in the sidebar; the Forms page header keeps one action.
-    await open('/forms', "document.querySelector('#app-sidebar a[href=\"/enquiries\"]')");
+    // In Forms, the sidebar's Responses opens the inbox filtered to form responses.
+    await open('/forms', "document.querySelector('#app-sidebar a[href=\"/enquiries?from=response\"]')");
+    await click('#app-sidebar a[href="/enquiries?from=response"]');
+    await waitFor("location.pathname === '/enquiries' && location.search === '?from=response' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'form responses inbox');
+    const formOrigins = await evaluate("[...document.querySelectorAll('.enquiry .meta span:first-child')].map(s => s.textContent.split(':')[0])");
+    if (!formOrigins.length || formOrigins.some(origin => origin !== 'Form')) throw new Error('the Forms responses inbox is not limited to form responses: ' + formOrigins.join(','));
+    // The combined inbox lives under Across products in the workspace overview.
+    await open('/overview', "document.querySelector('#app-sidebar a[href=\"/enquiries\"]')");
     await click('#app-sidebar a[href="/enquiries"]');
-    await waitFor("location.pathname === '/enquiries' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'enquiries list');
+    await waitFor("location.pathname === '/enquiries' && location.search === '' && document.querySelector('.enquiry-list, #enquiries-body .empty')", 'enquiries list');
     const summary = await evaluate("({ origins: [...document.querySelectorAll('.enquiry .meta span:first-child')].map(s => s.textContent.split(':')[0]), states: [...document.querySelectorAll('.enquiry')].map(e => e.dataset.state), hint: document.querySelector('#enquiries-body .hint').textContent })");
     if (!summary.origins.includes('Form') || !summary.origins.includes('Booked directly')) throw new Error('responses and direct bookings are not both listed: ' + summary.origins.join(','));
     if (!/^All \d+ enquir(y is|ies are) loaded\./.test(summary.hint)) throw new Error('coverage note missing: ' + summary.hint);
@@ -2807,9 +2792,9 @@ try {
     await waitFor("document.querySelector('#live-meet-form')", 'live availability step');
     await fill('#live-event-title', 'Live Onboarding Call');
     await click('#live-meet-form button[type=submit]');
-    // Setup offers the same starting points as /forms (Blank, Import JSON, ten templates), then returns here.
+    // Setup offers two starting points (a simple contact form and Import JSON), then returns here.
     await waitFor("document.querySelector('#live-forms-picker [data-template]')", 'live form step picker');
-    if ((await evaluate("document.querySelectorAll('#live-forms-picker [data-template]').length")) !== 11 || !(await evaluate("Boolean(document.querySelector('#live-forms-picker [data-import]'))"))) throw new Error('setup does not offer the same starting points as /forms');
+    if ((await evaluate("document.querySelectorAll('#live-forms-picker [data-template]').length")) !== 1 || !(await evaluate("Boolean(document.querySelector('#live-forms-picker [data-import]'))"))) throw new Error('setup does not offer the same starting points as /forms');
     await layoutCheck('live onboarding form picker');
     await click('#live-forms-picker [data-template="blank"]');
     await waitFor("document.querySelector('#live-forms-form') && document.querySelector('#live-form-created')", 'setup returns after creating a draft');
