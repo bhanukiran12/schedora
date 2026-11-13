@@ -10,7 +10,9 @@ import { setup, signUp } from './helpers.mjs';
 
 const FROZEN = ['POST /forms', 'POST /forms/import', 'PUT /forms/:id/access', 'PATCH /forms/:id', 'DELETE /forms/:id', 'PUT /forms/:id/routing', 'POST /forms/:id/publish', 'POST /forms/:id/unpublish', 'POST /form-themes', 'PATCH /form-themes/:id', 'DELETE /form-themes/:id', 'POST /form-assets'];
 // Not authoring: checking changes nothing, respondents keep responding, and removing a response is a data request.
-const ALLOWED = ['POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses', 'POST /public/forms/:slug/signout'];
+// Sheets editing is independent analysis, not form structure or publishing (owner decision, 13 November 2026),
+// so a linked workbook stays editable during a freeze; its permissions are enforced by its own routes.
+const ALLOWED = ['POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses', 'POST /public/forms/:slug/signout', 'PUT /forms/:id/workbook'];
 const definition = (title = 'Frozen') => ({ title, description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] });
 
 function writeRoutes() {
@@ -130,5 +132,24 @@ test('server: while frozen, direct writes are refused with nothing changed; read
     env.app.config.formsAuthoringFrozen = false;
     const opened = await owner.patch(`${forms}/${draft.id}`, { definition: definition('Edited after'), base_revision: draft.revision });
     assert.equal(opened.status, 200, 'lifting it restores editing at the same revision');
+  } finally { await env.close(); }
+});
+
+test('server: while frozen, a linked Sheets workbook stays editable and the form itself stays frozen', async () => {
+  const env = await setup();
+  try {
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'Sheets Owner');
+    const created = await owner.post(`/api/workspaces/${ws.id}/forms`, { definition: definition('Sheets during freeze') });
+    assert.equal(created.status, 201);
+    const form = `/api/workspaces/${ws.id}/forms/${created.body.id}`;
+    env.app.config.formsAuthoringFrozen = true;
+    const sheets = [{ id: 'b'.repeat(32), name: 'Analysis', cells: { A1: '=2*3' } }];
+    const saved = await owner.raw('PUT', form + '/workbook', { revision: 0, sheets });
+    assert.equal(saved.status, 200, 'workbook edits are not authoring');
+    assert.deepEqual((await owner.get(form + '/workbook')).body, { revision: 1, sheets });
+    const edit = await owner.raw('PATCH', form, { definition: definition('Renamed during freeze') });
+    assert.equal(edit.status, 423, 'form structure stays frozen');
+    assert.equal(edit.body.error.code, 'forms_authoring_frozen');
   } finally { await env.close(); }
 });
