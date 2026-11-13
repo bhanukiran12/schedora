@@ -1,6 +1,8 @@
 # Schedora Meet video (LiveKit) and Meet credits
 
-Status (26 October 2026): implemented and tested against an in-memory fake provider and simulated payments. **Not production-ready.** Nothing has been verified against a real LiveKit project or real Razorpay payments, and no commercial prices are approved. Production starts with video **off**. See [MEET_VIDEO_PROGRESS.md](MEET_VIDEO_PROGRESS.md) for validation results and next steps.
+Status: approved prices and credit denomination are implemented locally, but **not production-ready**. Nothing has been verified against a real LiveKit project or real Razorpay payments, production video starts **off**, and recharge checkout stays gated. See [MEET_VIDEO_PROGRESS.md](MEET_VIDEO_PROGRESS.md) for validation results and next steps.
+
+**Owner-approved commercial terms:** one customer credit represents five participant-minutes; Meet includes 100 credits per paid month (500 participant-minutes), and Suite includes the same 100 credits (500 participant-minutes), revised and approved 11 November 2026. Additional credits are priced at ₹2 per credit (₹0.40 per participant-minute). The code uses this denomination while storing participant-seconds, so existing stored time is preserved. Existing wallet lots are not rewritten or reduced; the new 100-credit amount applies to future monthly grants. Production remains gated until full costs confirm the rate and provider/release gates pass. No trial allowance or pack sizes are approved.
 
 "Meet" still means scheduling. Native video is an additional booking location (`schedora_meet`) plus instant meetings. All existing URLs, the `/book → /meet` redirect, booking `meetings` semantics, and the Google Meet/Zoom/Teams/manual-link locations are unchanged.
 
@@ -13,7 +15,7 @@ Status (26 October 2026): implemented and tested against an in-memory fake provi
 | Scheduling API | `backend/src/api-meet.mjs`, `meet/*.mjs` | One-on-one/group/collective/round-robin, availability, conflict trigger on `meeting_hosts`, holds, payments (Stripe/Razorpay links per workspace), cancel/reschedule via hashed manage tokens, workflows, calendars, polls, analytics |
 | Location types | `meet/event-types.mjs` | `video`, `in_person`, phones, `custom`, `google_meet`, `zoom`, `teams`; auto links via `platform/oauth.mjs` worker sync |
 | Auth and teams | `platform/auth.mjs`, `platform/workspaces.mjs` | Sessions (hashed), owner/admin/member `PERMISSIONS`, workspace isolation (404 for non-members) |
-| Billing | `billing/plans.mjs`, `entitlements.mjs`, `webhooks.mjs`, `razorpay.mjs` | Meet/Forms/Flow/Suite entitlements, monthly quotas (`usage_counters`), normalized billing events, Razorpay monthly subscription checkout and verified webhook, grace periods; prices unset |
+| Billing | `billing/plans.mjs`, `entitlements.mjs`, `webhooks.mjs`, `razorpay.mjs` | Meet/Forms/Flow/Suite entitlements, monthly quotas (`usage_counters`), normalized billing events, Razorpay monthly subscription checkout and verified webhook, grace periods; approved monthly prices |
 | Database | `db.mjs`, `migrations/*.sql`, `postgres*.mjs` | SQLite (`BEGIN IMMEDIATE`) and PostgreSQL (schema generated from SQLite migrations on first init; later tables added by explicit upgrade steps; every transaction takes a global advisory lock); transactions must be synchronous |
 | Worker | `worker.mjs` | One in-process loop: holds, outbox, Flow runs, calendars, email, webhooks, retention |
 | Headers | `web.mjs`, `frontend/vercel.json` | `Permissions-Policy: camera=(), microphone=()`, strict CSP (`connect-src 'self'`) on every page |
@@ -94,8 +96,8 @@ LiveKit token lifecycle (verified in LiveKit docs, October 2026): expiry only li
 
 **Only purchased credits carry forward. Subscription credits reset monthly.**
 
-- Units: internal unit = 1 participant-second (integer). Customer credit = 1 participant-minute = 60 units. Displays round down to 0.1 credit.
-- Allowance (configurable, `MEET_VIDEO_ALLOWANCES`, credits per period): keys `meet`, `suite` (other plans get none), `trial`, `evaluation` (open billing mode). Production default: none.
+- Internal unit = 1 participant-second (integer). Customer credit = 5 participant-minutes = 300 units. Displays round down to 0.1 credit. Existing wallet units remain participant-seconds, so changing the denomination preserves remaining participant-time.
+- Allowance (configurable, `MEET_VIDEO_ALLOWANCES`, credits per period): keys `meet`, `suite` (other plans get none), `trial`, `evaluation` (open billing mode). Defaults are 100 Meet / 100 Suite paid credits; development evaluation is 60 credits (300 participant-minutes), and the limited pilot remains 60 participant-minutes.
 - Allowance periods are monthly windows anchored on the subscription's `current_period_end` (`allowanceWindow`): for a monthly plan one window per billing period; for an annual plan twelve windows, each one month long. No extra subscription columns are needed; the anchor is the paid-through date.
 - One grant per period: the grant covers the highest eligible allowance; any allowance lot already covering `now` counts toward it, whichever subscription created it, so retries, webhook replays, overlapping subscriptions and plan changes never duplicate. `UNIQUE source_key` is the final guard.
 - Eligibility: subscription `active` or `trialing` and `current_period_end > now`. `past_due`/grace, failed renewals, expired periods and cancellations open no new period. A late successful renewal grants the then-current period once.
@@ -137,11 +139,11 @@ Self-hosted LiveKit (AWS) residual replay window: LiveKit Cloud revokes a remove
 ## 7. Recharge and calculator
 
 - Server-owned catalog (`MEET_VIDEO_PACKS`, versioned by `MEET_VIDEO_CATALOG_VERSION`): `{id, name, credits, amount_minor, currency: "INR", enabled}`. Development and tests use three packs labelled "development fixture" that only work with the simulated `test` billing provider; fixtures are rejected in production. Custom amounts are not offered.
-- Checkout is available only when: billing provider `razorpay` is configured with a webhook secret, `MEET_VIDEO_RECHARGE_ENABLED=true`, `COMMERCIAL_BILLING_CONFIRMED=true`, `BILLING_MODE=enforced`, and the pack is not a fixture.
+- A real pack must be priced at exactly ₹2 per credit. Checkout is available only when: billing provider `razorpay` is configured with a webhook secret, `MEET_VIDEO_RECHARGE_ENABLED=true`, `COMMERCIAL_BILLING_CONFIRMED=true`, `BILLING_MODE=enforced`, the configured pack matches the approved unit price, and the pack is not a fixture.
 - Flow: owner only, `Idempotency-Key` required; the order (package snapshot, credits, amount, currency, catalog version) is stored `creating` before calling Razorpay; a hosted Payment Link is created with `reference_id = order id` and notes binding the workspace; an ambiguous failure leaves the order `uncertain`, and refresh recovers the link by `reference_id` instead of creating a second one.
 - Credits are granted only after the server fetches the link from Razorpay and validates: reference, amount, currency, workspace, `status = paid`, a captured `pay_…` payment, and that the payment is not linked to another order. Triggers: the verified platform webhook (`payment_link.paid`, same endpoint and secret as subscriptions), the owner's **Check payment** button, the return redirect (which itself proves nothing), and the worker (orders open/uncertain for 10+ minutes). Exactly once: unique lot `source_key` plus the order state change in one transaction.
 - Refunds (`refund.processed`, verified by fetching the refund) reverse unspent credits proportionally; disputes lost (`payment.dispute.lost`) reverse the whole purchase. Credits already used are recorded as `uncollectable_units`, and the account is flagged (`restricted_reason`), which pauses further purchases until support clears it. Balances never go negative; the purchased balance from other purchases is preserved.
-- Calculator: participants × minutes = participant-minutes = credits required; shows available credits, shortfall and the smallest covering pack, and notes that admission also needs one reservation block per person.
+- Calculator: participants × minutes = participant-minutes; credits required = participant-minutes ÷ 5. It shows available credits, shortfall and the smallest configured covering pack, and notes the admission reservation required per person.
 - Records stay separate: subscriptions (`subscriptions`, `billing_checkouts`), invitee booking payments (`bookings.payment_*`, workspace's own Stripe/Razorpay), Meet credit purchases (`credit_recharge_orders`).
 
 ## 8. Configuration
@@ -156,7 +158,7 @@ Self-hosted LiveKit (AWS) residual replay window: LiveKit Cloud revokes a remove
 | `MEET_VIDEO_DRAINING_DEPLOYMENTS` | `[]` | JSON `[{id,url,apiKey,apiSecret,hosting}]` kept so existing rooms finish on the deployment that created them |
 | `MEET_VIDEO_KILL_SWITCH` | `off` | `admissions` (no new admissions) or `terminate` (also ends every open room) |
 | `MEET_VIDEO_WEBHOOK_CONFIRMED`, `MEET_VIDEO_SMOKE_CONFIRMED`, `MONITORING_CONFIRMED`, `MEET_VIDEO_SELF_HOSTED_REVIEWED` | — | Production gates (with `APP_ENCRYPTION_KEY`); missing gates keep video off and appear in release warnings |
-| `MEET_VIDEO_ALLOWANCES` | dev `{"evaluation":300,"meet":1000,"suite":3000,"trial":0}`, prod `{}` | Credits per allowance period |
+| `MEET_VIDEO_ALLOWANCES` | dev `{"evaluation":60,"meet":100,"suite":100,"trial":0}`, prod `{"meet":100,"suite":100,"trial":0}` | Credits per allowance period; 60 evaluation credits preserve the prior 300 participant-minute dev allowance. Trial is zero. Production video remains off until launch gates pass. |
 | `MEET_VIDEO_PACKS`, `MEET_VIDEO_CATALOG_VERSION`, `MEET_VIDEO_RECHARGE_ENABLED` | dev fixtures, prod none | Credit packs |
 | `MEET_VIDEO_TOKEN_TTL_SECONDS` 120 · `MEET_VIDEO_RESERVATION_BLOCK_SECONDS` 600 · `MEET_VIDEO_RENEW_BEFORE_SECONDS` 240 · `MEET_VIDEO_FINALIZE_DELAY_SECONDS` 300 · `MEET_VIDEO_RECONCILE_SECONDS` 30 | | Timing |
 | `MEET_VIDEO_JOIN_EARLY_MINUTES` 10 · `MEET_VIDEO_OVERTIME_MINUTES` 30 · `MEET_VIDEO_MAX_ROOM_MINUTES` 180 | | Join window and room duration |

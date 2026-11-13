@@ -1,19 +1,19 @@
-// Proposed pricing prototype (frontend/js/pricing-proposal.mjs): arithmetic shown to interview
-// participants is exact, limits are refused rather than charged, and nothing in billing uses it.
+// Pricing research prototype: approved price arithmetic is exact, usage limits are still research
+// assumptions, and checkout remains on /billing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { PROPOSAL_LABEL, PROPOSED_PLANS, annualDifference, annualMonthlyEquivalent, annualTotal, estimate, formatINR, nextReset, validUsage } from '../../frontend/js/pricing-proposal.mjs';
 import { setup } from './helpers.mjs';
 
-test('proposed amounts match docs/PRICING_PROPOSAL.md and annual figures show the full payment', () => {
-  assert.equal(PROPOSAL_LABEL, 'Proposed pricing — not available for purchase');
+test('approved prices match docs/PRICING_PROPOSAL.md and annual figures show the full payment', () => {
+  assert.equal(PROPOSAL_LABEL, 'Pricing research prototype — not available for purchase');
   assert.deepEqual(PROPOSED_PLANS.map(plan => [plan.key, plan.monthly]), [['meet', 399], ['forms', 499], ['flow', 699], ['suite', 1199]]);
-  assert.deepEqual(PROPOSED_PLANS.map(plan => annualTotal(plan.monthly)), [3990, 4990, 6990, 11990]);
-  assert.deepEqual(PROPOSED_PLANS.map(plan => annualMonthlyEquivalent(plan.monthly)), [332.5, 415.83, 582.5, 999.17]);
-  assert.equal(annualDifference(399), 798);
-  assert.equal(formatINR(11990), '₹11,990');
-  assert.equal(formatINR(332.5), '₹332.50');
+  assert.deepEqual(PROPOSED_PLANS.map(plan => annualTotal(plan.monthly)), [4213.44, 5269.44, 7381.44, 12661.44]);
+  assert.deepEqual(PROPOSED_PLANS.map(plan => annualMonthlyEquivalent(plan.monthly)), [351.12, 439.12, 615.12, 1055.12]);
+  assert.equal(annualDifference(399), 574.56);
+  assert.equal(formatINR(12661.44), '₹12,661.44');
+  assert.equal(formatINR(351.12), '₹351.12');
   const singles = PROPOSED_PLANS.filter(plan => plan.key !== 'suite').reduce((sum, plan) => sum + plan.monthly, 0);
   assert.equal(singles - 1199, 398, 'Suite difference is against these proposed plans only');
 });

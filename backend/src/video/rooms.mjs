@@ -5,7 +5,7 @@ import { newToken, sha256 } from '../platform/auth.mjs';
 import { can } from '../platform/workspaces.mjs';
 import { entitlementsFor } from '../billing/entitlements.mjs';
 import { queueEmail } from '../platform/email.mjs';
-import { UNITS_PER_CREDIT, workspaceVideoConfig } from './config.mjs';
+import { UNITS_PER_PARTICIPANT_MINUTE, UNITS_PER_CREDIT, workspaceVideoConfig } from './config.mjs';
 import { chargeOverrun, grantAllowance, reserve, settleReservation, spendableUnits } from './credits.mjs';
 
 // Schedora Meet native video rooms.
@@ -274,7 +274,7 @@ export function estimatedMonthCostMicros(app) {
   const since = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
   const settled = app.db.get('SELECT CAST(COALESCE(SUM(estimated_cost_micros), 0) AS BIGINT) AS micros FROM video_usage_records WHERE created_at >= ?', since).micros;
   const held = app.db.get("SELECT CAST(COALESCE(SUM(units_reserved), 0) AS BIGINT) AS units FROM credit_reservations WHERE status = 'held' AND room_id IS NOT NULL").units;
-  return settled + Math.ceil(held * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_CREDIT);
+  return settled + Math.ceil(held * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_PARTICIPANT_MINUTE);
 }
 
 // Ensures the participant is funded through at least renewBefore from now. Windows for one
@@ -687,7 +687,7 @@ function settleAndRecord(app, reservationId, connected, unitsCharged, extra = {}
   if (result.duplicate) return;
   app.db.run(`INSERT OR IGNORE INTO video_usage_records (id, workspace_id, room_id, participant_id, reservation_id, usage_key, period_from, period_until, connected_ms, units_charged, units_unfunded, estimated_cost_micros, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, randomUUID(), reservation.workspace_id, reservation.room_id, reservation.participant_id, reservationId, 'reservation:' + reservationId,
-  reservation.covers_from, reservation.covers_until, connected, result.consumed, extra.unfunded || 0, Math.ceil(result.consumed * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_CREDIT), app.now());
+  reservation.covers_from, reservation.covers_until, connected, result.consumed, extra.unfunded || 0, Math.ceil(result.consumed * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_PARTICIPANT_MINUTE), app.now());
 }
 
 // Settles reservation windows once they are final: the window has ended, the finalization delay
@@ -742,7 +742,7 @@ function settleOverruns(app, now) {
       const units = Math.ceil(overrunMs / 1000);
       const { charged, unfunded } = chargeOverrun(app, participant.workspace_id, units, key, participant.room_id);
       app.db.run(`INSERT OR IGNORE INTO video_usage_records (id, workspace_id, room_id, participant_id, usage_key, period_from, period_until, connected_ms, units_charged, units_unfunded, estimated_cost_micros, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        randomUUID(), participant.workspace_id, participant.room_id, participant.id, key, since, until, overrunMs, charged, unfunded, Math.ceil(units * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_CREDIT), now);
+        randomUUID(), participant.workspace_id, participant.room_id, participant.id, key, since, until, overrunMs, charged, unfunded, Math.ceil(units * app.config.video.costPerParticipantMinuteMicros / UNITS_PER_PARTICIPANT_MINUTE), now);
       if (unfunded) app.log('warn', 'video_unfunded_usage', { workspace: participant.workspace_id, room: participant.room_id, units: unfunded });
     });
   }

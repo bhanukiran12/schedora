@@ -5,6 +5,7 @@
 import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, fmtFull, html, loading, mount, notice, raw, session, toast, workspace, wsPath } from './core.mjs';
 import { setTitle, signInPrompt } from './pages.mjs';
 import { startSession } from './meet-session.mjs';
+import { icon } from './design-system.mjs';
 
 let sdkPromise = null;
 const sdk = () => sdkPromise ||= import('/vendor/livekit-client.esm.mjs');
@@ -182,7 +183,7 @@ async function prejoin(ctx, flow) {
       <form id="join-form" novalidate>
         <label for="display-name">Your name</label><input id="display-name" name="display_name" required maxlength="60" autocomplete="name" value="${flow.defaultName || ''}">
         <div data-form-status tabindex="-1" id="join-status" aria-live="polite"></div>
-        <div class="actions"><button class="btn btn-primary" type="submit" id="join-button">Join meeting</button></div>
+        <div class="actions"><button class="btn btn-primary" type="submit" id="join-button"><span class="join-label">Join meeting</span></button></div>
         <details class="device-settings"><summary>Camera and microphone settings</summary>
           <label for="camera-select">Camera</label><select id="camera-select"><option value="">Default camera</option></select>
           <label for="mic-select">Microphone</label><select id="mic-select"><option value="">Default microphone</option></select>
@@ -266,8 +267,11 @@ async function prejoin(ctx, flow) {
     const name = $('#display-name').value.trim();
     if (!name) { mount($('#join-status'), notice('bad', html`<p>Enter your name.</p>`)); $('#display-name').focus(); return; }
     preview.joining = true;
-    $('#join-button').setAttribute('aria-disabled', 'true');
-    mount($('#join-status'), html`<p class="muted" role="status">Joining…</p>`);
+    const joinButton = $('#join-button');
+    joinButton.setAttribute('aria-disabled', 'true');
+    joinButton.setAttribute('aria-busy', 'true');
+    $('.join-label', joinButton).textContent = 'Connecting…';
+    mount($('#join-status'), html`<p class="muted" role="status">Connecting you to the meeting… This can take a few seconds.</p>`);
     try {
       const admission = await flow.join({ display_name: name });
       if (!ctx.alive() || preview.disposed) return;
@@ -279,6 +283,8 @@ async function prejoin(ctx, flow) {
     } catch (error) {
       if (!ctx.alive()) return;
       $('#join-button')?.removeAttribute('aria-disabled');
+      $('#join-button')?.removeAttribute('aria-busy');
+      $('.join-label', $('#join-button'))?.replaceChildren(document.createTextNode('Join meeting'));
       if (error.code === 'waiting_for_host') return waitForHost(ctx, flow);
       if (ERROR_STATES[error.code] && error.code !== 'too_early') { leaveMeeting(); return stateScreen(ctx, info, ERROR_STATES[error.code]); }
       const message = error.code === 'insufficient_credits' && flow.host ? html`<p>${error.message}</p><p><a href="/billing" data-external>Review Meet credits</a></p>`
@@ -386,13 +392,13 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     <span class="visually-hidden" id="session-live" aria-live="polite"></span>
     <nav class="video-controls" aria-label="Meeting controls">
       <button class="btn" type="button" id="enable-audio" hidden>Turn on meeting sound</button>
-      <button class="btn" type="button" id="mic" aria-describedby="room-media-state">${MEDIA.microphone(true)}</button>
-      <button class="btn" type="button" id="cam" aria-describedby="room-media-state">${MEDIA.camera(true)}</button>
-      <button class="btn" type="button" id="share" ${shareSupported ? '' : raw('aria-disabled="true"')}>Share screen</button>
-      <button class="btn" type="button" id="devices-toggle" aria-expanded="false" aria-controls="devices-panel">Devices</button>
-      <button class="btn" type="button" id="people-toggle" aria-expanded="false" aria-controls="people-panel">People</button>
-      ${state.host ? html`<button class="btn" type="button" id="session-toggle" aria-expanded="false" aria-controls="session-panel">Session</button>` : ''}
-      <button class="btn btn-leave" type="button" id="leave">Leave</button>
+      <button class="btn room-control" type="button" id="mic" aria-describedby="room-media-state" aria-label="Mute microphone" title="Mute microphone">${icon('Activity')}<span class="control-label">Mute</span></button>
+      <button class="btn room-control" type="button" id="cam" aria-describedby="room-media-state" aria-label="Turn camera off" title="Turn camera off">${icon('Video')}<span class="control-label">Camera</span></button>
+      <button class="btn room-control" type="button" id="share" aria-label="Share screen" title="Share screen" ${shareSupported ? '' : raw('aria-disabled="true"')}>${icon('ArrowUpRight')}<span class="control-label">Share</span></button>
+      <button class="btn room-control" type="button" id="devices-toggle" aria-expanded="false" aria-controls="devices-panel" aria-label="Devices" title="Devices">${icon('Settings')}<span class="control-label">Devices</span></button>
+      <button class="btn room-control" type="button" id="people-toggle" aria-expanded="false" aria-controls="people-panel" aria-label="People" title="People">${icon('Users')}<span class="control-label">People</span></button>
+      ${state.host ? html`<button class="btn room-control" type="button" id="session-toggle" aria-expanded="false" aria-controls="session-panel" aria-label="Session" title="Session">${icon('CalendarCheck')}<span class="control-label">Session</span></button>` : ''}
+      <button class="btn btn-leave room-control" type="button" id="leave" aria-label="Leave meeting" title="Leave meeting"><span class="control-label">Leave</span></button>
       <span class="visually-hidden" id="room-media-state" role="status"></span>
     </nav></div>`);
 
@@ -456,10 +462,10 @@ async function meeting(ctx, flow, LK, admission, tracks) {
     $('#grid')?.setAttribute('data-count', String(Math.min(9, tiles.size)));
     $('#grid')?.setAttribute('data-sharing', String([...tiles.keys()].some(key => key.endsWith(':screen'))));
     const local = room.localParticipant;
-    const label = (selector, text) => { const button = $(selector); if (button && button.textContent !== text) button.textContent = text; };
-    label('#mic', MEDIA.microphone(local.isMicrophoneEnabled));
-    label('#cam', MEDIA.camera(local.isCameraEnabled));
-    label('#share', local.isScreenShareEnabled ? 'Stop sharing' : 'Share screen');
+    const label = (selector, text, action) => { const button = $(selector); const caption = button?.querySelector('.control-label'); if (caption && caption.textContent !== text) caption.textContent = text; if (button) { button.setAttribute('aria-label', action); button.title = action; } };
+    label('#mic', local.isMicrophoneEnabled ? 'Mute' : 'Unmute', MEDIA.microphone(local.isMicrophoneEnabled));
+    label('#cam', local.isCameraEnabled ? 'Camera' : 'Camera off', MEDIA.camera(local.isCameraEnabled));
+    label('#share', local.isScreenShareEnabled ? 'Stop share' : 'Share', local.isScreenShareEnabled ? 'Stop sharing' : 'Share screen');
     $('#share')?.classList.toggle('is-active', local.isScreenShareEnabled);
     $('#mic')?.classList.toggle('is-off', !local.isMicrophoneEnabled);
     $('#cam')?.classList.toggle('is-off', !local.isCameraEnabled);
@@ -743,7 +749,7 @@ export async function creditsSection(ctx, container) {
   const { wallet, catalog } = data;
   const focus = ctx.query.get('recharge');
   mount(container, html`<section class="card card-plain" aria-labelledby="credits-title"><h2 id="credits-title">Meet video credits</h2>
-    <p>1 credit = 1 participant-minute of connected time in Schedora Meet video, including hosts. ${data.policy.spending_order}</p>
+    <p>1 credit = ${catalog.participant_minutes_per_credit} participant-minutes of connected time (₹${(catalog.price_per_credit_minor / 100).toFixed(2)} per credit, or ₹${(catalog.price_per_credit_minor / 100 / catalog.participant_minutes_per_credit).toFixed(2)} per participant-minute). Hosts count as participants. ${data.policy.spending_order}</p>
     ${wallet.low_balance ? notice('warn', html`<p><strong>Low balance.</strong> Each person needs credits reserved before joining a video meeting, and people are removed when reserved time runs out.</p>`) : ''}
     ${wallet.restricted_reason ? notice('bad', html`<p>Credit purchases are on hold for this workspace (${wallet.restricted_reason.replace(/_/g, ' ')}). Contact support.</p>`) : ''}
     <div class="grid-3 credit-cards">
@@ -751,16 +757,19 @@ export async function creditsSection(ctx, container) {
       <div class="card"><h3>Purchased credits</h3><p class="credit-figure">${wallet.purchased.credits}</p><p class="hint">Carry forward. No automatic expiry.</p></div>
       <div class="card"><h3>Available now</h3><p class="credit-figure">${wallet.spendable.credits}</p><p class="hint">${wallet.reserved.credits} reserved for meetings in progress. Used this month: ${data.usage_this_month.credits}.</p></div>
     </div>
-    <h3 class="section-gap">Estimate a meeting</h3>
-    <form id="calculator" class="inline-fields" novalidate>
-      <div><label for="calc-people">People (including hosts)</label><input id="calc-people" name="participants" type="number" min="1" max="100" value="4" required></div>
-      <div><label for="calc-minutes">Minutes</label><input id="calc-minutes" name="minutes" type="number" min="1" max="1440" value="30" required></div>
-      <div class="actions"><button class="btn" type="submit">Estimate</button></div>
-    </form>
-    <div id="calc-result" aria-live="polite"></div>
+    <h3 class="section-gap meeting-estimator-heading">Estimate a meeting</h3>
+    <div class="meeting-estimator" id="meeting-estimator">
+      <div class="meeting-estimator__control"><div class="meeting-estimator__label"><label for="calc-people">People <span>(including hosts)</span></label><output id="calc-people-value" for="calc-people">4 people</output></div>
+        <input id="calc-people" name="participants" type="range" min="1" max="100" step="1" value="4" aria-label="Number of people including hosts">
+        <div class="meeting-estimator__scale"><span>1 person</span><span>100 people</span></div></div>
+      <div class="meeting-estimator__control"><div class="meeting-estimator__label"><label for="calc-minutes">Meeting length</label><output id="calc-minutes-value" for="calc-minutes">30 min</output></div>
+        <input id="calc-minutes" name="minutes" type="range" min="5" max="240" step="5" value="30" aria-label="Meeting length in minutes">
+        <div class="meeting-estimator__scale"><span>5 min</span><span>4 hours</span></div></div>
+      <div id="calc-result" class="meeting-estimator__result" aria-live="polite" aria-atomic="true"></div>
+    </div>
     <h3 class="section-gap">Buy credits</h3>
     ${catalog.packages.length ? html`<div class="grid-3">${catalog.packages.map(pack => html`<div class="card"><h4>${pack.name}</h4><p><strong>${pack.credits.toLocaleString()} credits</strong><br>${inr(pack.amount_minor, pack.currency)}</p>
-      ${pack.fixture ? html`<p class="hint">Development fixture: simulated payment, not a real price.</p>` : ''}
+      ${pack.fixture ? html`<p class="hint">Development fixture: simulated payment, not a real price.</p>` : html`<p class="hint">₹${(pack.amount_minor / pack.credits / 100).toFixed(2)} per credit</p>`}
       ${owner ? html`<button class="btn ${pack.checkout_available ? 'btn-primary' : ''}" data-buy="${pack.id}" ${pack.checkout_available && !wallet.restricted_reason ? '' : raw('disabled')}>Buy ${pack.credits.toLocaleString()} credits</button>` : ''}</div>`)}</div>
       ${catalog.packages.some(pack => pack.checkout_available) ? '' : notice('info', html`<p>Credit purchases are being set up. No payment can be taken yet.</p>`)}`
       : notice('info', html`<p>Credit packs are not available yet.</p>`)}
@@ -776,15 +785,37 @@ export async function creditsSection(ctx, container) {
     <button class="btn btn-small" id="ledger-more" hidden>Show older entries</button>
   </section>`);
 
-  $('#calculator').addEventListener('submit', async event => {
-    event.preventDefault();
-    try {
-      const result = await api('GET', wsPath(`/meet-video/calculator?participants=${encodeURIComponent($('#calc-people').value)}&minutes=${encodeURIComponent($('#calc-minutes').value)}`));
-      mount($('#calc-result'), notice(result.shortfall_credits ? 'warn' : 'ok', html`<p><strong>${result.participant_minutes.toLocaleString()} participant-minutes ≈ ${result.credits_required.toLocaleString()} credits.</strong> Available: ${result.available_credits.toLocaleString()}.
-        ${result.shortfall_credits ? html`Short by ${result.shortfall_credits.toLocaleString()} credits${result.suggested_package ? html` (suggested: ${catalog.packages.find(pack => pack.id === result.suggested_package)?.name || result.suggested_package})` : ''}.` : 'Enough credits.'}</p>
-        <p class="hint">${result.note} Each person also needs the next ${result.admission_buffer_credits} credits reserved before joining.</p>`));
-    } catch (error) { mount($('#calc-result'), errorBlock(error)); }
-  });
+  const peopleSlider = $('#calc-people');
+  const minutesSlider = $('#calc-minutes');
+  const updateEstimate = () => {
+    const people = Number(peopleSlider.value);
+    const minutes = Number(minutesSlider.value);
+    peopleSlider.style.setProperty('--slider-progress', `${(people - Number(peopleSlider.min)) / (Number(peopleSlider.max) - Number(peopleSlider.min)) * 100}%`);
+    minutesSlider.style.setProperty('--slider-progress', `${(minutes - Number(minutesSlider.min)) / (Number(minutesSlider.max) - Number(minutesSlider.min)) * 100}%`);
+    $('#calc-people-value').textContent = `${people} ${people === 1 ? 'person' : 'people'}`;
+    $('#calc-minutes-value').textContent = minutes >= 60 && minutes % 60 === 0
+      ? `${minutes / 60} ${minutes === 60 ? 'hour' : 'hours'}`
+      : `${minutes} min`;
+    const participantMinutes = people * minutes;
+    const unitsPerCredit = catalog.units_per_credit;
+    const requiredUnits = participantMinutes * (catalog.units_per_participant_minute || 60);
+    const availableUnits = wallet.spendable.units;
+    const shortfallUnits = Math.max(0, requiredUnits - availableUnits);
+    const creditsRequired = Math.round(participantMinutes / catalog.participant_minutes_per_credit * 10) / 10;
+    const availableCredits = Math.floor(availableUnits / unitsPerCredit * 10) / 10;
+    const shortfallCredits = Math.ceil(shortfallUnits / unitsPerCredit);
+    const packageList = [...catalog.packages].filter(pack => pack.checkout_available).sort((a, b) => a.credits - b.credits);
+    const suggested = shortfallUnits ? packageList.find(pack => pack.credits * unitsPerCredit >= shortfallUnits) || packageList.at(-1) : null;
+    const bufferCredits = Math.ceil((catalog.reservation_block_seconds || 600) / unitsPerCredit);
+    const result = $('#calc-result');
+    result.classList.toggle('is-short', shortfallCredits > 0);
+    mount(result, html`<p><strong>${participantMinutes.toLocaleString()} participant-minutes</strong><span class="meeting-estimator__equals">≈</span><strong>${creditsRequired.toLocaleString()} credits</strong></p>
+      <p class="meeting-estimator__availability">${availableCredits.toLocaleString()} credits available${shortfallCredits ? html`<span class="meeting-estimator__shortfall">Short by ${shortfallCredits.toLocaleString()} ${shortfallCredits === 1 ? 'credit' : 'credits'}${suggested ? ` · ${suggested.name} may cover it` : ''}</span>` : html`<span class="meeting-estimator__enough">Enough for this estimate</span>`}</p>
+      <p class="hint">Estimate only. Actual usage is based on connected time for everyone, including hosts. ${bufferCredits} credits are reserved per person before joining.</p>`);
+  };
+  peopleSlider.addEventListener('input', updateEstimate);
+  minutesSlider.addEventListener('input', updateEstimate);
+  updateEstimate();
   $$('[data-buy]', container).forEach(button => {
     const key = crypto.randomUUID();
     button.onclick = async () => {

@@ -8,7 +8,7 @@ import { reconcileWallet, reserve, settleReservation, walletSummary } from '../s
 const secret = 'fake_platform_webhook_secret';
 const json = data => new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
 // Test fixture packs only; they are not approved commercial prices.
-const packs = [{ id: 'small', name: 'Test small', credits: 100, amount_minor: 10000, currency: 'INR' }, { id: 'large', name: 'Test large', credits: 1000, amount_minor: 90000, currency: 'INR' }];
+const packs = [{ id: 'small', name: 'Test small', credits: 100, amount_minor: 20000, currency: 'INR' }, { id: 'large', name: 'Test large', credits: 1000, amount_minor: 200000, currency: 'INR' }];
 
 test('test provider: idempotent orders, server-priced, exactly-once grant, mismatch rejected, refunds and chargebacks', async () => {
   const env = await videoSetup();
@@ -44,11 +44,11 @@ test('test provider: idempotent orders, server-priced, exactly-once grant, misma
     assert.equal((await event({ action: 'refund', amount_minor: 25000, event_id: 'rf1' })).body.result, 'partially_refunded');
     assert.equal((await event({ action: 'refund', amount_minor: 25000, event_id: 'rf1' })).body.result, 'duplicate');
     const lot = env.app.db.get("SELECT * FROM credit_lots WHERE kind = 'purchase' AND workspace_id = ?", ws.id);
-    assert.equal(lot.units_revoked, 250 * 60);
+    assert.equal(lot.units_revoked, 250 * 300);
     // Chargeback after consumption: the consumed part is uncollectable, recorded, and purchases pause.
     assert.equal((await event({ action: 'chargeback', event_id: 'dp1' })).body.result, 'charged_back');
     const after = env.app.db.get('SELECT * FROM credit_recharge_orders WHERE id = ?', order.body.id);
-    assert.equal(after.reversed_units + after.uncollectable_units, 500 * 60);
+    assert.equal(after.reversed_units + after.uncollectable_units, 500 * 300);
     assert.equal(env.app.db.get('SELECT restricted_reason FROM credit_accounts WHERE workspace_id = ?', ws.id).restricted_reason, 'chargeback');
     assert.equal((await owner.post(`/api/workspaces/${ws.id}/meet-video/recharges`, { package_id: 'small' }, { 'Idempotency-Key': 'recharge-key-0000000002' })).body.error.code, 'recharge_restricted');
     assert.deepEqual(reconcileWallet(env.app, ws.id), []);
@@ -86,13 +86,13 @@ test('Razorpay: production-style catalog stays disabled until approved; verified
     assert.equal(created.status, 201, JSON.stringify(created.body));
     assert.match(created.body.checkout_url, /^https:\/\/rzp\.io\//);
     const link = links.get('plink_1');
-    assert.equal(link.amount, 10000);
+    assert.equal(link.amount, 20000);
     assert.equal(link.reference_id, created.body.id);
     // A forged browser "success" redirect grants nothing: refresh asks Razorpay.
     assert.equal((await owner.post(`/api/workspaces/${ws.id}/meet-video/recharges/${created.body.id}/refresh`)).body.result, 'pending');
     assert.equal(walletSummary(env.app, ws.id).purchased.credits, 0);
     // Paid at Razorpay; webhook (signature verified, then fetched server-to-server) and refresh race.
-    Object.assign(link, { status: 'paid', amount_paid: 10000, payments: [{ payment_id: 'pay_abc123', status: 'captured' }] });
+    Object.assign(link, { status: 'paid', amount_paid: 20000, payments: [{ payment_id: 'pay_abc123', status: 'captured' }] });
     const raw = JSON.stringify({ event: 'payment_link.paid', created_at: Math.floor(env.clock.now / 1000), payload: { payment_link: { entity: { id: 'plink_1', notes: { purpose: 'meet_credits', schedora_recharge_id: created.body.id } } } } });
     const signature = createHmac('sha256', secret).update(raw).digest('hex');
     const bad = await env.client().raw('POST', '/api/billing/razorpay/webhook', raw, { 'X-Razorpay-Signature': '0'.repeat(64) });

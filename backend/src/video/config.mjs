@@ -1,8 +1,9 @@
 // Schedora Meet video configuration. Everything here is server-side; publicVideoConfig() is the
-// only part sent to browsers. Commercial values (allowances, pack prices) are configuration, not
-// code: production starts with none, and checkout stays disabled until real values are supplied.
+// only part sent to browsers. Approved paid-plan allowances have safe defaults; pack catalogs and
+// operational switches remain server configuration, and production video/recharge stay gated.
 
-export const UNITS_PER_CREDIT = 60; // 1 credit = 1 participant-minute = 60 participant-seconds
+export const UNITS_PER_PARTICIPANT_MINUTE = 60; // Stored units are participant-seconds.
+export const UNITS_PER_CREDIT = 300; // 1 credit = 5 participant-minutes = 300 participant-seconds.
 
 const json = (value, fallback, name) => {
   if (!value) return fallback;
@@ -20,7 +21,8 @@ const DEVELOPMENT_PACKS = [
   { id: 'medium', name: 'Medium pack (development fixture)', credits: 2000, amount_minor: 180000, currency: 'INR', enabled: true, fixture: true },
   { id: 'large', name: 'Large pack (development fixture)', credits: 10000, amount_minor: 800000, currency: 'INR', enabled: true, fixture: true }
 ];
-const DEVELOPMENT_ALLOWANCES = { evaluation: 300, meet: 1000, suite: 3000, trial: 0 };
+const DEVELOPMENT_ALLOWANCES = { evaluation: 60, meet: 100, suite: 100, trial: 0 };
+const PRODUCTION_ALLOWANCES = { meet: 100, suite: 100, trial: 0 };
 
 export function validateLiveKitUrl(value, { production, hosting }) {
   let url;
@@ -66,14 +68,18 @@ export function loadVideoConfig(env, production) {
   if (pilotRequested) {
     if (pilotWorkspaces.length !== 1) pilotBlocked.push('Select one pilot workspace.');
     if (production) {
-      if (provider !== 'livekit' || (env.LIVEKIT_HOSTING || 'cloud') !== 'cloud') pilotBlocked.push('The production pilot requires LiveKit Cloud.');
-      if (!env.LIVEKIT_URL || !env.LIVEKIT_API_KEY || !env.LIVEKIT_API_SECRET) pilotBlocked.push('Configure the LiveKit Cloud credentials.');
+      const selfHostedStaging = env.RELEASE_ENVIRONMENT === 'staging'
+        && env.BASE_URL === 'https://staging.schedora.in'
+        && env.LIVEKIT_HOSTING === 'self_hosted'
+        && env.LIVEKIT_URL === 'wss://lk-stage.schedora.in';
+      if (provider !== 'livekit' || ((env.LIVEKIT_HOSTING || 'cloud') !== 'cloud' && !selfHostedStaging)) pilotBlocked.push('The production pilot requires LiveKit Cloud.');
+      if (!env.LIVEKIT_URL || !env.LIVEKIT_API_KEY || !env.LIVEKIT_API_SECRET) pilotBlocked.push('Configure the LiveKit credentials.');
       if (!env.APP_ENCRYPTION_KEY || env.APP_ENCRYPTION_KEY.length < 32) pilotBlocked.push('Configure the meeting-link encryption key.');
       if (env.MEET_VIDEO_WEBHOOK_CONFIRMED !== 'true') pilotBlocked.push('Verify the permanent provider webhook first.');
-      if (env.MONITORING_CONFIRMED !== 'true') pilotBlocked.push('Verify operator and external monitoring first.');
+      if (!selfHostedStaging && env.MONITORING_CONFIRMED !== 'true') pilotBlocked.push('Verify operator and external monitoring first.');
     }
   }
-  const pilot = { enabled: pilotRequested && !pilotBlocked.length, workspaceIds: pilotWorkspaces, monthlyCredits: 60, blocked: pilotBlocked };
+  const pilot = { enabled: pilotRequested && !pilotBlocked.length, workspaceIds: pilotWorkspaces, monthlyCredits: 12, blocked: pilotBlocked };
   const deployments = [];
   if (provider === 'livekit' && (enabled || env.LIVEKIT_URL)) {
     deployments.push(deploymentFrom({ id: env.MEET_VIDEO_DEPLOYMENT || 'livekit-cloud', url: env.LIVEKIT_URL, apiKey: env.LIVEKIT_API_KEY, apiSecret: env.LIVEKIT_API_SECRET, hosting: env.LIVEKIT_HOSTING }, production));
@@ -89,7 +95,7 @@ export function loadVideoConfig(env, production) {
   }
   const killSwitch = env.MEET_VIDEO_KILL_SWITCH || 'off';
   if (!['off', 'admissions', 'terminate'].includes(killSwitch)) throw new Error('MEET_VIDEO_KILL_SWITCH must be off, admissions or terminate.');
-  const allowances = json(env.MEET_VIDEO_ALLOWANCES, production ? {} : DEVELOPMENT_ALLOWANCES, 'MEET_VIDEO_ALLOWANCES');
+  const allowances = json(env.MEET_VIDEO_ALLOWANCES, production ? PRODUCTION_ALLOWANCES : DEVELOPMENT_ALLOWANCES, 'MEET_VIDEO_ALLOWANCES');
   for (const [plan, credits] of Object.entries(allowances)) {
     if (!['evaluation', 'trial', 'meet', 'suite'].includes(plan) || !Number.isInteger(credits) || credits < 0 || credits > 1000000) throw new Error('MEET_VIDEO_ALLOWANCES maps evaluation, trial, meet or suite to whole credits.');
   }

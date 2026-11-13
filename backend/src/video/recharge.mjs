@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { fail } from '../http.mjs';
 import { configured as razorpayConfigured, request as razorpayRequest } from '../billing/razorpay.mjs';
-import { UNITS_PER_CREDIT } from './config.mjs';
+import { UNITS_PER_CREDIT, UNITS_PER_PARTICIPANT_MINUTE } from './config.mjs';
+import { VIDEO_CREDIT_MINUTES, VIDEO_CREDIT_PRICE_MINOR } from '../billing/plans.mjs';
 import { grantPurchase, reverseLot, spendableUnits } from './credits.mjs';
 
 // Meet credit recharge through the platform Razorpay account (hosted Payment Links), separate
@@ -24,11 +25,16 @@ export function rechargeCatalog(app) {
   const live = provider === 'razorpay' && video.rechargeEnabled && app.config.commercialBillingConfirmed && app.config.billingMode === 'enforced';
   return {
     version: video.catalogVersion, provider, units_per_credit: UNITS_PER_CREDIT,
+    units_per_participant_minute: UNITS_PER_PARTICIPANT_MINUTE, reservation_block_seconds: video.blockSeconds,
     packages: video.packs.filter(pack => pack.enabled !== false).map(pack => ({
       id: pack.id, name: pack.name, credits: pack.credits, amount_minor: pack.amount_minor, currency: pack.currency, fixture: Boolean(pack.fixture),
       // Fixtures only work with the simulated provider; real packs need approved commercial configuration.
-      checkout_available: pack.fixture ? provider === 'test' : (live || provider === 'test')
-    }))
+      checkout_available: pack.fixture ? provider === 'test' : (
+        pack.amount_minor === pack.credits * VIDEO_CREDIT_PRICE_MINOR && live
+      )
+    })),
+    participant_minutes_per_credit: VIDEO_CREDIT_MINUTES,
+    price_per_credit_minor: VIDEO_CREDIT_PRICE_MINOR
   };
 }
 
@@ -37,17 +43,17 @@ export function calculate(app, workspaceId, { participants, minutes }) {
   const length = Number(minutes);
   if (!Number.isInteger(people) || people < 1 || people > 100) fail(400, 'validation_failed', 'Enter from 1 to 100 participants.', { field: 'participants' });
   if (!Number.isInteger(length) || length < 1 || length > 1440) fail(400, 'validation_failed', 'Enter from 1 to 1440 minutes.', { field: 'minutes' });
-  const units = people * length * UNITS_PER_CREDIT;
+  const units = people * length * UNITS_PER_PARTICIPANT_MINUTE;
   const available = spendableUnits(app, workspaceId);
   const shortfall = Math.max(0, units - available);
   const packages = rechargeCatalog(app).packages.filter(pack => pack.checkout_available);
   const suggested = shortfall ? packages.filter(pack => pack.credits * UNITS_PER_CREDIT >= shortfall).sort((a, b) => a.credits - b.credits)[0] || packages.sort((a, b) => b.credits - a.credits)[0] || null : null;
   return {
     participants: people, minutes: length, participant_minutes: people * length,
-    credits_required: people * length, available_credits: Math.floor(available / UNITS_PER_CREDIT * 10) / 10,
+    credits_required: Math.round(people * length / VIDEO_CREDIT_MINUTES * 10) / 10, available_credits: Math.floor(available / UNITS_PER_CREDIT * 10) / 10,
     shortfall_credits: Math.ceil(shortfall / UNITS_PER_CREDIT), suggested_package: suggested?.id || null,
     // Each connected person must have the next block of credits reserved before joining.
-    admission_buffer_credits: Math.ceil(app.config.video.blockSeconds / 60),
+    admission_buffer_credits: Math.ceil(app.config.video.blockSeconds / UNITS_PER_CREDIT),
     note: 'Estimate only. Credits are charged for actual connected time of each participant, including hosts, measured by the video provider.'
   };
 }

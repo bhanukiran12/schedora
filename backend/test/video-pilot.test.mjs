@@ -22,6 +22,26 @@ test('production validation pilot requires monitoring/webhook and one workspace;
   assert.throws(() => loadConfig({ ...env, MEET_VIDEO_ENABLED: 'true' }), /either.*pilot.*general/);
 });
 
+test('self-hosted validation pilot is restricted to the AWS staging origins and one workspace', () => {
+  const env = {
+    NODE_ENV: 'production', RELEASE_ENVIRONMENT: 'staging', BASE_URL: 'https://staging.schedora.in',
+    LIVEKIT_HOSTING: 'self_hosted', LIVEKIT_URL: 'wss://lk-stage.schedora.in',
+    LIVEKIT_API_KEY: 'fixture', LIVEKIT_API_SECRET: 's'.repeat(40), APP_ENCRYPTION_KEY: 'e'.repeat(40),
+    MEET_VIDEO_PROVIDER: 'livekit', MEET_VIDEO_PILOT_ENABLED: 'true',
+    MEET_VIDEO_PILOT_WORKSPACES: '["00000000-0000-4000-8000-000000000001"]',
+    MEET_VIDEO_WEBHOOK_CONFIRMED: 'true'
+  };
+  const config = loadConfig(env);
+  assert.equal(config.video.pilot.enabled, true);
+  assert.equal(config.video.enabled, false);
+  assert.equal(config.video.maxParticipants, 2);
+  for (const override of [
+    { RELEASE_ENVIRONMENT: 'production' }, { BASE_URL: 'https://schedora.in' },
+    { LIVEKIT_URL: 'wss://other.schedora.in' }, { MEET_VIDEO_WEBHOOK_CONFIRMED: 'false' },
+    { MEET_VIDEO_PILOT_WORKSPACES: '[]' }
+  ]) assert.equal(loadConfig({ ...env, ...override }).video.pilot.enabled, false);
+});
+
 test('provider pilot check touches only its new empty room, cleans up after failures and never pretends to verify media', async () => {
   const config = { video: { enabled: false, pilot: { enabled: true }, deployment: 'cloud', deployments: [{ id: 'cloud', provider: 'livekit', hosting: 'cloud' }] } };
   const calls = []; let roomName, failList = false;

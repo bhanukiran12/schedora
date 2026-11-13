@@ -4,7 +4,7 @@ This is Schedora's subscription checkout for Meet, Forms, Flow and Suite. It is 
 
 ## Current rollout
 
-The owner requested integration now and live payment testing later. Checkout remains disabled. Prices have not been approved; this integration does not invent prices, publish savings claims, enable recurring charges, switch evaluation workspaces to enforced access, or purchase a subscription.
+Monthly prices and a 12% annual discount were approved on 10 November 2026. The local catalog displays monthly and annual prices; annual totals are paid upfront for 12 months. Monthly checkout remains gated until its configured Razorpay plans match the approved amounts and all existing payment/release gates pass. Annual checkout is not implemented; it needs yearly Razorpay plans and server-side cadence validation. No recurring charge, billing-mode change, or purchase is enabled by this page work.
 
 ## Server configuration
 
@@ -14,7 +14,7 @@ Enter secrets directly in Render's environment settings, never in chat or fronte
 - `BILLING_RAZORPAY_KEY_ID`: Schedora's Razorpay Key ID.
 - `BILLING_RAZORPAY_KEY_SECRET`: matching private API secret.
 - `BILLING_WEBHOOK_SECRET`: a separate private webhook signing secret.
-- `BILLING_RAZORPAY_PLANS`: JSON mapping `meet`, `forms`, `flow`, `suite` to `{ "id": "plan_REPLACE", "amount_cents": <approved integer paise>, "currency": "INR", "cycles": <approved positive integer> }`.
+- `BILLING_RAZORPAY_PLANS`: JSON mapping `meet`, `forms`, `flow`, `suite` to `{ "id": "plan_REPLACE", "amount_cents": <39900 / 49900 / 69900 / 119900 paise, respectively>, "currency": "INR", "cycles": <configured positive integer> }`. Keep existing Render values private; the server disables a plan's checkout if its amount differs from the approved price.
 - `BILLING_CHECKOUT_ENABLED=false` while setup/testing/pricing approval is incomplete.
 
 Plans must be Razorpay monthly plans with interval 1. The checkout verifies the remote plan's price, currency and cadence against this server configuration. Billing cycles are explicitly configured and disclosed before authorization; a finite mandate does not silently renew forever. Plan creation/price selection remains an owner action.

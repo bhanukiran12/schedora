@@ -14,7 +14,7 @@ Required production settings:
 - EMAIL_PROVIDER=http with HTTPS EMAIL_HTTP_URL, EMAIL_HTTP_TOKEN, and EMAIL_FROM. The endpoint must accept the documented JSON relay contract and honor Idempotency-Key. EMAIL_DOMAIN_VERIFIED=true only after sender DNS and inbox checks.
 - GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET from the owner's Google OAuth app. Callback is BASE_URL + /api/oauth/google/callback. Connect the host's Google account from Meet after deployment.
 - OPERATOR_NAME, OPERATOR_CONTACT and OPERATOR_JURISDICTION set to reviewed legal details.
-- BILLING_MODE=enforced; ALLOW_TEST_PAYMENTS=false; no test billing provider. Subscription billing still needs a selected live adapter and approved prices. COMMERCIAL_BILLING_CONFIRMED=true only after live-mode provisioning, renewal, failed-payment and cancellation tests. This flag records an operational attestation; it does not implement a payment adapter.
+- BILLING_MODE=enforced; ALLOW_TEST_PAYMENTS=false; no test billing provider. Approved monthly prices are Meet ₹399, Forms ₹499, Flow ₹699 and Suite ₹1,199. Subscription billing still needs matching live Razorpay plans and lifecycle checks. COMMERCIAL_BILLING_CONFIRMED=true only after live-mode provisioning, renewal, failed-payment and cancellation tests. This flag records an operational attestation; it does not implement a payment adapter.
 - BACKUPS_CONFIRMED=true after an off-site snapshot and isolated restore; MONITORING_CONFIRMED=true after alert delivery; PROVIDER_SMOKE_CONFIRMED=true after the lifecycle below passes.
 
 Confirmation flags are evidence records, not substitutes for checks. A successful preflight checks configuration and attestations; it does not certify security, availability or legal compliance.

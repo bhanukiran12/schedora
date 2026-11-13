@@ -1,21 +1,21 @@
 # Schedora pricing proposal
 
-Research/interview proposal · 27 October 2026 · **NOT APPROVED PRICES OR A CUSTOMER OFFER**
+Pricing and packaging research · 27 October 2026. **Monthly list prices and a 12% annual discount were approved 10 November 2026; usage assumptions and competitor claims remain unapproved.**
 
-No billing configuration, checkout amount, allowance or tax policy is changed by this document. An interview prototype of these figures is at `/pricing/proposal`, labelled "Proposed pricing — not available for purchase" and excluded from search and navigation; see [implementation log](RESEARCH_IMPLEMENTATION.md#slice-4-proposed-pricing-and-usage-prototype-interview-material). Amounts below are INR experiment stimuli, not measured willingness to pay or a finding that Schedora is cheaper. Related: [Strategy](SUITE_STRATEGY_2026_10_27.md), [Feature gates](FEATURE_PRIORITIES.md), [existing approval worksheet](PRICING_WORKSHEET.md).
+The monthly prices and annual discount below are approved and displayed on `/billing`. Annual prices mean 12 months paid upfront at 12% off. Annual checkout still needs implementation and matching Razorpay yearly plans; no annual payment can be taken yet. The separate `/pricing/proposal` page remains a research prototype: usage assumptions, competitor comparisons and savings claims are hypothetical. This approval does not enable checkout or change billing mode. Related: [Strategy](SUITE_STRATEGY_2026_10_27.md), [Feature gates](FEATURE_PRIORITIES.md), [approval worksheet](PRICING_WORKSHEET.md).
 
-## Concrete price list to test
+## Approved monthly and annual prices
 
-Start commercial discovery with monthly billing. Annual figures are an optional later interview concept using ten monthly payments per year, not a launched discount. All proposed prices exclude any applicable taxes whose treatment must be confirmed before sale.
+Annual plans are paid upfront for 12 months and receive a 12% discount against 12 monthly payments. Currency remains INR. Billing, renewal and any applicable tax treatment must be disclosed before a live purchase.
 
-| Proposed plan | Monthly test anchor | Research range/month | Illustrative annual total | Equivalent/month, annual paid up front |
+| Plan | Approved monthly price | Research range/month | Approved annual total, paid upfront | Monthly equivalent |
 | --- | ---: | ---: | ---: | ---: |
-| Meet | ₹399 | ₹299–499 | ₹3,990 | ₹332.50 |
-| Forms | ₹499 | ₹399–699 | ₹4,990 | ₹415.83 |
-| Flow | ₹699 | ₹499–999 | ₹6,990 | ₹582.50 |
-| Suite | ₹1,199 | ₹999–1,499 | ₹11,990 | ₹999.17 |
+| Meet | ₹399 | ₹299–499 | ₹4,213.44 | ₹351.12 |
+| Forms | ₹499 | ₹399–699 | ₹5,269.44 | ₹439.12 |
+| Flow | ₹699 | ₹499–999 | ₹7,381.44 | ₹615.12 |
+| Suite | ₹1,199 | ₹999–1,499 | ₹12,661.44 | ₹1,055.12 |
 
-These annual illustrations equal 16.67% less than twelve payments at the corresponding monthly anchor. Do not display an annual monthly equivalent without the full upfront amount equally prominent. The individual anchors sum to ₹1,597/month; the illustrative Suite is ₹398 lower than that *own-plan* sum. This is not a competitor savings claim, and a user who needs only Meet should not buy the bundle to achieve a fictional saving.
+The annual prices are exactly 12% below twelve monthly payments. Always show the full upfront total alongside the monthly equivalent. The individual prices sum to ₹1,597/month; Suite is ₹398/month below that Schedora plan sum. This is not a competitor savings claim.
 
 ## Packaging assumptions to validate, not implement silently
 
@@ -30,7 +30,7 @@ These are cost-model workloads, not entitlements. They differ from current evalu
 
 Each anchor buys only the named product in one workspace. Forms or Flow purchase does not require paid Meet, and Meet purchase does not require Forms or Flow. Optional connections do not silently start another subscription. In this proposal Meet includes one host and two non-host collaborators; Forms and Flow each include three editors. A person using more than one purchased product remains one workspace identity; the applicable product's role/seat allowance is shown separately rather than silently adding a second identity charge. Suite includes up to three people who can host/edit across the products, not three separate pools of three people. Extra hosts/editors and viewer policies have no approved price yet; reaching a seat limit must prompt a clear choice, never an automatic charge.
 
-**No native-video allowance, pack price or participant-minute rate is proposed or included in these anchors.** Native video, messages and AI need separately measured costs, explicit commercial approval and their existing production gates. Evaluation credits or staging grants are not included paid-plan allowances. No such usage is bundled as unlimited.
+Native video is separately metered from these plan anchors. The owner approved 100 monthly included credits for both Meet and Suite on 11 November 2026, and a top-up rate of ₹2 per credit (five participant-minutes per credit). Pack sizes are not approved, and production video/recharge remain gated on measured costs and payment readiness. Messages and AI still need separately measured costs and explicit approval; evaluation credits are not paid-plan allowances and no usage is unlimited.
 
 Define one logical native run as a unique event/workflow pair for supported bounded actions. Proposed policy: duplicate delivery, automatic retries of that same run and simulations do not add native-run units. This requires billing/backend review; the existing ledger remains authoritative until changed and tested. Explain partial success, manual replay, third-party spend on failures, reset dates and downgrade consequences before launch.
 

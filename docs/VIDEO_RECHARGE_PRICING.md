@@ -7,7 +7,20 @@ Owner approved: 28 October 2026. This approves the pricing rule and purchased-cr
 - Retain profit equal to 30% of fully loaded cost after payment processing fees. This is markup on cost, not a 30% revenue margin.
 - Schedora is not GST-registered, as confirmed by the owner. Do not collect or show customer GST under the current status. Include applicable non-recoverable supplier taxes in cost; do not assume input tax credits. Registration obligations must be reassessed as circumstances change.
 - Purchased credits carry forward with no automatic expiry, including through plan changes and cancellation. Monthly subscription/evaluation allowances retain their separate reset rules.
-- One credit is one participant-minute, including the host. A two-person 30-minute call uses 60 credits.
+- One credit is five participant-minutes, including the host. A two-person 30-minute call uses 12 credits.
+
+## Owner-approved plan allowance and rate — 10 November 2026
+
+- Meet includes 100 credits per paid month (500 participant-minutes).
+- Suite includes 100 credits per paid month (500 participant-minutes).
+- Forms and Flow include no video credits.
+- Owners may buy additional video credits. Approved rate: ₹0.40 per participant-minute, or ₹2 per five-minute credit. Purchased credits carry forward under the rule above.
+- Unused monthly plan allowances expire at the monthly period boundary. The subscription allowance is spent before purchased credits.
+- No trial/evaluation credit amount or pack denominations have been approved.
+
+These commercial decisions are recorded and the local code now uses the five-minute credit unit, preserving stored participant-seconds. The owner approved reducing both plan allowances to 100 credits on 11 November 2026; local plan and allowance defaults now match. Existing wallet lots are not rewritten or clawed back; the new amount applies when a new subscription allowance is granted. They do not activate video or Razorpay checkout. Production video remains off; production recharge still needs a configured pack catalog priced at exactly ₹2 per credit and all operational gates.
+
+The fixed ₹0.40 rate must still satisfy the approved 30%-over-fully-loaded-cost rule at actual operating volume. The current cost scenarios support that rate at the 50,000 participant-minute scenario only before the excluded fully loaded costs; the 5,000- and 10,000-minute scenarios do not support it. Checkout stays disabled until measured costs confirm the rate is viable.
 
 ## Calculation
 
@@ -23,7 +36,7 @@ C includes allocated hosting/database/backup/monitoring, LiveKit participant-tim
 
 Assumptions: hypothetical LiveKit Ship at $50/month plus a $7/month backend, planning FX Rs100/USD (not a verified invoice rate), 2Mbps average downstream per participant, no recording/AI. Ship includes 150000 participant-minutes and 250GB, with model overages $0.0005/minute and $0.12/GB. All backend cost is allocated to video in this illustration.
 
-| Monthly participant-minutes | Infrastructure subtotal Rs/month | Subtotal Rs/credit | Formula output Rs/credit, no customer GST |
+| Monthly participant-minutes | Infrastructure subtotal Rs/month | Raw subtotal Rs/participant-minute | Formula output Rs/participant-minute, no customer GST |
 | ---: | ---: | ---: | ---: |
 | 5000 | 5700 | 1.140 | 1.5178 |
 | 10000 | 5700 | 0.570 | 0.7589 |

@@ -5,7 +5,7 @@ import { UNITS_PER_CREDIT, workspaceVideoConfig } from './config.mjs';
 // Workspace credit wallet for Schedora Meet video.
 //
 // Policy: only purchased credits carry forward; subscription credits reset monthly.
-// - Internal unit = 1 participant-second (integer). 1 customer credit = 60 units = 1 participant-minute.
+// - Internal unit = 1 participant-second (integer). 1 customer credit = 300 units = 5 participant-minutes.
 // - Lots: 'subscription'/'evaluation' lots belong to one monthly allowance period and expire at its
 //   end; 'purchase' lots never expire automatically; 'adjustment' lots are audited manual grants.
 // - Spending order: subscription/evaluation lots (earliest expiry first), then adjustments, then

@@ -23,13 +23,13 @@ export function pricingProposal(ctx) {
 
   mount(ctx.main, html`<div class="container page pricing-proposal">
     <div class="proposal-banner" role="note" aria-labelledby="proposal-label"><p class="proposal-label" id="proposal-label">${PROPOSAL_LABEL}</p>
-      <p>These figures are research prompts for customer interviews. They have not been approved, are not an offer and cannot be bought. Prices exclude any applicable taxes, whose treatment is not yet decided. What you can use or buy today is on <a href="/billing">Plans</a>.</p></div>
-    <h1>Proposed plans</h1>
+      <p>Plan prices are approved and shown on <a href="/billing">Plans</a>. This separate page is for discussing usage assumptions; it is not checkout, and the usage limits shown here remain proposals.</p></div>
+    <h1>Plan and usage research</h1>
     <p class="lead">Each product works on its own. Suite is optional: buy only what your work needs.</p>
     <fieldset class="billing-choice"><legend>Show proposed prices</legend>
       <label class="check"><input type="radio" name="billing" value="monthly" checked> Monthly</label>
-      <label class="check"><input type="radio" name="billing" value="annual"> Annual (later concept)</label></fieldset>
-    <p class="hint" id="billing-hint">Interviews start with monthly prices. Annual is a later concept: ten monthly payments, paid once a year.</p>
+      <label class="check"><input type="radio" name="billing" value="annual"> Annual (save 12%, billed upfront)</label></fieldset>
+    <p class="hint" id="billing-hint">Annual billing is paid once for 12 months and costs 12% less than 12 monthly payments. Annual checkout is not available yet.</p>
     <div class="proposal-plans" id="proposal-plans"></div>
 
     <section class="proposal-section" aria-labelledby="usage-heading"><h2 id="usage-heading">How usage works</h2>

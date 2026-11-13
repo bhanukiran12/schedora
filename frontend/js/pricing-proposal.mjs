@@ -1,8 +1,8 @@
-// PROPOSED PRICING — NOT AVAILABLE FOR PURCHASE. Research stimuli from docs/PRICING_PROPOSAL.md
-// for customer interviews. Nothing here is read by billing, checkout or entitlements, and these
-// amounts are not approved offers. Plain data and arithmetic only, so it is unit-tested.
+// Pricing interview prototype — not available for purchase. Usage assumptions remain research
+// stimuli; approved monthly and annual list prices are also shown on /billing. This module is not
+// read by checkout or entitlements. Plain data and arithmetic only.
 
-export const PROPOSAL_LABEL = 'Proposed pricing — not available for purchase';
+export const PROPOSAL_LABEL = 'Pricing research prototype — not available for purchase';
 
 export const PROPOSED_PLANS = [
   { key: 'meet', name: 'Meet', monthly: 399, fit: 'For consultants and coaches who share availability and take bookings.',
@@ -38,10 +38,11 @@ export const METERS = {
   }
 };
 
-// Annual is a later interview concept: ten monthly payments, paid once a year.
-export const annualTotal = monthly => monthly * 10;
+// Annual billing is paid upfront for 12 months with an approved 12% discount.
+export const ANNUAL_DISCOUNT_PERCENT = 12;
+export const annualTotal = monthly => Math.round(monthly * 12 * (100 - ANNUAL_DISCOUNT_PERCENT) / 100 * 100) / 100;
 export const annualMonthlyEquivalent = monthly => Math.round(annualTotal(monthly) / 12 * 100) / 100;
-export const annualDifference = monthly => monthly * 12 - annualTotal(monthly);
+export const annualDifference = monthly => Math.round((monthly * 12 - annualTotal(monthly)) * 100) / 100;
 
 export function formatINR(amount) {
   const fractional = Math.round(amount * 100) % 100 !== 0;

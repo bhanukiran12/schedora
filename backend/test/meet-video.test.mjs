@@ -366,9 +366,9 @@ test('split deployment: Vercel meeting headers match the backend for LiveKit Clo
   assert.match(selfHosted.video.blocked.join(), /SELF_HOSTED_REVIEWED/, 'self-hosting needs its own review');
   assert.equal(selfHosted.video.deployment, 'aws-mumbai');
   assert.doesNotMatch(meetingCsp(selfHosted, base), /livekit\.cloud/);
-  // Production defaults: video off, no allowances, no packs.
+  // Production defaults: video off, approved paid-plan allowances, no packs.
   const plain = loadConfig({ NODE_ENV: 'production' });
   assert.equal(plain.video.enabled, false);
-  assert.deepEqual(plain.video.allowances, {});
+  assert.deepEqual(plain.video.allowances, { meet: 100, suite: 100, trial: 0 });
   assert.deepEqual(plain.video.packs, []);
 });

@@ -5,10 +5,10 @@
 export const PRODUCTS = ['meet', 'forms', 'flow'];
 
 export const PLANS = {
-  meet: { name: 'Meet', products: ['meet'], monthly_amount_cents: 39900, included_video_credits: 200 },
+  meet: { name: 'Meet', products: ['meet'], monthly_amount_cents: 39900, included_video_credits: 100 },
   forms: { name: 'Forms', products: ['forms'], monthly_amount_cents: 49900, included_video_credits: 0 },
   flow: { name: 'Flow', products: ['flow'], monthly_amount_cents: 69900, included_video_credits: 0 },
-  suite: { name: 'Suite', products: ['meet', 'forms', 'flow'], monthly_amount_cents: 119900, included_video_credits: 600 }
+  suite: { name: 'Suite', products: ['meet', 'forms', 'flow'], monthly_amount_cents: 119900, included_video_credits: 100 }
 };
 export const PLAN_CURRENCY = 'INR';
 export const ANNUAL_DISCOUNT_PERCENT = 12;

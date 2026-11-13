@@ -33,7 +33,7 @@ test('evaluation allowance: once per month, expires; purchased credits roll over
     const r1 = reserve(app, { workspaceId: ws.id, coversFrom: clock.now, seconds: 600, key: 'r1' });
     settleReservation(app, r1.id, 600);
     let [allowance, purchase] = lots(app, ws.id);
-    assert.equal(allowance.units_available, 6000 - 600);
+    assert.equal(allowance.units_available, 30000 - 600);
     assert.equal(purchase.units_available, 3000);
     // Month end: unused allowance expires, purchased credits stay; next month gets a fresh allowance.
     clock.now = Date.UTC(2026, 10, 1, 0, 5);
@@ -43,7 +43,7 @@ test('evaluation allowance: once per month, expires; purchased credits roll over
     assert.equal(purchase.units_available, 3000);
     const summary = walletSummary(app, ws.id);
     assert.equal(summary.subscription.credits, 100);
-    assert.equal(summary.purchased.credits, 50);
+    assert.equal(summary.purchased.credits, 10);
     assert.equal(lots(app, ws.id).filter(lot => lot.kind === 'evaluation' && lot.status === 'active').length, 1);
     assert.deepEqual(reconcileWallet(app, ws.id), []);
     const ledger = await owner.get(`/api/workspaces/${ws.id}/meet-video/wallet/ledger?limit=2`);
@@ -71,15 +71,15 @@ test('reservations crossing the period end never resurrect expired allowance cre
     settleReservation(app, reservation.id, 100);
     const allowance = app.db.get("SELECT * FROM credit_lots WHERE workspace_id = ? AND kind = 'evaluation' AND period_start = ?", ws.id, Date.UTC(2026, 9, 1));
     assert.equal(allowance.units_available, 0);
-    assert.equal(allowance.units_expired, 6000 - 100);
+    assert.equal(allowance.units_expired, 30000 - 100);
     assert.equal(allowance.units_consumed, 100);
     assert.equal(app.db.get("SELECT units_expired FROM credit_reservations WHERE id = ?", reservation.id).units_expired, 200);
     assert.deepEqual(reconcileWallet(app, ws.id), []);
   } finally { await env.close(); }
 });
 
-test('subscriptions: monthly grant once, failed renewal grants nothing, upgrade tops up, downgrade waits, overlap and annual plans', async () => {
-  const env = await videoSetup({ config: { billingMode: 'enforced' }, video: { allowances: { meet: 100, suite: 300, trial: 0 } } });
+test('subscriptions: monthly grant once, equal Meet and Suite allowances do not top up, and renewal remains idempotent', async () => {
+  const env = await videoSetup({ config: { billingMode: 'enforced' }, video: { allowances: { meet: 100, suite: 100, trial: 0 } } });
   try {
     const owner = env.client();
     const { ws, email } = await signUp(owner, 'Subs');
@@ -94,19 +94,19 @@ test('subscriptions: monthly grant once, failed renewal grants nothing, upgrade 
     grantAllowance(app, ws.id); grantAllowance(app, ws.id);
     const allowance = () => app.db.all("SELECT * FROM credit_lots WHERE workspace_id = ? AND kind = 'subscription'", ws.id);
     assert.equal(allowance().length, 1);
-    assert.equal(allowance()[0].units_granted, 6000);
-    // Upgrade mid-period: one top-up to the higher allowance, idempotent.
+    assert.equal(allowance()[0].units_granted, 30000);
+    // Meet and Suite carry the same approved allowance, so upgrading must not mint extra credits.
     app.db.run("UPDATE subscriptions SET plan = 'suite' WHERE id = ?", subscription.id);
     grantAllowance(app, ws.id); grantAllowance(app, ws.id);
-    assert.equal(allowance().reduce((sum, lot) => sum + lot.units_granted, 0), 18000);
+    assert.equal(allowance().reduce((sum, lot) => sum + lot.units_granted, 0), 30000);
     // Downgrade: nothing changes until the next period.
     app.db.run("UPDATE subscriptions SET plan = 'meet' WHERE id = ?", subscription.id);
     grantAllowance(app, ws.id);
-    assert.equal(allowance().length, 2);
+    assert.equal(allowance().length, 1);
     // Overlapping second subscription: no duplicate allowance.
     app.db.run("INSERT INTO subscriptions (id, workspace_id, provider, external_id, plan, status, current_period_end, cancel_at_period_end, last_event_at, created_at) VALUES (?, ?, 'test', 'sub_overlap', 'suite', 'active', ?, 0, ?, ?)", randomUUID(), ws.id, clock.now + 20 * DAY, clock.now, clock.now);
     grantAllowance(app, ws.id);
-    assert.equal(allowance().length, 2);
+    assert.equal(allowance().length, 1);
     app.db.run("DELETE FROM subscriptions WHERE external_id = 'sub_overlap'");
     // Renewal fails: past due with a grace period, period ends, no new allowance.
     await owner.post(`/api/workspaces/${ws.id}/billing/test-events`, { action: 'payment_failed', subscription: subscription.id });
@@ -114,20 +114,20 @@ test('subscriptions: monthly grant once, failed renewal grants nothing, upgrade 
     await relogin();
     grantAllowance(app, ws.id);
     assert.equal(allowance().filter(lot => lot.status === 'active').length, 0, 'old allowance expired, none granted during grace');
-    assert.equal(walletSummary(app, ws.id).purchased.credits, 1000, 'purchased credits preserved');
+    assert.equal(walletSummary(app, ws.id).purchased.credits, 200, 'purchased credits preserved');
     // Renewal paid: the new period gets exactly one (downgraded) allowance.
     await owner.post(`/api/workspaces/${ws.id}/billing/test-events`, { action: 'renew', subscription: subscription.id });
     grantAllowance(app, ws.id); grantAllowance(app, ws.id);
     const active = allowance().filter(lot => lot.status === 'active');
     assert.equal(active.length, 1);
-    assert.equal(active[0].units_granted, 6000);
+    assert.equal(active[0].units_granted, 30000);
     // Cancellation: purchased credits survive; no new allowance after the paid period.
     await owner.post(`/api/workspaces/${ws.id}/billing/test-events`, { action: 'end', subscription: subscription.id });
     clock.now += 40 * DAY;
     await relogin();
     grantAllowance(app, ws.id);
     assert.equal(allowance().filter(lot => lot.status === 'active').length, 0);
-    assert.equal(walletSummary(app, ws.id).purchased.credits, 1000);
+    assert.equal(walletSummary(app, ws.id).purchased.credits, 200);
     assert.deepEqual(reconcileWallet(app, ws.id), []);
   } finally { await env.close(); }
 });
@@ -140,7 +140,7 @@ test('annual subscriptions get one allowance per month; trials follow the trial 
     const id = randomUUID();
     app.db.run("INSERT INTO subscriptions (id, workspace_id, provider, external_id, plan, status, current_period_end, cancel_at_period_end, last_event_at, created_at) VALUES (?, ?, 'test', 'sub_year', 'meet', 'trialing', ?, 0, ?, ?)", id, ws.id, clock.now + 365 * DAY, clock.now, clock.now);
     grantAllowance(app, ws.id);
-    assert.equal(app.db.get("SELECT units_granted FROM credit_lots WHERE workspace_id = ?", ws.id).units_granted, 600);
+    assert.equal(app.db.get("SELECT units_granted FROM credit_lots WHERE workspace_id = ?", ws.id).units_granted, 3000);
     app.db.run("UPDATE subscriptions SET status = 'active' WHERE id = ?", id);
     for (let month = 1; month <= 3; month++) { clock.now += 31 * DAY; grantAllowance(app, ws.id); grantAllowance(app, ws.id); }
     const granted = app.db.all("SELECT period_start, units_granted FROM credit_lots WHERE workspace_id = ? AND kind = 'subscription' ORDER BY period_start", ws.id);
@@ -151,7 +151,7 @@ test('annual subscriptions get one allowance per month; trials follow the trial 
 });
 
 test('concurrent admissions never overspend; insufficient credits deny admission', async () => {
-  const env = await videoSetup({ video: { allowances: { evaluation: 50 }, guestPolicy: 'open', maxParticipants: 20, maxWorkspaceParticipants: 50 } });
+  const env = await videoSetup({ video: { allowances: { evaluation: 10 }, guestPolicy: 'open', maxParticipants: 20, maxWorkspaceParticipants: 50 } });
   try {
     const owner = env.client();
     const { ws } = await signUp(owner, 'Busy');
@@ -160,7 +160,7 @@ test('concurrent admissions never overspend; insufficient credits deny admission
     const token = link.body.url.split('/meet/join/')[1];
     const results = await Promise.all(Array.from({ length: 12 }, (_, index) => env.client().post('/api/public/meet-video/join/' + token, { display_name: 'Guest ' + index })));
     const statuses = results.map(result => result.status);
-    // 50 credits = 3000 units = five 600-second blocks.
+    // 10 credits = 3000 participant-seconds = five 600-second admission blocks.
     assert.equal(statuses.filter(status => status === 200).length, 5, statuses.join());
     assert.ok(results.filter(result => result.status !== 200).every(result => result.body.error.code === 'insufficient_credits'));
     const account = env.app.db.get('SELECT * FROM credit_accounts WHERE workspace_id = ?', ws.id);
@@ -168,8 +168,8 @@ test('concurrent admissions never overspend; insufficient credits deny admission
     assert.equal(account.reserved_units, 3000);
     assert.deepEqual(reconcileWallet(env.app, ws.id), []);
     const calc = await owner.get(`/api/workspaces/${ws.id}/meet-video/calculator?participants=4&minutes=30`);
-    assert.equal(calc.body.credits_required, 120);
-    assert.equal(calc.body.shortfall_credits, 120);
+    assert.equal(calc.body.credits_required, 24);
+    assert.equal(calc.body.shortfall_credits, 24);
     assert.ok(calc.body.suggested_package);
     // Admissions that never connect expire and return their credits.
     env.clock.now += 5 * 60000;
@@ -180,7 +180,7 @@ test('concurrent admissions never overspend; insufficient credits deny admission
 });
 
 test('budget exhaustion: renewal fails, funded grace runs out, participant removed at the provider; max duration ends rooms; kill switch', async () => {
-  const env = await videoSetup({ video: { allowances: { evaluation: 15 }, guestPolicy: 'open' } });
+  const env = await videoSetup({ video: { allowances: { evaluation: 3 }, guestPolicy: 'open' } });
   try {
     const owner = env.client();
     const { ws } = await signUp(owner, 'Low');
@@ -190,7 +190,7 @@ test('budget exhaustion: renewal fails, funded grace runs out, participant remov
     const stored = env.room(room.public_id);
     await env.event('participant_joined', stored.room_name, { sid: 'PA_1', identity: join.body.identity });
     await env.tick();
-    // 15 credits = 900 units: first block 600, renewal can fund only 300 more seconds.
+    // 3 credits = 900 participant-seconds: first block 600, renewal can fund only 300 more seconds.
     env.clock.now += 7 * 60000;
     await env.tick();
     let participant = env.app.db.get('SELECT * FROM video_participants WHERE id = ?', join.body.participant_id);
