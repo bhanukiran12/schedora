@@ -1,28 +1,23 @@
-# Render Blueprint for the Schedora API (backend/). The web app is deployed separately on Vercel
-# from frontend/ and reaches this service through its /api rewrite.
+# Render Blueprint for the Schedora web app and API in one Docker service.
 # Secrets marked sync: false are entered in the Render dashboard, never committed.
 services:
   - type: web
     name: schedora-api
-    runtime: node
-    rootDir: backend
-    # EVALUATION SETUP (free). The free plan has no persistent disk: the SQLite database is
-    # erased on every deploy, restart or spin-down, and the service sleeps after 15 idle minutes
-    # (background jobs pause until the next request). Do not collect real data on this setup.
-    # For real data: use a paid plan with the disk below, or a hosted database (see docs/DEPLOYMENT.md).
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Keep the deployment in evaluation mode until the production checklist is complete.
+    # Select a paid always-on instance in Render before accepting customer data.
     plan: free
     region: singapore
-    buildCommand: npm ci --omit=dev && npm run check && npm run sync-shared -- --check
-    startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     buildFilter:
       paths:
         - backend/**
-    # disk:                      # paid plans only; then set DATABASE_PATH=/var/data/schedora.db
-    #   name: schedora-data
-    #   mountPath: /var/data
-    #   sizeGB: 1
+        - frontend/**
+        - Dockerfile
+        - .dockerignore
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -34,22 +29,25 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
+      - key: PORT
+        value: "10000"
       - key: DATABASE_PATH
         value: ./data/schedora.db
       - key: SERVE_FRONTEND
-        value: "false"
+        value: "true"
+      - key: FRONTEND_DIR
+        value: /app/frontend
       - key: TRUST_PROXY
         value: "true"
-      # Browser → Vercel edge → Render proxy → app: the client address is two hops from the right.
+      # Browser → Render proxy → app: the client address is one hop from the right.
       - key: TRUST_PROXY_HOPS
-        value: "2"
+        value: "1"
       - key: BASE_URL
         value: https://schedora.in
       - key: PRODUCT_DOMAIN
         value: schedora.in
-      # Add COOKIE_DOMAIN=.schedora.in only after the schedora.in domains point at Vercel;
-      # until then sign-in must work on the *.vercel.app address, so leave it unset.
-      # Extra origins allowed to make changes, e.g. the Vercel project and preview domains.
+      # Add COOKIE_DOMAIN=.schedora.in only after all product domains point at Render.
+      # Extra origins allowed to make changes; keep this restricted to owned production domains.
       - key: ALLOWED_ORIGINS
         sync: false
       # open = evaluation: all products available, nothing charged. Switch to enforced only
@@ -134,7 +132,7 @@ services:
         sync: false
       - key: MEET_VIDEO_SMOKE_CONFIRMED
         sync: false
-      # Commercial values (credits per plan, credit packs) need owner approval; leave unset until then.
+      # Owner-approved plan allowances are 100 Meet / 100 Suite credits; keep override unset to use code defaults until video launch gates pass.
       - key: MEET_VIDEO_ALLOWANCES
         sync: false
       - key: MEET_VIDEO_PACKS

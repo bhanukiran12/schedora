@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private ECR repository for the Schedora web/API container.
+
+Resources:
+  SchedoraRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: schedora-web
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {"rules":[{"rulePriority":1,"description":"Keep the most recent 20 tagged releases","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+      Tags:
+        - Key: Name
+          Value: schedora-web
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt SchedoraRepository.RepositoryUri
+  RepositoryArn:
+    Value: !GetAtt SchedoraRepository.Arn
