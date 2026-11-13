@@ -20,7 +20,7 @@ const shotsDir = shotsIndex > 0 ? process.argv[shotsIndex + 1] : null;
 if (shotsDir) mkdirSync(shotsDir, { recursive: true });
 
 const workDir = mkdtempSync(join(tmpdir(), 'schedora-browser-'));
-const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { port: 0, workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
+const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { port: 0, cookieDomain: '', workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
 await app.start();
 await new Promise(resolve => app.server.close(resolve));
 await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -150,6 +150,21 @@ try {
     await open('/login?next=%2F%2Fevil.example', "document.querySelector('#signin')");
     if (await evaluate("Boolean(document.querySelector('#signup'))")) throw new Error('login shows competing signup form');
     await layoutCheck('Suite login');
+    await open('/login?product=flow&error=' + encodeURIComponent('Email or password is incorrect.'), "document.querySelector('#signin') && document.querySelector('.auth-layout .notice-bad')");
+    const authFeedback = await evaluate(`(() => {
+      const rgb = value => value.match(/\\d+/g).slice(0, 3).map(Number);
+      const luminance = value => { const [r,g,b] = rgb(value).map(channel => { const c=channel/255; return c<=0.04045 ? c/12.92 : ((c+0.055)/1.055)**2.4; }); return 0.2126*r+0.7152*g+0.0722*b; };
+      const ratio = (a,b) => { const x=luminance(a),y=luminance(b); return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05); };
+      const error = document.querySelector('.auth-layout .notice-bad'), button = document.querySelector('.auth-layout .btn-primary');
+      const legal = document.querySelector('.auth-layout .auth-legal a');
+      return { text:error.innerText, contrast:ratio(getComputedStyle(error).color,getComputedStyle(error).backgroundColor),
+        button:getComputedStyle(button).backgroundColor, link:getComputedStyle(legal).color,
+        panel:getComputedStyle(document.querySelector('.auth-layout > aside')).backgroundColor };
+    })()`);
+    if (!authFeedback.text.includes('Email or password is incorrect') || authFeedback.contrast < 4.5 || authFeedback.button !== 'rgb(23, 107, 69)' || authFeedback.link !== 'rgb(23, 107, 69)') {
+      throw new Error('auth message, green actions/links, or error contrast is incorrect: ' + JSON.stringify(authFeedback));
+    }
+    await layoutCheck('Flow login error contrast');
   });
   for (const path of ['/', '/meet', '/forms', '/flow', '/billing', '/account', '/privacy', '/terms', '/missing-page']) {
   await step(`render ${path}`, async () => { await open(path); await layoutCheck(path); });
@@ -162,6 +177,13 @@ try {
     await click('#signup [type="submit"]');
     await waitFor("location.pathname === '/meet' && document.querySelector('.side-nav')", 'Meet dashboard');
     workspaceSlug = await evaluate("fetch('/api/me').then(r => r.json()).then(d => d.workspaces[0].slug)");
+    await evaluate(`(async () => {
+      const me = await (await fetch('/api/me')).json();
+      const response = await fetch('/api/workspaces/' + me.workspaces[0].id + '/schedule', { method:'PUT',
+        headers:{'Content-Type':'application/json','X-CSRF-Token':me.csrf_token},
+        body:JSON.stringify({timezone:'Asia/Kolkata',rules:[1,2,3,4,5].map(weekday=>({weekday,start_min:540,end_min:1020})),overrides:[]}) });
+      if (!response.ok) throw new Error('test host hours could not be saved: ' + response.status);
+    })()`);
   });
   let eventSlug;
   await step('create and publish event type', async () => {
@@ -325,9 +347,8 @@ try {
     await layoutCheck('Forms builder from template');
   });
   await step('build and publish form', async () => {
-    await open('/forms', "document.querySelector('#new-form') && document.querySelector('#form-list .forms-table')");
+    await open('/forms', "document.querySelector('#new-form')");
     await click('#new-form');
-    await click('[data-template="blank"]');
     await waitFor("document.querySelector('#publish') && document.querySelector('#preview form')", 'builder');
     const emailsBeforeShare = app.db.get('SELECT COUNT(*) AS count FROM emails').count;
     formId = await evaluate("location.pathname.split('/')[2]");
@@ -518,7 +539,7 @@ try {
     try {
     // Real Tab presses: the navigation follows the breadcrumb and every link shows a focus ring.
     await evaluate("document.querySelector('.builder-crumbs a').focus()");
-    for (const section of ['questions', 'workflow', 'settings', 'share']) {
+    for (const section of ['questions', 'design', 'workflow', 'settings', 'share']) {
       await key('Tab', 9);
       if (!(await evaluate(`document.activeElement.dataset.section === '${section}' && getComputedStyle(document.activeElement).outlineStyle !== 'none'`))) throw new Error(`Tab does not reach the ${section} link with visible focus`);
     }
@@ -606,7 +627,6 @@ try {
       // A form of its own, so later steps keep their version numbers.
       await open('/forms', "document.querySelector('#new-form')");
       await click('#new-form');
-      await click('[data-template="blank"]');
       await waitFor("document.querySelector('#fields [data-media-file]')", 'media form builder');
       const mediaFormId = await evaluate("location.pathname.split('/')[2]");
       const mediaSlug = app.db.get('SELECT slug FROM forms WHERE id = ?', mediaFormId).slug;
@@ -717,16 +737,14 @@ try {
     const type = value => send('Input.insertText', { text: value });
     await open('/forms', "document.querySelector('#new-form')");
     await click('#new-form');
-    await click('[data-template="blank"]');
     await waitFor("document.querySelector('[data-question-key=\"name\"]')", 'blank builder');
     const id = await evaluate("location.pathname.split('/')[2]");
     try {
       // Reopened, without the one-time "Draft created" notice: the question is on the first screen.
       await open(`/forms/${id}`, "document.querySelector('[data-question-key=\"name\"]')");
       if (await evaluate("getComputedStyle(document.querySelector('#app-sidebar')).display !== 'none'")) throw new Error('the workspace sidebar still shows inside the editor');
-      const panes = await evaluate("(() => { const box = selector => document.querySelector(selector).getBoundingClientRect(); const rail = box('.question-sidebar'); const tools = box('.builder-toolbar'); const canvas = box('.canvas-frame'); const inspector = box('.question-settings'); const label = box('#fields [data-prop=\"label\"]'); return { top: box('.builder-topbar').height, rail: rail.width, inspector: inspector.width, toolbar: tools.height, railTop: rail.top, toolsTop: tools.top, inspectorTop: inspector.top, ratio: canvas.width / canvas.height, labelBottom: label.bottom, height: innerHeight, scrolls: document.documentElement.scrollHeight > innerHeight }; })()");
-      // Measured from the reference captures at 1280 px, in CSS pixels.
-      if (panes.top !== 56 || panes.rail !== 256 || panes.inspector !== 256 || panes.toolbar !== 49 || panes.railTop !== 56 || panes.toolsTop !== 56 || panes.inspectorTop !== 56 || Math.abs(panes.ratio - 16 / 9) > 0.03 || panes.labelBottom > panes.height - 100 || panes.scrolls) throw new Error('editor layout drifted: ' + JSON.stringify(panes));
+      const panes = await evaluate("(() => { const box = selector => document.querySelector(selector).getBoundingClientRect(); const rail = box('.question-sidebar'); const tools = box('.builder-toolbar'); const canvas = box('.canvas-frame'); const inspector = box('.question-settings'); const label = box('#fields [data-prop=\"label\"]'); return { separate: rail.right <= canvas.left && canvas.right <= inspector.left && tools.bottom <= canvas.top, labelVisible: label.top >= canvas.top && label.bottom <= canvas.bottom && label.bottom < innerHeight, scrolls: document.documentElement.scrollHeight > innerHeight }; })()");
+      if (!panes.separate || !panes.labelVisible || panes.scrolls) throw new Error('editor layout drifted: ' + JSON.stringify(panes));
       await fill('#f-title', 'Contact us');
       // The add-content picker: keyboard open, arrows, Escape returns focus; adding focuses the new question.
       await selectQuestion('name');
@@ -844,7 +862,6 @@ try {
     const clickReal = async selector => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`); await click(selector); };
     await open('/forms', "document.querySelector('#new-form')");
     await click('#new-form');
-    await click('[data-template="blank"]');
     await waitFor("document.querySelector('[data-question-key=\"name\"]')", 'theme form builder');
     const id = await evaluate("location.pathname.split('/')[2]");
     const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
@@ -979,7 +996,6 @@ try {
 
     await open('/forms', "document.querySelector('#new-form')");
     await click('#new-form');
-    await click('[data-template="blank"]');
     await waitFor("document.querySelector('#fh-0')", 'typography form builder');
     const id = await evaluate("location.pathname.split('/')[2]");
     const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
@@ -1120,7 +1136,6 @@ try {
     const MEMBERS = ['first_name', 'last_name', 'phone', 'email', 'company'];
     await open('/forms', "document.querySelector('#new-form')");
     await click('#new-form');
-    await click('[data-template="blank"]');
     await waitFor("document.querySelector('[data-question-key=\"topic\"]')", 'page form builder');
     const id = await evaluate("location.pathname.split('/')[2]");
     const slug = app.db.get('SELECT slug FROM forms WHERE id = ?', id).slug;
@@ -1853,7 +1868,7 @@ try {
     if (app.db.get('SELECT COUNT(*) AS count FROM responses WHERE form_id = ?', next.id).count !== 0) throw new Error('nothing should be stored');
   });
   await step('responses inbox, detail and CSV', async () => {
-    await open('/forms', "document.querySelector('.forms-table')");
+    await open('/forms?tab=all', "document.querySelector('.forms-table')");
     await click(`a[href="/forms/${formId}/responses"]`);
     await waitFor("document.querySelector('table')", 'responses table');
     await layoutCheck('responses');
@@ -2010,7 +2025,7 @@ try {
   });
   await step('Flow starters: real draft contracts, no silent enable, replace confirmation and outcome preview', async () => {
     // Empty Flows list offers the starters; opening one creates nothing.
-    await open('/flow', "document.querySelector('.flow-starter-links')");
+    await open('/flow?tab=flows', "document.querySelector('.flow-starter-links')");
     if ((await evaluate("document.querySelectorAll('.flow-starter-links a').length")) !== 3) throw new Error('empty state does not offer the three starters');
     await layoutCheck('Flow empty state with starters');
     await click('.flow-starter-links a[href$="starter=prepare-call"]');

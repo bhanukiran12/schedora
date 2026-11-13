@@ -6,8 +6,8 @@ import { readinessAreas } from './readiness-view.mjs';
 import { hostInfo, productOrigin } from './context.mjs';
 import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
-import { exportDefinition } from './forms-import.mjs';
-import { createdSource, draftAddress, mountStartingPoints } from './forms-picker.mjs';
+import { exportDefinition, openImportDialog } from './forms-import.mjs';
+import { createdSource, draftAddress } from './forms-picker.mjs';
 import { openPrefillBuilder } from './forms-prefill.mjs';
 import { copyTitle, filterForms, formStatus, STATUS_FILTERS, statusCounts } from './forms-list.mjs';
 
@@ -20,7 +20,7 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
 import { blockEnd, canMove, contactInfoBlock, dropIsNoop, dropItem, duplicateBlock, isHead, moveItem, outlineMarks } from './forms-groups.mjs';
-import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, prefillAnswers, prefillProblem, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerRuleLimit, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, formScore, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, prefillAnswers, prefillProblem, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
 import { TYPE_KIND, formIcon } from './forms-icons.mjs';
 import { designPanel } from './forms-design.mjs';
 import { logicMapModel } from './forms-logicmap.mjs';
@@ -316,7 +316,8 @@ export function renderForm(container, definition, { mode = definition.presentati
       if (position < pagesNow().length - 1) { position++; moved = 'forward'; return draw(); }
       if (preview) {
         const ending = formEnding(definition, answers, urlParams);
-        mount(container, notice('ok', html`${ending ? html`<p><strong>${pipe(ending.title, definition, answers)}</strong></p>${ending.message ? html`<p>${pipe(ending.message, definition, answers)}</p>` : ''}` : ''}<p><strong>Preview complete.</strong> Nothing was saved. In the published form, the response is saved when the server confirms it.</p><button class="btn" type="button" id="restart-preview">Restart preview</button>`));
+        const score = formScore(definition, answers);
+        mount(container, notice('ok', html`${ending ? html`<p><strong>${pipe(ending.title, definition, answers)}</strong></p>${ending.message ? html`<p>${pipe(ending.message, definition, answers)}</p>` : ''}` : ''}${score ? html`<p><strong>Your score: ${score.correct} of ${score.total}</strong></p>` : ''}<p><strong>Preview complete.</strong> Nothing was saved. In the published form, the response is saved when the server confirms it.</p><button class="btn" type="button" id="restart-preview">Restart preview</button>`));
         $('#restart-preview', container).onclick = () => renderForm(container, definition, { mode, preview, assetUrl, embedVideo, urlParams });
         return;
       }
@@ -507,7 +508,7 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
     const offered = booking && next.status === 'offered';
     mount(root, html`<div role="status" class="public-form receipt"><h1 tabindex="-1">${offered ? 'Response received — choose a time' : endingTitle || 'Response received'}</h1>
       ${offered && endingTitle ? html`<p><strong>${endingTitle}</strong></p>` : ''}${ending?.message ? html`<p class="ending-message">${pipe(ending.message, form.definition, answered)}</p>` : ''}
-      <p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
+      ${result.quiz_score ? html`<p class="quiz-score"><strong>Your score</strong><span>${result.quiz_score.correct} of ${result.quiz_score.total} correct</span></p>` : ''}<p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
       <dl class="confirm-facts"><dt>Receipt</dt><dd>${result.reference}</dd><dt>Received</dt><dd>${fmtDateTime(result.created_at)}</dd></dl>
       ${step}</div>`);
     $('h1', root).focus();
@@ -522,31 +523,50 @@ export async function dashboard(ctx) {
   setTitle('Forms by Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Every good conversation starts with a question.', lead: 'Build classic or one-question-at-a-time forms with logic and answer piping. Responses are saved to your workspace and can be exported.' }));
   if (!needsSession(ctx)) return;
-  mount(ctx.main, html`<div class="container page forms-page"><div class="page-head forms-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Forms · ${workspace().name}</p><h1>Forms</h1></div>
-    <button class="btn btn-primary" id="new-form" aria-expanded="false" aria-controls="form-templates">Create form</button></div>
+  if (ctx.query.get('create') === '1') return ctx.navigate('/forms?tab=all', { replace: true });
+  const overview = ctx.query.get('tab') !== 'all';
+  mount(ctx.main, html`<div class="container page forms-page"><div class="page-head forms-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Forms · ${workspace().name}</p><h1>${overview ? 'Overview' : 'All forms'}</h1>${overview ? html`<p class="lead">Your forms and responses, ready for the next conversation.</p>` : ''}</div>
+    <button class="btn btn-primary" id="new-form" type="button">Create form</button></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
-    <div id="form-templates" hidden></div>
     <div id="form-list">${loading()}</div></div>`);
-  const picker = $('#form-templates');
-  const starting = mountStartingPoints(picker, {
-    onCreated: (form, created, workspaceId) => ctx.navigate(draftAddress(form, { created, workspaceId })),
-    cancel: { label: 'Cancel', onCancel: () => { showPicker(false); $('#new-form').focus(); } }
-  });
-  const showPicker = (open, focus = true) => {
-    picker.hidden = !open;
-    $('#new-form').setAttribute('aria-expanded', String(open));
-    if (open && focus) starting.focus();
+  const createBlank = async () => {
+    const button = $('#new-form');
+    if (button.disabled) return;
+    const workspaceId = session.workspaceId;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = 'Creating draft…';
+    try {
+      const form = await api('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/forms`, { title: 'Untitled form' });
+      if (ctx.alive()) ctx.navigate(draftAddress(form, { created: 'blank', workspaceId }));
+    } catch (error) {
+      if (ctx.alive()) mount($('#form-list'), notice('bad', html`<p>Your draft was not created. ${error.message}</p>`));
+    } finally {
+      if (ctx.alive()) { button.disabled = false; button.removeAttribute('aria-busy'); button.textContent = 'Create form'; }
+    }
   };
-  $('#new-form').onclick = () => showPicker(picker.hidden);
+  $('#new-form').onclick = createBlank;
   try {
     const forms = await api('GET', wsPath('/forms'));
     if (!ctx.alive()) return;
-    if (!forms.length) {
-      mount($('#form-list'), html`<div class="empty"><h2>No forms yet</h2><p>Pick a starting point above, start blank or import a JSON file. You can change every question later.</p><div class="actions"><a class="btn" href="/setup/forms">Guided setup</a></div></div>`);
-      return showPicker(true, false);
-    }
-    renderFormList(ctx, forms);
+    if (overview) renderFormsOverview(forms, ctx);
+    else if (!forms.length) mount($('#form-list'), html`<div class="empty"><h2>No forms yet</h2><p>Create a form and add the questions you need. You can also import a form definition from the builder.</p><div class="actions"><button class="btn btn-primary" id="empty-create">Create form</button></div></div>`);
+    else renderFormList(ctx, forms);
+    $('#empty-create')?.addEventListener('click', createBlank);
   } catch (error) { mount($('#form-list'), errorBlock(error)); }
+}
+
+function renderFormsOverview(forms, ctx) {
+  const published = forms.filter(form => form.published_version);
+  const responses = forms.reduce((total, form) => total + (form.response_count || 0), 0);
+  mount($('#form-list'), html`<div class="forms-overview-metrics">
+    <a class="workspace-metric workspace-metric--forms" href="/forms?tab=all"><span>All forms</span><strong>${forms.length}</strong><small>Drafts and published forms</small></a>
+    <a class="workspace-metric workspace-metric--forms" href="/forms?tab=all&status=live"><span>Published</span><strong>${published.length}</strong><small>Available to respondents</small></a>
+    <a class="workspace-metric workspace-metric--forms" href="/enquiries?from=response"><span>Responses</span><strong>${responses}</strong><small>Answers across your forms</small></a>
+  </div><section class="workspace-overview-panel"><header><div><p class="page-eyebrow">RECENT</p><h2>Recently updated forms</h2></div><a href="/forms?tab=all">All forms →</a></header>
+    ${forms.length ? html`<ul class="workspace-overview-list">${forms.slice(0, 6).map(form => html`<li><time>${new Date(form.updated_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</time><span><strong>${form.draft.title}</strong><small>${form.response_count || 0} ${(form.response_count || 0) === 1 ? 'response' : 'responses'} · ${form.published_version ? 'Published' : 'Draft'}</small></span><a class="btn btn-small" href="/forms/${form.id}">Edit</a></li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No forms yet</strong><p>Create your first form to collect the information you need.</p><button class="btn btn-small btn-primary" id="overview-create">Create form</button></div>`}
+  </section><section class="forms-overview-shortcuts"><a class="workspace-product-card workspace-product-card--forms" href="/forms?tab=all"><strong>All forms</strong><span>Search, edit and organize your forms.</span><small>Open forms →</small></a><a class="workspace-product-card workspace-product-card--forms" href="/enquiries?from=response"><strong>Responses</strong><span>Read submitted answers and follow-ups.</span><small>View responses →</small></a></section>`);
+  $('#overview-create')?.addEventListener('click', () => $('#new-form')?.click());
 }
 
 // The workspace's forms: search, status filter and row actions. Filters live in the address, so a
@@ -637,10 +657,26 @@ const randomKey = (prefix, taken) => {
 };
 
 // The add-content picker, by what the creator wants to ask rather than by input control.
-const CONTENT_GROUPS = [['Contact', ['contact_info', 'email', 'phone']], ['Text', ['short_text', 'long_text']], ['Choice', ['single_choice', 'multiple_choice']], ['Other', ['date']], ['Layout', ['question_page', 'page_break']]];
-const CONTENT_LABELS = { ...FIELD_TYPES, contact_info: 'Contact Info', question_page: 'Page of questions' };
+const CONTENT_GROUPS = [
+  ['Contact details', ['contact_info', 'email', 'phone']],
+  ['Written answers', ['short_text', 'long_text']],
+  ['Choices', ['single_choice', 'multiple_choice']],
+  ['Dates and pages', ['date', 'question_page', 'page_break']]
+];
+const CONTENT_LABELS = { ...FIELD_TYPES, contact_info: 'Contact details', email: 'Email address', phone: 'Phone number', short_text: 'Short answer', long_text: 'Long answer', single_choice: 'Choose one', multiple_choice: 'Choose multiple', date: 'Date', question_page: 'Question page', page_break: 'Page break' };
+const CONTENT_HELP = {
+  contact_info: 'Add name, email and phone together', email: 'Collect an email address', phone: 'Collect a phone number',
+  short_text: 'A one-line answer', long_text: 'A longer written answer', single_choice: 'Choose one answer from a list',
+  multiple_choice: 'Choose any that apply', date: 'Pick a calendar date', question_page: 'Start a new page with a question', page_break: 'Split questions across pages'
+};
 
 const SAVE_TEXT = { saved: 'All changes saved', dirty: 'Unsaved edits', saving: 'Saving…', failed: 'Not saved', conflict: 'Not saved: changed elsewhere' };
+const FORM_MODES = {
+  universal: { title: 'Universal mode', short: 'Universal', description: 'Create any form.', icon: 'mode_universal' },
+  lead_qualification: { title: 'Lead qualification mode', short: 'Lead qualification', description: 'Ask clear questions about needs and fit.', icon: 'mode_lead' },
+  knowledge_quiz: { title: 'Knowledge quiz mode', short: 'Knowledge quiz', description: 'Mark correct answers and show a score.', icon: 'mode_knowledge' },
+  match_quiz: { title: 'Match quiz mode', short: 'Match quiz', description: 'Match answers to a personalized result.', icon: 'mode_match' }
+};
 // What the answer area looks like on the question canvas. Choice questions show their options instead.
 const ANSWER_SAMPLES = { short_text: 'Short answer', long_text: 'Longer answer, several lines', email: 'name@example.com', phone: '+91 98765 43210', date: 'dd / mm / yyyy' };
 
@@ -691,25 +727,32 @@ export async function builder(ctx) {
     <header class="builder-topbar">
       <div class="builder-crumbs"><a href="/forms">${formIcon('forms')}Forms</a><span class="builder-crumb-sep" aria-hidden="true">›</span><h1 id="builder-title">${draft.title}</h1></div>
       <nav class="builder-index" id="builder-index" aria-label="Form builder sections"><ul>
-        <li><a href="#questions" data-section="questions" aria-current="location">Content</a></li><li><a href="#workflow-map" data-section="workflow">Workflow</a></li><li><a href="#settings" data-section="settings">Settings</a></li>
+        <li><a href="#questions" data-section="questions" aria-current="location">Questions</a></li><li><a href="#design-panel" data-section="design">Design</a></li><li><a href="#workflow-map" data-section="workflow">Logic</a></li><li><a href="#settings" data-section="settings">Settings</a></li>
         <li><a href="#share-panel" data-section="share">Share</a></li><li><a href="/forms/${form.id}/responses" id="responses-link">Responses</a></li></ul></nav>
-      <div class="builder-publish"><div id="builder-status"></div><button class="btn btn-ghost" type="button" id="topbar-preview" data-builder-view="preview" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span>Preview</span></button><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
+      <div class="builder-publish"><div id="builder-status"></div><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
     </header>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
     <div class="builder-surface surface-content">
       <div class="builder-toolbar" aria-label="Editor tools" role="group">
-        <div class="add-content"><button class="btn btn-primary" type="button" id="add-field" aria-expanded="false" aria-controls="add-menu" aria-label="Add content">${formIcon('plus')}<span class="tool-text">Add content</span></button>
-          <div class="add-menu" id="add-menu" role="group" aria-label="Add content" hidden>${CONTENT_GROUPS.map(([heading, types]) => html`<p class="add-menu-heading">${heading}</p>${types.map(type => html`<button type="button" class="add-menu-item" data-add-type="${type}"><span class="q-badge" data-kind="${TYPE_KIND[type] || 'contact'}">${formIcon(type === 'question_page' ? 'page' : type)}</span>${CONTENT_LABELS[type]}</button>`)}`)}</div></div>
+        <div class="add-content"><button class="btn btn-primary" type="button" id="add-field" aria-expanded="false" aria-controls="add-menu" aria-label="Add to form">${formIcon('plus_circle')}<span class="tool-text">Add to form</span></button>
+          <div class="add-menu" id="add-menu" role="group" aria-label="Add to your form" hidden>
+            <div class="add-menu-header"><span class="add-menu-header-icon">${formIcon('plus_circle')}</span><span><strong>Add to your form</strong><small>Choose a question type or add a page.</small></span></div>
+            <div class="add-menu-groups">${CONTENT_GROUPS.map(([heading, types]) => html`<section class="add-menu-group"><h2 class="add-menu-heading">${heading}</h2><div class="add-menu-options">${types.map(type => html`<button type="button" class="add-menu-item" data-add-type="${type}"><span class="add-menu-icon" data-kind="${TYPE_KIND[type] || 'layout'}">${formIcon(type === 'question_page' ? 'page' : type)}</span><span class="add-menu-item-copy"><strong>${CONTENT_LABELS[type]}</strong><small>${CONTENT_HELP[type]}</small></span></button>`)}</div></section>`)}</div>
+          </div></div>
         <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost" type="button" id="open-design" aria-expanded="false" aria-controls="design-panel" title="Typography and themes for this form">${formIcon('design')}<span class="tool-text">Design</span></button>
         <span class="toolbar-divider" aria-hidden="true"></span><div class="preview-devices" role="group" aria-label="Device size"><button type="button" class="btn btn-icon" data-device="desktop" aria-label="Desktop size" title="Desktop size">${formIcon('desktop')}</button><button type="button" class="btn btn-icon" data-device="mobile" aria-label="Mobile size" title="Mobile size">${formIcon('mobile')}</button></div>
+        <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost builder-preview-toggle" type="button" id="toolbar-preview" data-builder-view="preview" aria-label="Preview form" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span class="tool-text">Preview</span></button>
 
         <details class="overflow-menu toolbar-end"><summary class="btn btn-icon" aria-label="More actions" title="More actions">${formIcon('more')}</summary>
-          <div class="overflow-panel"><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
+          <div class="overflow-panel"><button class="btn" type="button" id="import-form">Import JSON as a new form</button><p class="hint overflow-hint">Creates a separate unpublished draft; this form stays unchanged.</p><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
       </div>
+      <aside class="form-mode-guide" id="form-mode-guide" hidden></aside>
       <div class="builder" data-view="edit" data-device="desktop">
         <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="questions" class="question-workspace">
           <aside class="question-sidebar" aria-labelledby="questions-heading">
+            <details class="form-mode-picker" id="form-mode-picker"><summary class="form-mode-current" aria-label="Choose what this form is for"><span class="form-mode-current-icon" id="form-mode-icon"></span><span class="form-mode-current-label" id="form-mode-label"></span>${formIcon('chevron')}</summary>
+              <div class="form-mode-options" role="group" aria-label="Form type">${Object.entries(FORM_MODES).map(([key, item]) => html`<button class="form-mode-option" type="button" data-form-mode="${key}" aria-pressed="false"><span class="form-mode-option-icon">${formIcon(item.icon)}</span><span><strong>${item.title}</strong><small>${item.description}</small></span></button>`)}</div></details>
             <div class="outline-bar" id="outline-bar"><button class="btn btn-icon" type="button" id="outline-prev" aria-label="Previous item in the outline" title="Previous">${formIcon('up')}</button>
               <button class="outline-toggle" type="button" id="outline-toggle" aria-expanded="false" aria-controls="outline-panel"><span class="outline-current" id="outline-current"></span><span class="outline-toggle-label"><span class="outline-word">Outline</span>${formIcon('chevron')}</span></button>
               <button class="btn btn-icon" type="button" id="outline-next" aria-label="Next item in the outline" title="Next">${formIcon('down')}</button></div>
@@ -723,7 +766,8 @@ export async function builder(ctx) {
       <aside class="design-panel" id="design-panel" aria-labelledby="design-heading" hidden></aside>
     </div>
     <div class="builder-surface surface-workflow">
-      <section class="workflow-map" id="workflow-map" aria-labelledby="workflow-heading"><h2 id="workflow-heading" tabindex="-1">Logic</h2><p class="hint" id="workflow-summary"></p>
+      <section class="workflow-help" aria-label="What you can control in Workflow"><div><strong>Choose the next question</strong><span>Send people to the right next step based on an answer.</span></div><div><strong>Show relevant choices</strong><span>Hide options that do not apply to an earlier answer.</span></div><div><strong>Use values from a link</strong><span>Read campaign details separately from answers.</span></div></section>
+      <section class="workflow-map" id="workflow-map" aria-labelledby="workflow-heading"><h2 id="workflow-heading" tabindex="-1">Question flow</h2><p class="hint" id="workflow-summary"></p>
         <div class="workflow-canvas"><ol class="workflow-nodes" id="workflow-nodes"></ol><svg class="workflow-arcs" id="workflow-arcs" aria-hidden="true"></svg></div></section>
       <aside class="workflow-editor" id="workflow-editor" aria-label="Jump rules"></aside>
       <section class="url-params" id="url-params" aria-labelledby="url-params-heading"></section>
@@ -740,9 +784,9 @@ export async function builder(ctx) {
 
   // One surface at a time: content, form-wide settings, or sharing. Switching changes neither the
   // address nor the draft, so unsaved edits stay on the page.
-  const showSurface = key => {
+  const showSurface = (key, activeSection = null) => {
     $('.builder-page').dataset.surface = key;
-    const link = { content: 'questions', workflow: 'workflow', settings: 'settings', share: 'share' }[key];
+    const link = activeSection || { content: 'questions', workflow: 'workflow', settings: 'settings', share: 'share' }[key];
     $$('[data-section]', $('#builder-index')).forEach(item => { if (item.dataset.section === link) item.setAttribute('aria-current', 'location'); else item.removeAttribute('aria-current'); });
     if (key === 'workflow') renderWorkflow();
   };
@@ -1023,19 +1067,19 @@ export async function builder(ctx) {
       const name = `Jump ${position + 1}`;
       return html`<li class="jump-rule" data-jump="${position}">
         ${compound ? html`<p class="hint">This rule combines conditions, and is kept as written.</p>` : html`
-          <label for="${prefix}jf-${position}">If</label><select id="${prefix}jf-${position}" data-jump-field aria-label="${name}: question">${position === rules.length - 1 ? html`<option value="" ${rule.when ? '' : raw('selected')}>Always</option>` : ''}${askable.map(candidate => html`<option value="${candidate.id}" ${candidate.id === rule.when?.field ? raw('selected') : ''}>${candidate.label.slice(0, 50)}</option>`)}${paramOptions(rule.when?.param)}</select>
+          <label for="${prefix}jf-${position}">When</label><select id="${prefix}jf-${position}" data-jump-field aria-label="${name}: question">${position === rules.length - 1 ? html`<option value="" ${rule.when ? '' : raw('selected')}>Always</option>` : ''}${askable.map(candidate => html`<option value="${candidate.id}" ${candidate.id === rule.when?.field ? raw('selected') : ''}>${candidate.label.slice(0, 50)}</option>`)}${paramOptions(rule.when?.param)}</select>
           ${rule.when ? html`<select data-jump-op aria-label="${name}: rule">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${op === rule.when.op ? raw('selected') : ''}>${label}</option>`)}</select>
             ${['answered', 'not_answered'].includes(rule.when.op) ? '' : asked?.type.endsWith('_choice')
               ? html`<select data-jump-value aria-label="${name}: value">${asked.options.map(option => html`<option value="${option.id}" ${option.id === rule.when.value ? raw('selected') : ''}>${option.label}</option>`)}</select>`
               : html`<input data-jump-value aria-label="${name}: value" value="${rule.when.value || ''}">`}` : ''}`}
-        <label for="${prefix}jt-${position}">Go to</label><select id="${prefix}jt-${position}" data-jump-to>${groups.map(group => html`<optgroup label="${group.label}">${group.items.map(item => html`<option value="${item.value}" ${item.value === targetValue(rule.to) ? raw('selected') : ''}>${item.label}</option>`)}</optgroup>`)}</select>
+        <label for="${prefix}jt-${position}">Then show</label><select id="${prefix}jt-${position}" data-jump-to>${groups.map(group => html`<optgroup label="${group.label}">${group.items.map(item => html`<option value="${item.value}" ${item.value === targetValue(rule.to) ? raw('selected') : ''}>${item.label}</option>`)}</optgroup>`)}</select>
         <div class="row"><button class="btn btn-small" type="button" data-jump-move="-1" aria-label="Move jump ${position + 1} up" ${position === 0 || !rule.when ? raw('disabled') : ''}>↑</button><button class="btn btn-small" type="button" data-jump-move="1" aria-label="Move jump ${position + 1} down" ${position === rules.length - 1 || !rules[position + 1].when ? raw('disabled') : ''}>↓</button><button class="btn btn-small" type="button" data-jump-remove aria-label="Remove jump ${position + 1}">Remove</button></div>
         <p class="logic-sentence" data-jump-sentence>${jumpSentence(rule, draft, position === 0)}</p></li>`;
     };
-    return html`<div class="jump-editor"><h4 class="jump-heading">After this question</h4>
+    return html`<div class="jump-editor"><h4 class="jump-heading">Choose what happens next</h4>
       ${rules.length ? html`<ol class="jump-rules">${rules.map(ruleRow)}</ol><p class="hint">Checked in order; the first match decides. If none match, the next question follows. Answers on a skipped path are not saved.</p>`
-        : html`<p class="hint">Goes to the next question.</p>`}
-      ${groups.length ? (closed ? html`<p class="hint">The last rule always matches, so a new one could never run. Change it to add another.</p>` : html`<button class="btn btn-small" type="button" data-jump-add ${rules.length >= 20 ? raw('disabled') : ''}>Add jump</button>`) : html`<p class="hint">Nothing comes after this question yet. Add a question or an ending to jump to.</p>`}</div>`;
+        : html`<p class="hint">Continue to the next question.</p>`}
+      ${groups.length ? (closed ? html`<p class="hint">The last rule always applies, so another rule could not run. Change it to add one.</p>` : html`<button class="btn btn-small" type="button" data-jump-add ${rules.length >= 20 ? raw('disabled') : ''}>Add a rule</button>`) : html`<p class="hint">There is no later question or result to choose yet. Add one first.</p>`}</div>`;
   };
   // Hide-choice rules for one question, in Workflow. Every rule that holds adds to what is hidden.
   const choiceConflict = (field, position) => choiceRuleConflicts(draft).find(conflict => conflict.field === field.id && conflict.rule === position)?.message || '';
@@ -1060,7 +1104,7 @@ export async function builder(ctx) {
         <p class="logic-sentence" data-cr-sentence>${choiceRuleSentence(rule, field, draft.fields)}</p>
         <p class="choice-rule-conflict" data-cr-conflict ${conflict ? '' : raw('hidden')}>${conflict}</p></li>`;
     };
-    return html`<div class="choice-rule-editor"><h4 class="jump-heading">Hide choices</h4>
+    return html`<div class="choice-rule-editor"><h4 class="jump-heading">Show only relevant choices</h4>
       ${rules.length ? html`<ol class="jump-rules">${rules.map(ruleRow)}</ol><p class="hint">Every rule that matches hides its choices. A selected choice that becomes hidden is removed from the answer. If every choice is hidden, the question is skipped, even when required.</p>` : ''}
       ${!canHideChoices(field) ? (isChoice ? html`<p class="hint">Hiding choices is not supported on a question inside a multi-question page. Move it off the page to use this.</p>` : '')
         : !sources.length && !declaredParams(draft).length ? html`<p class="hint">Hiding choices uses an earlier answer or a URL parameter, and this form has neither yet.</p>`
@@ -1148,8 +1192,8 @@ export async function builder(ctx) {
   const renderUrlParams = (message = '') => {
     if (!workflowActive()) return;
     const params = declaredParams(draft);
-    mount($('#url-params'), html`<h2 id="url-params-heading" tabindex="-1">URL parameters</h2>
-      <p class="hint">Named values a link can carry, such as utm_source. They can drive jumps and hide choices, and are not answers. Anyone can edit a link, so never rely on one to decide who someone is or what they are allowed to see. Other names in a link are ignored.</p>
+    mount($('#url-params'), html`<h2 id="url-params-heading" tabindex="-1">Values from the link <span class="muted">(URL parameters)</span></h2>
+      <p class="hint">Use these for details such as a campaign source. They can control question paths and choice visibility, but stay separate from answers. Anyone can edit a link, so do not use these values to decide who may access a form. Other names in the link are ignored.</p>
       ${params.length ? html`<ul class="url-param-list">${params.map(({ key, record }) => html`<li class="url-param-row" data-url-param="${key}"><code>${key}</code>
         <label class="check"><input type="checkbox" data-url-record="${key}" ${record ? raw('checked') : ''}> Record with each response</label>
         <button class="btn btn-small" type="button" data-url-remove="${key}" aria-label="Remove ${key}">Remove</button></li>`)}</ul>
@@ -1176,7 +1220,7 @@ export async function builder(ctx) {
   const sectionChoice = new Map();
   const inspectorSection = (key, title, body, used = true) => html`<details class="inspector-section" data-inspector="${key}" ${sectionChoice.get(key) ?? used ? raw('open') : ''}><summary>${title}</summary>${body}</details>`;
   // The answer area of a question, the same on its own canvas and inside a page.
-  const answerArea = (field, index, name) => field.type.endsWith('_choice') ? html`<fieldset class="canvas-options"><legend class="visually-hidden">Options</legend>${field.options.map((option, optionIndex) => html`<div class="canvas-option-row"><span class="canvas-option-key" aria-hidden="true">${String.fromCharCode(65 + optionIndex % 26)}</span><input class="canvas-option" aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}">${option.image ? html`<span class="row"><img class="option-thumb" src="${workspaceAssetUrl(option.image.asset)}" alt=""><button class="btn btn-small" type="button" data-option-image-remove="${optionIndex}" aria-label="Remove the picture from option ${optionIndex + 1}">Remove picture</button></span>`
+  const answerArea = (field, index, name) => field.type.endsWith('_choice') ? html`<fieldset class="canvas-options"><legend class="visually-hidden">Options</legend>${field.options.map((option, optionIndex) => html`<div class="canvas-option-row"><span class="canvas-option-key" aria-hidden="true">${String.fromCharCode(65 + optionIndex % 26)}</span><input class="canvas-option" aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}">${draft.mode === 'knowledge_quiz' ? html`<label class="quiz-correct-toggle"><input type="checkbox" data-correct-option="${optionIndex}" ${option.correct ? raw('checked') : ''}><span>Correct</span></label>` : ''}${option.image ? html`<span class="row"><img class="option-thumb" src="${workspaceAssetUrl(option.image.asset)}" alt=""><button class="btn btn-small" type="button" data-option-image-remove="${optionIndex}" aria-label="Remove the picture from option ${optionIndex + 1}">Remove picture</button></span>`
       : html`<label class="btn btn-small file-button">Picture<span class="visually-hidden"> for option ${optionIndex + 1}</span><input type="file" accept="${IMAGE_TYPES.join(',')}" data-option-file="${optionIndex}" class="visually-hidden"></label>`}
       <button class="btn btn-icon" data-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" title="Remove option" ${field.options.length === 1 ? raw('disabled') : ''}>${formIcon('trash')}</button></div>`)}
     ${field.options.some(option => option.image) ? html`<p class="hint">Pictures appear above each option's text. Answers, logic and exports use the option text, not the picture.</p>` : ''}
@@ -1245,7 +1289,12 @@ export async function builder(ctx) {
             <input data-prop="id" value="${field.id}" maxlength="40" pattern="[a-z0-9_]+" aria-label="Question key" aria-describedby="key-hint-${index}${locked.has(field.id) ? ' key-locked-' + index : ''}" class="key-input" ${locked.has(field.id) ? raw('readonly') : ''}>
             <p class="hint">${prefillProblem(field) ? html`Prefilled links: not available. ${prefillProblem(field)}` : html`Prefilled links fill this question with <code>answer.${field.id}=…</code>. Build one under Share.`}</p>
             ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}</details>`)}
-        ${pageBreak ? '' : inspectorSection('answer', 'Answer', html`<label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required</label>${['short_text', 'long_text', 'email', 'phone'].includes(field.type) ? html`<label for="fp-${index}">Placeholder <span class="muted">(optional)</span></label><input id="fp-${index}" data-prop="placeholder" maxlength="100" value="${field.placeholder || ''}">` : ''}`)}
+        ${pageBreak ? '' : inspectorSection('answer', 'Answer', html`<label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required</label>${['short_text', 'long_text', 'email', 'phone'].includes(field.type) ? html`<label for="fp-${index}">Placeholder <span class="muted">(optional)</span></label><input id="fp-${index}" data-prop="placeholder" maxlength="100" value="${field.placeholder || ''}">` : ''}
+          ${answerRuleLimit(field.type) ? html`<fieldset class="answer-validation"><legend>Response validation</legend>
+            ${['min', 'max'].map((bound, at) => html`<label for="validation-${bound}-${index}">${at ? 'Maximum' : 'Minimum'} ${field.type === 'multiple_choice' ? 'selections' : 'characters'}</label>
+            <input id="validation-${bound}-${index}" type="number" min="1" max="${answerRuleLimit(field.type)}" step="1" data-answer-rule="${bound}" value="${field.answer_rule?.[bound] ?? ''}">`)}
+            <label for="validation-message-${index}">Custom error message</label><input id="validation-message-${index}" maxlength="200" data-answer-rule="message" value="${field.answer_rule?.message ?? ''}">
+          </fieldset>` : ''}`)}
         ${pageBreak ? '' : inspectorSection('media', 'Media', mediaEditor(field, index), Boolean(field.media))}
         ${inspectorSection('logic', 'Logic', html`
           <label class="check"><input type="checkbox" data-logic ${field.show_if ? raw('checked') : ''} ${earlier.length ? '' : raw('disabled')}> ${pageBreak ? 'Show this page only when…' : 'Show only when…'}</label>
@@ -1459,10 +1508,68 @@ export async function builder(ctx) {
     setState('dirty');
   };
 
+  const renderModePicker = () => {
+    const mode = draft.mode || 'universal';
+    const item = FORM_MODES[mode] || FORM_MODES.universal;
+    mount($('#form-mode-icon'), formIcon(item.icon));
+    $('#form-mode-label').textContent = item.title;
+    $$('[data-form-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.formMode === mode)));
+  };
+  const renderModeGuide = () => {
+    const guide = $('#form-mode-guide');
+    const mode = draft.mode || 'universal';
+    if (mode === 'universal') { guide.hidden = true; guide.replaceChildren(); return; }
+    guide.hidden = false;
+    const content = {
+      lead_qualification: html`<div><p class="form-mode-eyebrow">Lead qualification</p><h2>Ask the questions that help you follow up</h2><p>Collect a person's needs, timing, and fit. Use Workflow to send each answer to a useful next question or result.</p></div><button class="btn" type="button" data-mode-workflow>Set up workflow</button>`,
+      knowledge_quiz: html`<div><p class="form-mode-eyebrow">Knowledge quiz</p><h2>Choose the right answers</h2><p>Add a choice question, then mark each correct option in the question. Respondents see their score after submitting.</p></div><button class="btn btn-small" type="button" data-mode-first-choice>Add a choice question</button>`,
+      match_quiz: html`<div><p class="form-mode-eyebrow">Match quiz</p><h2>Give people a result that fits</h2><p>Start with editable questions and result pages. Answers are matched to results using rules you can change in Workflow.</p><div class="form-mode-actions"><button class="btn btn-primary" type="button" data-match-preset="recommendation">Set up a recommendation quiz</button><button class="btn" type="button" data-match-preset="personality">Set up a personality quiz</button><button class="btn btn-ghost" type="button" data-mode-workflow>Open Workflow</button></div></div><div class="form-mode-example" aria-hidden="true"><strong>When someone chooses…</strong><span>Gold</span><i></i><strong>Show the matching result</strong></div>`
+    }[mode];
+    mount(guide, content || '');
+  };
+  const addChoiceQuestion = (label, labels) => {
+    const fieldIds = draft.fields.map(field => field.id);
+    const id = randomKey('q', fieldIds);
+    const options = labels.map(text => ({ id: randomKey('opt', draft.fields.flatMap(field => field.options || [])), label: text }));
+    draft.fields.push({ id, type: 'single_choice', label, required: true, options });
+    return { id, options };
+  };
+  const addMatchPreset = kind => {
+    if ((draft.logic || []).some(entry => (entry.rules || []).some(rule => rule.to?.type === 'ending'))) {
+      toast('This form already sends answers to results. Update those rules in Workflow before adding a quiz starter.');
+      return;
+    }
+    const ideas = kind === 'personality'
+      ? [{ title: 'The Planner', message: 'You like a clear path and a thoughtful plan.' }, { title: 'The Explorer', message: 'You enjoy discovering new possibilities.' }, { title: 'The Connector', message: 'You get energy from people and shared ideas.' }]
+      : [{ title: 'Gold match', message: 'A strong fit for what you are looking for.' }, { title: 'Silver match', message: 'A flexible option with room to grow.' }, { title: 'Bronze match', message: 'A simple place to get started.' }];
+    const endings = ideas.map(idea => ({ id: randomKey('end', draft.endings || []), title: idea.title, message: idea.message }));
+    const first = addChoiceQuestion(kind === 'personality' ? 'Which sounds most like you?' : 'What are you looking for?', ideas.map(item => item.title.replace(' match', '').replace('The ', '')));
+    let finalQuestion = first;
+    let rules;
+    if (kind === 'personality') {
+      finalQuestion = addChoiceQuestion('What would you enjoy most?', ['Planning ahead', 'Trying something new', 'Doing it together']);
+      const resultByPair = [[0, 0, 1], [0, 1, 2], [1, 2, 2]];
+      rules = first.options.flatMap((firstOption, firstIndex) => finalQuestion.options.map((option, optionIndex) => ({
+        when: { all: [{ field: first.id, op: 'equals', value: firstOption.id }, { field: finalQuestion.id, op: 'equals', value: option.id }] },
+        to: { type: 'ending', id: endings[resultByPair[firstIndex][optionIndex]].id }
+      })));
+    } else {
+      rules = first.options.map((option, index) => ({ when: { field: first.id, op: 'equals', value: option.id }, to: { type: 'ending', id: endings[index].id } }));
+    }
+    draft.endings = [...(draft.endings || []), ...endings];
+    draft.logic = [...(draft.logic || []), { field: finalQuestion.id, rules }];
+    selectedQuestion = draft.fields.length - 1;
+    selectedEnding = null;
+    renderModeGuide();
+    refresh({ fields: true });
+    announce(`${kind === 'personality' ? 'Personality' : 'Recommendation'} quiz starter added. Edit the questions, result messages and matching rules to fit your form.`);
+    $('#fl-' + selectedQuestion)?.focus();
+  };
+
   const renderAll = () => {
     $('#builder-title').textContent = draft.title || 'Untitled form';
     knownConflicts = new Set(conflictMessages());
-    renderStatus(); renderShare(); readiness?.check(); renderSettings(); renderAccess(); renderFields();
+    renderStatus(); renderShare(); readiness?.check(); renderSettings(); renderAccess(); renderModePicker(); renderModeGuide(); renderFields();
     renderPreviewParams();
     $('#preview-mode').value = draft.presentation;
     renderPreview();
@@ -1490,6 +1597,26 @@ export async function builder(ctx) {
     refresh();
   });
   $('#preview-mode').onchange = renderPreview;
+
+  $('#form-mode-picker').addEventListener('click', event => {
+    const button = event.target.closest('[data-form-mode]');
+    if (!button) return;
+    const mode = button.dataset.formMode;
+    if (mode === 'universal') delete draft.mode; else draft.mode = mode;
+    $('#form-mode-picker').open = false;
+    renderModePicker(); renderModeGuide();
+    refresh({ fields: true });
+    $('#form-mode-picker > summary').focus();
+  });
+  $('#form-mode-guide').addEventListener('click', event => {
+    const preset = event.target.closest('[data-match-preset]');
+    if (preset) return addMatchPreset(preset.dataset.matchPreset);
+    if (event.target.closest('[data-mode-workflow]')) { $('#builder-index [data-section="workflow"]').click(); return; }
+    if (event.target.closest('[data-mode-first-choice]')) {
+      $('#add-field').click();
+      $('#add-menu [data-add-type="single_choice"]')?.focus();
+    }
+  });
 
   const fieldsRoot = $('#fields');
   fieldsRoot.addEventListener('input', event => {
@@ -1523,6 +1650,22 @@ export async function builder(ctx) {
     const index = Number(editor.dataset.index);
     const field = draft.fields[index];
     const { prop, cond } = event.target.dataset;
+    const ruleKey = event.target.dataset.answerRule;
+    if (ruleKey) {
+      const rule = { ...field.answer_rule };
+      if (event.target.value === '') delete rule[ruleKey];
+      else rule[ruleKey] = ruleKey === 'message' ? event.target.value.trim() : event.target.valueAsNumber;
+      if (Object.keys(rule).length) field.answer_rule = rule;
+      else delete field.answer_rule;
+      refresh();
+      return;
+    }
+    if (event.target.dataset.correctOption !== undefined) {
+      field.options[Number(event.target.dataset.correctOption)].correct = event.target.checked;
+      refresh({ fields: true });
+      fieldsRoot.querySelector(`[data-index="${index}"] [data-correct-option="${event.target.dataset.correctOption}"]`)?.focus();
+      return;
+    }
     if (event.target.dataset.type !== undefined) return changeType(index, event.target);
     if (prop === 'required') {
       field.required = event.target.checked;
@@ -1974,10 +2117,11 @@ export async function builder(ctx) {
   const selectView = next => {
     view = next;
     $('.builder').dataset.view = view;
-    const toggle = $('#topbar-preview');
+    const toggle = $('#toolbar-preview');
     const previewing = view === 'preview';
     toggle.dataset.builderView = previewing ? 'edit' : 'preview';
     toggle.title = previewing ? 'Back to editing the questions' : 'See the form as respondents do. Nothing is saved or sent.';
+    toggle.setAttribute('aria-label', previewing ? 'Back to editing the form' : 'Preview form');
     mount(toggle, html`${formIcon(previewing ? 'edit' : 'play')}<span>${previewing ? 'Back to editing' : 'Preview'}</span>`);
   };
 
@@ -2097,12 +2241,19 @@ export async function builder(ctx) {
   readiness = formReadiness(ctx, () => form, { goTo });
   // Top navigation: shows a surface and moves focus to its heading, without changing the address, so
   // the router never re-renders the builder and unsaved edits stay on the page.
-  const sections = { workflow: ['workflow', '#workflow-heading'], share: ['share', '#share-heading'], settings: ['settings', '#settings-heading'], questions: ['content', '#questions-heading'] };
+  const sections = { workflow: ['workflow', '#workflow-heading'], share: ['share', '#share-heading'], settings: ['settings', '#settings-heading'], questions: ['content', '#questions-heading'], design: ['content', '#design-heading'] };
   $('#builder-index').addEventListener('click', event => {
     const link = event.target.closest('[data-section]');
     if (!link) return;
     event.preventDefault();
     const [surface, heading] = sections[link.dataset.section];
+    if (link.dataset.section === 'design') {
+      event.preventDefault();
+      showSurface('content', 'design');
+      selectView('edit');
+      design.open();
+      return;
+    }
     showSurface(surface);
     if (surface === 'content') selectView('edit');
     // On narrow screens the outline is folded into its bar, which names the selected question.
@@ -2121,7 +2272,7 @@ export async function builder(ctx) {
   // not yet, and how to get back to setup.
   const created = ctx.query.get('created');
   const fromSetup = ctx.query.get('from') === 'setup';
-  const backToSetup = fromSetup ? html` <a href="/setup/forms" data-back-setup>Back to setup</a>` : '';
+  const backToSetup = fromSetup ? html` <a href="/setup" data-back-setup>Back to setup</a>` : '';
   if (created && !form.published_version) {
     const source = createdSource(created);
     mount($('#builder-notice'), notice('info', html`<p><strong>Draft created${source ? ' ' + source : ''} in ${workspace().name}.</strong> It is saved but not published, so nobody can open it yet. Review the questions, check the preview, then publish.${backToSetup}</p>`));
@@ -2215,11 +2366,15 @@ export async function builder(ctx) {
     };
   }
   // Preview is its own step in the header: it shows the draft as respondents would see it and saves nothing.
-  $('#topbar-preview').onclick = () => {
+  $('#toolbar-preview').onclick = () => {
     // Keeps the layout last chosen under Preview presentation; the form's own layout otherwise.
     if (view !== 'preview') return goTo('preview-' + ($('#preview-mode').value || draft.presentation || 'classic'));
     selectView('edit');
-    $('#topbar-preview').focus();
+    $('#toolbar-preview').focus();
+  };
+  $('#import-form').onclick = () => {
+    $('.overflow-menu').open = false;
+    openImportDialog({ workspaceId: session.workspaceId, onCreated: imported => ctx.navigate(draftAddress(imported, { created: 'import', workspaceId: session.workspaceId })) });
   };
   // Exports what is saved, so the file always matches a revision the server accepted.
   $('#export-form').onclick = async () => {

@@ -949,3 +949,18 @@ Run on this computer only, with synthetic data and a stand-in identity provider.
 4. Only then switch to the older backend, with authoring frozen.
 
 While `FORMS_RESPONDENT_SIGNIN` has never been enabled in an environment, no form there can be sign-in-only, so steps 1–3 find nothing. Run them anyway.
+
+## Response validation and quiz modes: rollback (13 November 2026)
+
+This release adds two things to form definitions: `answer_rule` on a question (minimum and maximum characters or selections, optional message) and a form-level `mode` with `correct` and `points` on choice options. The server enforces `answer_rule` and scores knowledge quizzes. `publicDefinition` removes `correct` and `points` before a definition is sent to respondents.
+
+**Quiz-answer exposure on rollback.** Published versions are stored as written. A backend from before this release (`989cda5` or earlier) does not remove `correct`/`points`, so `GET /api/public/forms/:slug` on an older backend would send every published quiz's answer key to respondents. Before rolling back past this release:
+
+1. Freeze authoring (`FORMS_AUTHORING_FREEZE=true`) so no quiz is published during the rollback.
+2. Find live forms whose published version marks a correct answer: `SELECT f.id, f.slug FROM forms f JOIN form_versions v ON v.form_id = f.id AND v.version = f.published_version WHERE f.published_version IS NOT NULL AND v.definition LIKE '%"correct":true%'`. Definitions are stored as compact JSON, so the pattern has no spaces.
+3. Unpublish each one, then confirm through `GET /api/public/forms/:slug` that it is refused.
+4. Only then switch to the older backend. Republish after rolling forward again.
+
+**Validation on rollback.** An older backend ignores `answer_rule`, so limits stop being enforced while it runs. Responses stay valid and nothing is lost. Responses accepted during that time may break the limits.
+
+Forms that never used quiz mode or response validation are unaffected.

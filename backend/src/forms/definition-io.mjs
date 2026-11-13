@@ -16,11 +16,11 @@ const MAX_PROBLEMS = 40;
 
 // Keys each part of a definition may hold. Anything else is refused by name.
 const ENVELOPE_KEYS = ['format', 'version', 'exported_at', 'definition'];
-const DEFINITION_KEYS = ['title', 'description', 'presentation', 'submit_label', 'fields', 'logic', 'choice_rules', 'url_params', 'endings', 'theme'];
-const FIELD_KEYS = ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder', 'show_if', 'media'];
+const DEFINITION_KEYS = ['title', 'description', 'presentation', 'mode', 'submit_label', 'fields', 'logic', 'choice_rules', 'url_params', 'endings', 'theme'];
+const FIELD_KEYS = ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder', 'show_if', 'media', 'answer_rule'];
 const CHOICE_FIELD_KEYS = [...FIELD_KEYS, 'options'];
 const PAGE_KEYS = ['id', 'type', 'label', 'help', 'grouped', 'show_if'];
-const OPTION_KEYS = ['id', 'label', 'image'];
+const OPTION_KEYS = ['id', 'label', 'image', 'correct', 'points'];
 const SHOW_IF_KEYS = ['field', 'op', 'value'];
 const CONDITION_KEYS = ['field', 'param', 'op', 'value'];
 const MEDIA_KEYS = { image: ['type', 'asset', 'alt', 'decorative'], video: ['type', 'provider', 'video', 'title'] };
@@ -111,6 +111,7 @@ function shapeProblems(definition) {
       return text;
     }));
     if (field.show_if != null) problems.push(...conditionKeyProblems(field.show_if, `${name(index)}'s display rule`, SHOW_IF_KEYS));
+    if (isObject(field.answer_rule)) problems.push(...keyProblems(field.answer_rule, ['min', 'max', 'message'], `${name(index)}'s response validation`));
     if (isObject(field.media) && MEDIA_KEYS[field.media.type]) problems.push(...keyProblems(field.media, MEDIA_KEYS[field.media.type], `${name(index)}'s ${field.media.type}`));
     if (choice && Array.isArray(field.options)) field.options.forEach((option, position) => {
       if (!isObject(option)) return problems.push(`${name(index)}, choice ${position + 1} must be an object with an id and a label.`);

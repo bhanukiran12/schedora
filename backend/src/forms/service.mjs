@@ -3,7 +3,7 @@ import { fail, HttpError } from '../http.mjs';
 import { filterActive, filterSql, searchMatcher } from './response-filter.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
-import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
+import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, formScore, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { assertDefinitionAssets, recordVersionAssets } from './assets.mjs';
 import { assertSessionClaim, recordSessionSubmission, verifyTicket } from '../video/session.mjs';
@@ -91,6 +91,7 @@ export function normalizeDefinition(input) {
     title: typeof input.title === 'string' ? input.title.trim() : input.title,
     description: typeof input.description === 'string' ? input.description.trim() : '',
     presentation: input.presentation ?? 'classic',
+    ...(input.mode && input.mode !== 'universal' ? { mode: input.mode } : {}),
     submit_label: typeof input.submit_label === 'string' && input.submit_label.trim() ? input.submit_label.trim().slice(0, 40) : 'Submit',
     fields: Array.isArray(input.fields) ? input.fields.map(field => {
       if (!field || typeof field !== 'object') return field;
@@ -99,7 +100,7 @@ export function normalizeDefinition(input) {
       if (typeof clean.help === 'string') clean.help = clean.help.trim() || undefined;
       if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => {
         if (!option || typeof option !== 'object') return option;
-        const kept = pick(option, ['id', 'label']);
+        const kept = pick(option, ['id', 'label', 'correct', 'points']);
         if (option.image != null) kept.image = option.image && typeof option.image === 'object' ? pick(option.image, ['asset']) : option.image;
         return kept;
       }) : field.options;
@@ -108,6 +109,7 @@ export function normalizeDefinition(input) {
       if (clean.type === 'page_break') { delete clean.required; clean.label = clean.label || ''; if (field.grouped != null) clean.grouped = field.grouped; }
       if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
       if (field.media != null) clean.media = normalizeMedia(field.media);
+      if (field.answer_rule != null) clean.answer_rule = pick(field.answer_rule, ['min', 'max', 'message']);
       return clean;
     }) : input.fields
   };
@@ -121,11 +123,19 @@ export function normalizeDefinition(input) {
   return definition;
 }
 
-/** What respondents receive. Where a theme came from is only the builder's business. */
+/** Respondents need choice labels and media, while grading uses the stored definition. */
 export function publicDefinition(definition) {
-  if (!definition.theme?.source) return definition;
+  const fields = definition.fields.map(field => {
+    if (!field.options?.some(option => 'correct' in option || 'points' in option)) return field;
+    const options = field.options.map(option => {
+      const { correct, points, ...publicOption } = option;
+      return publicOption;
+    });
+    return { ...field, options };
+  });
+  if (!definition.theme?.source) return { ...definition, fields };
   const { source, ...theme } = definition.theme;
-  return { ...definition, theme };
+  return { ...definition, fields, theme };
 }
 
 function present(row) {
@@ -317,7 +327,11 @@ export function publishedForm(app, slug, request) {
 // The ending a respondent reached, for the receipt. Always worked out from the accepted answers of the
 // version they answered, so a retry shows the same ending after a republish. URL parameters are not kept
 // unless opted in, so a retry uses the ones it sends, which come from the same link.
-const endingStep = (definition, answers, params) => { const ending = formEnding(definition, answers, params); return ending ? { ending } : {}; };
+const endingStep = (definition, answers, params) => {
+  const ending = formEnding(definition, answers, params);
+  const score = formScore(definition, answers);
+  return { ...(ending ? { ending } : {}), ...(score ? { quiz_score: score } : {}) };
+};
 
 // The respondent's name for contacts and booking handoffs: a name question, or split name questions.
 const respondentName = answers => {

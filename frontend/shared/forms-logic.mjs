@@ -284,7 +284,7 @@ function comparedCondition(definition, condition) {
   const source = isTypedSource(definition, condition);
   if (!source) return condition;
   // A rule value that is not a valid answer of this type, such as part of an email, is only tidied.
-  const tidied = checkAnswer({ ...source, required: false }, condition.value);
+  const tidied = checkAnswer({ ...source, required: false }, condition.value, { applyRule: false });
   return { ...condition, value: tidied.error ? condition.value.replace(/\s+/g, ' ').trim() : tidied.value };
 }
 
@@ -427,7 +427,7 @@ function walkForm(definition, answers, rawParams) {
       }
       if (Object.hasOwn(current, field.id)) {
         const kept = withoutChoices(current[field.id], hide);
-        const tidied = checkAnswer({ ...shown, required: false }, kept);
+        const tidied = checkAnswer({ ...shown, required: false }, kept, { applyRule: false });
         current[field.id] = tidied.error ? kept : tidied.value;
       }
     }
@@ -498,7 +498,20 @@ export function pipe(text, definition, answers) {
 }
 
 // Returns an error message or null, plus the normalized value.
-export function checkAnswer(field, raw) {
+export function answerRuleLimit(type) {
+  return ['short_text', 'long_text'].includes(type) ? LIMITS[type] : type === 'multiple_choice' ? 50 : 0;
+}
+
+function answerRuleError(field, value) {
+  const rule = field.answer_rule;
+  if (!rule) return null;
+  const unit = field.type === 'multiple_choice' ? 'options' : 'characters';
+  if (rule.min != null && value.length < rule.min) return rule.message || `Use at least ${rule.min} ${unit}.`;
+  if (rule.max != null && value.length > rule.max) return rule.message || `Use no more than ${rule.max} ${unit}.`;
+  return null;
+}
+
+export function checkAnswer(field, raw, { applyRule = true } = {}) {
   let value = raw;
   if (field.type === 'multiple_choice') {
     if (value == null || value === '') value = [];
@@ -521,6 +534,8 @@ export function checkAnswer(field, raw) {
     if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return { error: 'Enter a date as YYYY-MM-DD.' };
   }
   if (field.type === 'email') value = value.toLowerCase();
+  const ruleError = applyRule && answerRuleError(field, value);
+  if (ruleError) return { error: ruleError };
   return { value };
 }
 
@@ -718,6 +733,7 @@ const count = number => number.toLocaleString('en-US');
 export function definitionProblems(definition) {
   const problems = [];
   if (!definition || typeof definition !== 'object') return ['Form definition is missing.'];
+  if (definition.mode != null && !['universal', 'lead_qualification', 'knowledge_quiz', 'match_quiz'].includes(definition.mode)) problems.push('Choose Universal, Lead qualification, Knowledge quiz or Match quiz mode.');
   if (typeof definition.title !== 'string' || !definition.title.trim() || definition.title.length > 150) problems.push('Give the form a title of up to 150 characters.');
   if (typeof (definition.description ?? '') !== 'string' || (definition.description ?? '').length > DESCRIPTION_LIMITS.form) problems.push(`Keep the form description to ${count(DESCRIPTION_LIMITS.form)} characters or fewer.`);
   if (!['classic', 'conversational'].includes(definition.presentation)) problems.push('Choose classic or conversational presentation.');
@@ -735,6 +751,16 @@ export function definitionProblems(definition) {
       if (typeof field.help !== 'string' || field.help.length > limit) problems.push(`${name} ${field.type === 'page_break' ? 'page description' : 'description'} must be ${count(limit)} characters or fewer.`);
     }
     if (field.required != null && typeof field.required !== 'boolean') problems.push(`${name} required must be true or false.`);
+    if (field.answer_rule != null) {
+      const { min, max, message } = field.answer_rule;
+      const limit = answerRuleLimit(field.type);
+      const validBound = bound => bound == null || (Number.isInteger(bound) && bound >= 1 && bound <= limit);
+      if (!limit || (min == null && max == null) || !validBound(min) || !validBound(max) || (min != null && max != null && min > max)
+          || (field.type === 'multiple_choice' && min > (field.options?.length ?? 0))) {
+        problems.push(`${name} needs valid minimum and maximum answer limits.`);
+      }
+      if (message != null && (typeof message !== 'string' || message.length > 200)) problems.push(`${name} needs an error message of up to 200 characters.`);
+    }
     problems.push(...mediaProblems(field, name));
     if (field.type?.endsWith('_choice')) {
       if (!Array.isArray(field.options) || field.options.length < 1 || field.options.length > 50) problems.push(`${name} needs 1–50 options.`);
@@ -743,6 +769,8 @@ export function definitionProblems(definition) {
         for (const option of field.options) {
           if (typeof option?.id !== 'string' || !/^[a-z0-9_]{1,40}$/.test(option.id) || ids.has(option.id)) problems.push(`${name} has an invalid or repeated option id.`);
           if (typeof option?.label !== 'string' || !option.label.trim() || option.label.length > 200) problems.push(`${name} options need labels up to 200 characters.`);
+          if (option?.correct != null && typeof option.correct !== 'boolean') problems.push(`${name} correct-answer settings must be true or false.`);
+          if (option?.points != null && (!Number.isInteger(option.points) || option.points < 0 || option.points > 100)) problems.push(`${name} option points must be a whole number from 0 to 100.`);
           ids.add(option?.id);
         }
       }
@@ -763,6 +791,22 @@ export function definitionProblems(definition) {
   problems.push(...urlParamProblems(definition));
   if (definition.theme != null) problems.push(...(typeof definition.theme === 'object' && !Array.isArray(definition.theme) ? themeProblems(definition.theme, { typographyOnly: true }) : ['Theme is invalid.']));
   return problems;
+}
+
+/** Score knowledge answers against the exact published definition; no client-supplied score is trusted. */
+export function formScore(definition, answers = {}) {
+  if (definition?.mode !== 'knowledge_quiz') return null;
+  let total = 0;
+  let correct = 0;
+  for (const field of definition.fields || []) {
+    if (!field.type?.endsWith('_choice')) continue;
+    const expected = (field.options || []).filter(option => option.correct === true).map(option => option.id);
+    if (!expected.length) continue;
+    total += 1;
+    const actual = Array.isArray(answers[field.id]) ? answers[field.id] : answers[field.id] ? [answers[field.id]] : [];
+    if (actual.length === expected.length && expected.every(id => actual.includes(id))) correct += 1;
+  }
+  return total ? { correct, total } : null;
 }
 
 export function starterDefinition(title = 'Untitled form') {

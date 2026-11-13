@@ -1,7 +1,7 @@
 // Changing a question's type in the builder (docs/FORMS.md, "Changing a question's type"). Pure: the
 // builder passes in the draft questions, the saved routing and the keys published versions used,
 // and gets back what would happen, so nothing changes until the creator confirms.
-import { FIELD_TYPES, publishedTypeChangeAllowed } from '../shared/forms-logic.mjs';
+import { answerRuleLimit, FIELD_TYPES, publishedTypeChangeAllowed } from '../shared/forms-logic.mjs';
 import { conditionSentence } from './forms-readiness.mjs';
 
 const TEXT_TYPES = ['short_text', 'long_text', 'email', 'phone', 'date'];
@@ -59,6 +59,12 @@ export function planTypeChange({ field, to, fields, routing = null, choiceRules 
   const after = fields.map(item => item === field ? next : item);
   const effects = [];
   let confirm = false;
+  if (next.answer_rule && (!answerRuleLimit(to) || (from === 'multiple_choice') !== (to === 'multiple_choice')
+      || Math.max(next.answer_rule.min || 0, next.answer_rule.max || 0) > answerRuleLimit(to))) {
+    delete next.answer_rule;
+    confirm = true;
+    effects.push('The response validation rule is removed because it does not apply to the new question type.');
+  }
   if (family(from) !== family(to)) {
     confirm = true;
     // Option keys and typed text cannot stand in for each other, so such rules are never rewritten.

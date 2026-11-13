@@ -2,7 +2,18 @@
 
 Started 9 November 2026 on branch `codex/forms-typography`, from a clean working tree at `0d6ac90`. This is the acceptance checklist for improving Forms. Each route lists its user goal, its main UX gaps, and how it will be verified. Typeform is the reference for hierarchy, navigation and editing interactions. Schedora's branding and existing contracts in `docs/FORMS.md` stay as they are.
 
-Status key: **Done** means built and verified locally in this checkout. **Planned** means the gap is recorded and not built yet.
+Status key: **Done** means built and verified locally in this checkout. **Planned** means the gap is recorded and not built yet. **In progress** means a local change exists but still needs its stated verification.
+
+## Local follow-on (10 November 2026)
+
+The following work is present in the shared checkout and is **not yet verified**:
+
+- The builder has Universal, Lead qualification, Knowledge quiz and Match quiz modes. Knowledge quiz correct answers are scored on the server; recommendation and personality starters create editable questions, endings and matching rules.
+- The separate Templates navigation and template gallery entry have been removed. Creating a form starts from a blank form or JSON import; import remains available in the builder.
+- Workflow now has a plain-language guide separating question paths, relevant choices and values carried in a link. Design is also available from the builder's section navigation.
+- `docs/PRODUCT_DESIGN_PRINCIPLES.md` captures the practical design rules being applied from Krug and Norman.
+
+**Still pending in this follow-on:** lead scoring and prioritization are not implemented; the Lead qualification mode currently guides authors to collect fit details and use existing Workflow rules. The new mode behavior, Workflow changes and navigation need a browser acceptance pass before they can be marked Done.
 
 ## What already exists
 
@@ -17,11 +28,11 @@ Status key: **Done** means built and verified locally in this checkout. **Planne
 | Route / surface | User goal | Main UX gaps found | Verification | Status |
 |---|---|---|---|---|
 | `/forms` overview and list | Find a form, see whether it's live, open it | — | Browser: populated, filtered, no-match and offline-error states at 320/375/768/1280, plus unit tests | **Done (M4 part 1)** |
-| Create form → Blank / Templates (`/forms` and `/setup/forms`) | Start quickly from the right point | — | Browser: identical cards on both routes, cancel paths, workspace pinned across tabs, setup → builder → setup | **Done (M4 part 2)** |
+| Create form → Blank / Import JSON (`/forms` and `/setup/forms`) | Start quickly from the right point | — | Browser: identical starting choices on both routes, cancel paths, workspace pinned across tabs, setup → builder → setup | **In progress: Templates removed locally; recheck picker journeys** |
 | Create form → **Import JSON** | Bring an existing definition in without a terminal or API key | — | Server tests plus the browser journey below | **Done (M1)** |
 | Builder · Content (outline, canvas, inspector) | Edit questions in place | — | Browser at 320/375/768/1280; keyboard pass with real key events (outline, add, reorder); fixture with 39 questions | **Done (M4 parts 1 and 4)** |
-| Builder · Workflow (logic map, jumps, URL parameters) | Understand and edit branching | Dense. URL parameters and answer prefill aren't distinguished (M2). | Existing logicmap/jumps tests plus browser | Planned (M2/M4) |
-| Builder · Design | Apply a theme and typography | Opens as a side panel from the toolbar, so it's not discoverable from the section nav | Theme tests plus screenshots | Planned (M4) |
+| Builder · Workflow (logic map, branches, hide choices, link values) | Understand and edit branching | The rule map is still dense; prefilled answers are configured under Share and need clearer separation from values carried by a link | Existing logicmap/jumps tests plus browser | **In progress: guidance and labels added; verification pending** |
+| Builder · Design | Apply a theme and typography | Was only discoverable from the toolbar | Theme tests plus screenshots | **In progress: section-nav entry added; verification pending** |
 | Builder · Settings (presentation, access, routing) | Form-wide behaviour | — | Browser: sign-in journey | **Who can respond done (M3)** |
 | Builder · Share + readiness | Get the link and the embed code | — | Browser: prefill journey; embed code per layout; no embed code for sign-in-only forms | **Done (M2, M4 part 5)** |
 | Builder · More actions | Secondary actions | — | Browser: Export downloads the file | **Done (M1: Export form definition)** |

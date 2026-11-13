@@ -88,3 +88,34 @@ test('draft, publish versions, public submission and authorized CSV export', asy
     assert.deepEqual([late.status, late.body.error.code], [410, 'form_closed'], 'a closed form says so; a never-published draft stays 404');
   } finally { await env.close(); }
 });
+
+test('published validation rejects invalid answers and quizzes keep answer keys on the server', async () => {
+  const env = await setup();
+  try {
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'Owner');
+    const definition = {
+      title: 'Quiz validation', presentation: 'classic', mode: 'knowledge_quiz',
+      fields: [
+        { id: 'name', type: 'short_text', label: 'Name', required: true, answer_rule: { min: 3, max: 20, message: 'Enter your full name.' } },
+        { id: 'pick', type: 'multiple_choice', label: 'Choose two', answer_rule: { min: 2, max: 2 }, options: [
+          { id: 'a', label: 'A', correct: true, points: 1 }, { id: 'b', label: 'B', correct: true }, { id: 'c', label: 'C' }
+        ] }
+      ]
+    };
+    const route = `/api/workspaces/${ws.id}/forms`;
+    const created = await owner.post(route, { definition });
+    assert.equal(created.status, 201);
+    assert.equal((await owner.post(`${route}/${created.body.id}/publish`)).status, 200);
+    const publicRoute = `/api/public/forms/${created.body.slug}`;
+    const respondent = env.client();
+    const published = (await respondent.get(publicRoute)).body.definition;
+    assert.deepEqual(published.fields[1].options[0], { id: 'a', label: 'A' });
+    const invalid = await respondent.post(publicRoute + '/responses', { answers: { name: 'AB', pick: ['a'] } });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(invalid.body.error.errors, { name: 'Enter your full name.', pick: 'Use at least 2 options.' });
+    const accepted = await respondent.post(publicRoute + '/responses', { answers: { name: 'Sam Jones', pick: ['a', 'b'] } });
+    assert.equal(accepted.status, 201);
+    assert.equal(accepted.body.quiz_score.correct, 1);
+  } finally { await env.close(); }
+});
