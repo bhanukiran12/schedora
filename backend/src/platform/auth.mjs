@@ -30,10 +30,10 @@ export function cookieName(config) {
   return config.cookieDomain || !config.production ? 'schedora_session' : '__Host-schedora_session';
 }
 
-function sessionCookie(config, value, maxAgeSeconds) {
+function sessionCookie(config, value, maxAgeSeconds, { includeDomain = true } = {}) {
   const parts = [`${cookieName(config)}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
   if (config.production) parts.push('Secure');
-  if (config.cookieDomain) parts.push('Domain=' + config.cookieDomain);
+  if (includeDomain && config.cookieDomain) parts.push('Domain=' + config.cookieDomain);
   return parts.join('; ');
 }
 
@@ -42,18 +42,41 @@ export function createSession(app, userId) {
   const csrf = newToken(24);
   const now = app.now();
   app.db.run('INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)', sha256(token), userId, csrf, now, now + SESSION_DAYS * 86400000);
-  return { cookie: sessionCookie(app.config, token, SESSION_DAYS * 86400), csrf };
+  const cookie = sessionCookie(app.config, token, SESSION_DAYS * 86400);
+  // Remove a legacy host-only cookie before setting the shared domain cookie.
+  // Browsers can retain both cookies with the same name and send the stale one first.
+  const cookies = app.config.cookieDomain
+    ? [cookie, sessionCookie(app.config, '', 0, { includeDomain: false })]
+    : [cookie];
+  return { cookie, cookies, csrf };
 }
 
 export function clearSessionCookie(config) {
   return sessionCookie(config, '', 0);
 }
 
+export function clearSessionCookies(config) {
+  const cookies = [clearSessionCookie(config)];
+  if (config.cookieDomain) cookies.push(sessionCookie(config, '', 0, { includeDomain: false }));
+  return cookies;
+}
+
 export function loadSession(app, request) {
-  const token = parseCookies(request.headers.cookie)[cookieName(app.config)];
-  if (!token) return null;
+  const name = cookieName(app.config);
+  // A browser can send both a legacy host-only cookie and the shared domain
+  // cookie with the same name. Keep all candidates and use the newest valid
+  // session instead of letting header ordering select a revoked token.
+  const tokens = String(request.headers.cookie || '').split(';').flatMap(part => {
+    const index = part.indexOf('=');
+    if (index < 0 || part.slice(0, index).trim() !== name) return [];
+    try { return [decodeURIComponent(part.slice(index + 1).trim())]; } catch { return []; }
+  }).filter(Boolean);
+  if (!tokens.length) return null;
+  const hashes = [...new Set(tokens.map(sha256))];
+  const placeholders = hashes.map(() => '?').join(', ');
   const session = app.db.get(`SELECT s.token_hash, s.csrf_token, s.expires_at, u.id, u.email, u.name
-    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, sha256(token));
+    FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash IN (${placeholders})
+    ORDER BY s.created_at DESC LIMIT 1`, ...hashes);
   if (!session || session.expires_at < app.now()) return null;
   return { tokenHash: session.token_hash, csrf: session.csrf_token, user: { id: session.id, email: session.email, name: session.name } };
 }

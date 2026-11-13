@@ -8,7 +8,7 @@ const ID = '0b7d3c1e-2f4a-4b5c-8d9e-0f1a2b3c4d5e';
 const loc = (hostname, port = '') => ({ hostname, protocol: hostname.endsWith('localhost') ? 'http:' : 'https:', port });
 
 test('the host fixes the product for workspace, account and demo pages', () => {
-  for (const [host, product] of [['meet.schedora.in', 'meet'], ['book.schedora.in', 'meet'], ['forms.schedora.in', 'forms'], ['flow.schedora.in', 'flow'], ['meet.localhost', 'meet']]) {
+  for (const [host, product] of [['meet.schedora.in', 'meet'], ['book.schedora.in', 'meet'], ['forms.schedora.in', 'forms'], ['flow.schedora.in', 'flow'], ['meet.localhost', 'meet'], ['meet.schedora.localhost', 'meet']]) {
     for (const path of ['/', '/account', '/login', '/signup', '/billing', '/enquiries', '/start', '/start/products', '/demo', '/privacy']) assert.equal(contextFor(host, path, D), product, `${host}${path}`);
   }
   assert.equal(contextFor('schedora.in', '/account', D), 'suite', 'the apex domain is Suite');
@@ -58,6 +58,7 @@ test('product links use subdomains on real hosts and path prefixes on plain loca
   assert.equal(productUrl('forms', '/forms', loc('meet.schedora.in'), D), 'https://forms.schedora.in/forms');
   assert.equal(productUrl('suite', '/account', loc('flow.schedora.in'), D), 'https://schedora.in/account');
   assert.equal(productUrl('flow', '/flow', loc('meet.localhost', '3000'), D), 'http://flow.localhost:3000/flow');
+  assert.equal(productUrl('flow', '/flow', loc('meet.schedora.localhost', '3000'), D), 'http://flow.schedora.localhost:3000/flow');
   assert.equal(productUrl('flow', '/flow', loc('127.0.0.1', '3000'), D), '/flow');
   assert.equal(landingUrl('meet', loc('schedora.in'), D), 'https://meet.schedora.in/');
   assert.equal(landingUrl('meet', loc('127.0.0.1', '3000'), D), '/products/meet');

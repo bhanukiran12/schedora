@@ -39,7 +39,9 @@ export function routeProduct(path) {
 /** host: { base, product, production } — base is the product domain, 'localhost' or null. */
 export function hostInfo(hostname, productDomain) {
   const host = String(hostname).toLowerCase();
-  for (const base of [productDomain, 'localhost'].filter(Boolean)) {
+  // localhost itself cannot host a Domain cookie in Chrome. Use the app's
+  // registrable localhost alias for shared local sign-in across product hosts.
+  for (const base of [productDomain, 'schedora.localhost', 'localhost'].filter(Boolean)) {
     const production = base === productDomain;
     if (host === base) return { base, product: null, production };
     if (host.endsWith('.' + base)) {

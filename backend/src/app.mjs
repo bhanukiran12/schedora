@@ -57,8 +57,17 @@ export function createApp(options = {}) {
   app.server = http.createServer(async (request, response) => {
     const host = String(request.headers.host || '').split(':')[0].toLowerCase();
     let url;
-    try { url = new URL(request.url, 'http://localhost'); } catch { return send(request, response, 400, 'text/plain', 'Bad request'); }
+    try { url = new URL(request.url, `http://${request.headers.host || 'localhost'}`); } catch { return send(request, response, 400, 'text/plain', 'Bad request'); }
     const path = url.pathname;
+    if (!config.production) {
+      const legacyLocalHost = /^(?:(meet|forms|flow|book)\.)?localhost$/.exec(host);
+      if (legacyLocalHost) {
+        const product = legacyLocalHost[1] === 'book' ? 'meet' : legacyLocalHost[1];
+        url.hostname = product ? `${product}.schedora.localhost` : 'schedora.localhost';
+        response.writeHead(307, { Location: url.toString(), 'Cache-Control': 'no-store' });
+        return response.end();
+      }
+    }
     try {
       if (config.production && !isSecure(app, request) && !['localhost', '127.0.0.1'].includes(host) && path !== '/api/health') {
         const target = host && (host === config.productDomain || host.endsWith('.' + config.productDomain)) ? host : config.productDomain;

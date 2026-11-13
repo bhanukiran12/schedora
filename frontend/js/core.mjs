@@ -57,6 +57,9 @@ export async function api(method, path, body, headers = {}, { timeout } = {}) {
   }
   if (response.status === 204) return null;
   const data = await response.json().catch(() => null);
+  if (response.status === 401 && data?.error?.code === 'unauthenticated' && session.user) {
+    window.dispatchEvent(new CustomEvent('schedora:session-expired'));
+  }
   if (!response.ok) throw new ApiError(response.status, data?.error);
   // A bounded write whose answer could not be read has an unknown outcome.
   if (timeout && data === null) throw new ApiError(0, { code: 'timeout', message: 'Schedora did not answer in time. Check your connection and try again.' });

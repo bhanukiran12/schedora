@@ -1,5 +1,5 @@
-import { createRouter, fail, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
-import { clearSessionCookie, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
+import { createRouter, fail, parseCookies, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
+import { clearSessionCookies, cookieName, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
 import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
 import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
 import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/themes.mjs';
@@ -84,7 +84,7 @@ export function createApi(app) {
     ctx.setCookie(clearGoogleLoginCookie(app));
     try {
       const result = await finishGoogleLogin(app, ctx.request, ctx.query, ctx.session);
-      ctx.setCookie(result.cookie);
+      (result.cookies || [result.cookie]).forEach(ctx.setCookie);
       return { redirect: result.next };
     } catch (error) {
       const message = ['invalid_state', 'google_denied', 'google_failed', 'account_changed', 'email_mismatch', 'identity_taken', 'account_exists', 'sso_required'].includes(error.code) ? error.message : 'Google sign-in is temporarily unavailable. Please try again.';
@@ -96,7 +96,7 @@ export function createApi(app) {
     limit(ctx, 'signup', 10, 3600000);
     const userId = await signUp(app, await ctx.json());
     const session = createSession(app, userId);
-    ctx.setCookie(session.cookie);
+    session.cookies.forEach(ctx.setCookie);
     return { status: 201, body: me(userId, session.csrf) };
   }, { public: true });
 
@@ -106,18 +106,23 @@ export function createApi(app) {
     const userId = await signIn(app, body);
     if (ctx.session) signOut(app, ctx.session);
     const session = createSession(app, userId);
-    ctx.setCookie(session.cookie);
+    session.cookies.forEach(ctx.setCookie);
     return me(userId, session.csrf);
   }, { public: true });
 
-  post('/api/auth/logout', ctx => { signOut(app, ctx.session); ctx.setCookie(clearSessionCookie(app.config)); return { status: 204 }; }, { public: true });
+  post('/api/auth/logout', ctx => { signOut(app, ctx.session); clearSessionCookies(app.config).forEach(ctx.setCookie); return { status: 204 }; }, { public: true });
 
   function me(userId, csrf) {
     const user = app.db.get('SELECT id, name, email FROM users WHERE id = ?', userId);
     return { user, csrf_token: csrf, workspaces: listWorkspaces(app, userId) };
   }
-  get('/api/me', ctx => ctx.user ? me(ctx.user.id, ctx.session.csrf) : { user: null, workspaces: [] }, { public: true });
-  del('/api/me', async ctx => { await deleteAccount(app, ctx.user, await ctx.json()); ctx.setCookie(clearSessionCookie(app.config)); return { status: 204 }; });
+  get('/api/me', ctx => {
+    if (ctx.user) return me(ctx.user.id, ctx.session.csrf);
+    // A revoked or expired session cookie must not linger in an open product tab.
+    if (parseCookies(ctx.request.headers.cookie)[cookieName(app.config)]) clearSessionCookies(app.config).forEach(ctx.setCookie);
+    return { user: null, workspaces: [] };
+  }, { public: true });
+  del('/api/me', async ctx => { await deleteAccount(app, ctx.user, await ctx.json()); clearSessionCookies(app.config).forEach(ctx.setCookie); return { status: 204 }; });
 
   // ---- Workspaces ----
   post('/api/workspaces', async ctx => ({ status: 201, body: { id: createWorkspace(app, ctx.user, await ctx.json()), workspaces: listWorkspaces(app, ctx.user.id) } }));

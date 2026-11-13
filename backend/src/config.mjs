@@ -8,7 +8,9 @@ import { validWebhookSecret } from './platform/email-events.mjs';
 export function loadConfig(env = process.env, overrides = {}) {
   const production = env.NODE_ENV === 'production';
   const productDomain = env.PRODUCT_DOMAIN || 'schedora.in';
-  const baseUrl = (env.BASE_URL || (production ? `https://${productDomain}` : `http://localhost:${env.PORT || 3000}`)).replace(/\/$/, '');
+  const localDomain = 'schedora.localhost';
+  const localBaseHost = env.NODE_ENV === 'test' ? 'localhost' : localDomain;
+  const baseUrl = (env.BASE_URL || (production ? `https://${productDomain}` : `http://${localBaseHost}:${env.PORT || 3000}`)).replace(/\/$/, '');
   let billingProvider = env.BILLING_PROVIDER || (production ? 'none' : 'test');
   if (production && billingProvider === 'test' && env.ALLOW_TEST_BILLING !== 'true') billingProvider = 'none';
   const config = {
@@ -45,7 +47,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     deployment: env.RELEASE_ENVIRONMENT || '',
     serveFrontend: env.SERVE_FRONTEND ? env.SERVE_FRONTEND === 'true' : !production,
     frontendDir: env.FRONTEND_DIR || fileURLToPath(new URL('../../frontend/', import.meta.url)),
-    cookieDomain: env.COOKIE_DOMAIN || '',
+    cookieDomain: production ? (env.COOKIE_DOMAIN || '') : env.NODE_ENV === 'test' ? (env.COOKIE_DOMAIN || '') : (env.COOKIE_DOMAIN || `.${localDomain}`),
     analytics: env.ANALYTICS_ENABLED === 'true',
     billingMode: env.BILLING_MODE || (production ? 'enforced' : 'open'),
     billingProvider,

@@ -147,7 +147,7 @@ export async function finishSso(app, request, query) {
   }
   app.db.run('INSERT OR IGNORE INTO memberships (workspace_id, user_id, role, created_at) VALUES (?, ?, ?, ?)', flow.ws, user.id, config.default_role, app.now());
   const session = createSession(app, user.id);
-  return { cookies: [session.cookie, `${FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0${flowCookieScope(app)}`], workspaceId: flow.ws };
+  return { cookies: [...session.cookies, `${FLOW_COOKIE}=; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age=0${flowCookieScope(app)}`], workspaceId: flow.ws };
 }
 
 // ---- Respondent sign-in (docs/FORMS.md, "Respondent sign-in") ----

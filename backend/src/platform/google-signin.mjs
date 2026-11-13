@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { fail, parseCookies } from '../http.mjs';
 import { email as validEmail } from '../validate.mjs';
-import { clearSessionCookie, createSession, createWorkspaceRecord, deleteAccountRecords, hashPassword, newToken, sha256, signOut } from './auth.mjs';
+import { clearSessionCookies, createSession, createWorkspaceRecord, deleteAccountRecords, hashPassword, newToken, sha256, signOut } from './auth.mjs';
 import { decryptJson, encryptJson } from './crypto.mjs';
 import { assertPasswordAllowed } from './sso.mjs';
 
@@ -92,7 +92,7 @@ async function completeGoogleLogin(app, flow, query, currentSession) {
   if (flow.action === 'delete') {
     if (!flow.userId || !identity || identity.user_id !== flow.userId) fail(403, 'account_changed', 'Choose the Google account already linked to your Schedora account.');
     deleteAccountRecords(app, { id: flow.userId });
-    return { cookie: clearSessionCookie(app.config), next: nextOrigin(flow.next) + '/account?deleted=1' };
+    return { cookies: clearSessionCookies(app.config), next: nextOrigin(flow.next) + '/account?deleted=1' };
   }
   let userId;
   if (flow.userId) {
@@ -119,5 +119,5 @@ async function completeGoogleLogin(app, flow, query, currentSession) {
   }
   if (currentSession) signOut(app, currentSession);
   const session = createSession(app, userId);
-  return { cookie: session.cookie, next: flow.userId ? nextOrigin(flow.next) + '/account?google=connected' : flow.next };
+  return { cookies: session.cookies, next: flow.userId ? nextOrigin(flow.next) + '/account?google=connected' : flow.next };
 }

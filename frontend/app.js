@@ -1,4 +1,4 @@
-import { $, api, boot, html, loadMe, mount, raw, selectWorkspace, session, storage, workspace } from './js/core.mjs';
+import { $, api, applyMe, boot, html, loadMe, mount, raw, selectWorkspace, session, storage, workspace } from './js/core.mjs';
 import * as pages from './js/pages.mjs';
 import * as meet from './js/meet.mjs';
 import * as team from './js/meet-team.mjs';
@@ -128,6 +128,13 @@ export function navigate(path, { replace = false } = {}) {
   currentPath = location.pathname;
   render();
 }
+
+window.addEventListener('schedora:session-expired', () => {
+  if (!session.user) return;
+  const next = location.pathname + location.search + location.hash;
+  applyMe({ user: null, workspaces: [] });
+  navigate('/login?next=' + encodeURIComponent(next) + '&error=' + encodeURIComponent('Your session expired. Sign in again to continue.'), { replace: true });
+});
 
 // quiet: refresh what is on screen (say, once the account has loaded) without moving focus or scroll.
 export async function render({ quiet = false } = {}) {
