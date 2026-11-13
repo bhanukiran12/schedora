@@ -1214,7 +1214,13 @@ body.form-editor { --canvas: #ffffff; --surface: #ffffff; --surface-2: #f7f7f7; 
   .builder-edit .question-workspace, .question-panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   /* The outline folds into a bar that names the selection, so the canvas stays near the top.
      "Outline" opens the full, readable list: names, pages with their questions, and the selection. */
-  .question-sidebar { display: block; position: relative; }
+  .question-sidebar { display: flex; flex-direction: column; position: relative; }
+  /* The form's mode is a form-wide choice, rarely changed while editing: on narrow screens it sits
+     inside the opened outline, under the bar, so it never pushes the question canvas down. */
+  .question-sidebar .outline-bar { order: 1; }
+  .question-sidebar .form-mode-picker { order: 2; margin-top: 8px; }
+  .question-sidebar .outline-panel { order: 3; }
+  .question-sidebar:not(.outline-open) .form-mode-picker { display: none; }
   .outline-bar { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 4px; padding: 4px; background: var(--panel); border-radius: 12px; }
   .question-sidebar:not(.outline-open) .outline-panel { display: none; }
   .outline-panel { display: grid; gap: 8px; margin-top: 8px; max-height: min(60vh, 520px); overflow-y: auto; overscroll-behavior: contain; padding: 8px; background: var(--panel); border-radius: 12px; scrollbar-width: thin; }
