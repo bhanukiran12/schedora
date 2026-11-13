@@ -3,7 +3,13 @@ import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FLOW_STARTERS } from './flow-starters.mjs';
 import { emailEvidence } from './email-evidence.mjs';
 
-const TRIGGERS = { 'meet.booking.created': 'A Meet appointment is booked', 'forms.response.created': 'A Forms response is submitted' };
+const TRIGGERS = {
+  'meet.booking.created': 'A Meet appointment is booked',
+  'meet.booking.canceled': 'A Meet appointment is canceled',
+  'meet.booking.rescheduled': 'A Meet appointment is rescheduled',
+  'forms.response.created': 'A Forms response is submitted'
+};
+const isBookingTrigger = type => type.startsWith('meet.booking.');
 const ACTIONS = { email: 'Send an email', task: 'Create a follow-up task' };
 const DUE_CHOICES = [[4, '4 hours'], [24, '1 day'], [48, '2 days'], [72, '3 days'], [168, '1 week']];
 const dueLabel = hours => DUE_CHOICES.find(([value]) => value === hours)?.[1] || `${hours} hours`;
@@ -19,12 +25,16 @@ const PLACEHOLDERS = {
 };
 
 export async function dashboard(ctx) {
-  setTitle('Flow by Schedora');
+  setTitle('Flow · Schedora');
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'flow', title: 'Give every enquiry a clear next step.', lead: 'Turn a Meet booking or Forms response into an email or a task. Review each run, investigate failures and retry supported actions.' }));
   if (!needsSession(ctx)) return;
-  const tab = ctx.params[0] || 'flows';
+  const routeTab = ctx.params[0];
+  const queryTab = ['overview', 'flows', 'connections'].includes(ctx.query.get('tab')) ? ctx.query.get('tab') : null;
+  const tab = routeTab || queryTab || 'overview';
+  const label = { overview: 'Overview', flows: 'Workflows', runs: 'Run history', tasks: 'Tasks', connections: 'Connections' }[tab] || 'Overview';
+  setTitle(`${label} · Flow by Schedora`);
   mount(ctx.main, html`<div class="container page">
-    <div class="page-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Flow · ${workspace().name}</p><h1>Automations</h1></div><div class="row"><a class="btn" href="/enquiries?show=attention">Enquiries needing attention</a>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New flow</a>` : ''}</div></div>
+    <div class="page-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Flow · ${workspace().name}</p><h1>${label}</h1>${tab === 'overview' ? html`<p class="lead">See what’s running, what’s finished and what needs a look.</p>` : ''}</div><div class="row"><a class="btn" href="/enquiries?show=attention">Enquiries needing attention</a>${isAdmin() ? html`<a class="btn btn-primary" href="/flow/new">New workflow</a>` : ''}</div></div>
     ${workspace().entitlements.flow.active ? '' : notice('warn', html`<p>This workspace has no active Flow or Suite plan, so flows cannot run. <a href="/billing">Review plans</a>.</p>`)}
 
     <section id="panel">${loading()}</section></div>`);
@@ -32,8 +42,44 @@ export async function dashboard(ctx) {
   try {
     if (tab === 'runs') await runsTab(ctx, panel);
     else if (tab === 'tasks') await tasksTab(ctx, panel);
+    else if (tab === 'connections') await connectionsTab(ctx, panel);
+    else if (tab === 'overview') await flowOverview(ctx, panel);
     else await flowsTab(ctx, panel);
   } catch (error) { if (ctx.alive()) mount(panel, errorBlock(error)); }
+}
+
+async function flowOverview(ctx, panel) {
+  const [flows, runs] = await Promise.all([api('GET', wsPath('/flows')), api('GET', wsPath('/runs'))]);
+  if (!ctx.alive()) return;
+  const active = flows.filter(flow => flow.status === 'enabled');
+  const failed = runs.filter(run => run.status === 'failed');
+  mount(panel, html`<div class="workspace-metrics">
+    <a class="workspace-metric workspace-metric--flow" href="/flow?tab=flows"><span>Active workflows</span><strong>${active.length}</strong><small>${flows.length} workflows in your workspace</small></a>
+    <a class="workspace-metric workspace-metric--flow" href="/flow/runs"><span>Recent runs</span><strong>${runs.length}</strong><small>Latest workflow activity</small></a>
+    <a class="workspace-metric workspace-metric--attention" href="/flow/runs?status=failed"><span>Needs attention</span><strong>${failed.length}</strong><small>Failed runs to review</small></a>
+  </div><div class="workspace-overview__grid">
+    <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">AUTOMATION</p><h2>Your workflows</h2></div><a href="/flow?tab=flows">All workflows →</a></header>
+      ${flows.length ? html`<ul class="workspace-overview-list">${flows.slice(0, 6).map(flow => html`<li><span><strong>${flow.name}</strong><small>${TRIGGERS[flow.trigger_type] || 'Workspace event'} · ${ACTIONS[flow.action_type]}</small></span>${badge(flow.status)}<a class="btn btn-small" href="/flow/${flow.id}">Edit</a></li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No workflows yet</strong><p>Choose what starts the follow-up and what should happen next.</p><a class="btn btn-small btn-primary" href="/flow/new">Create a workflow</a></div>`}
+    </section>
+    <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">ACTIVITY</p><h2>Recent runs</h2></div><a href="/flow/runs">Run history →</a></header>
+      ${runs.length ? html`<ul class="workspace-overview-list">${runs.slice(0, 6).map(run => html`<li><time>${fmtDateTime(run.created_at)}</time><span><strong>${run.flow_name}</strong><small>${run.last_error || (run.result?.task ? 'Follow-up task created' : run.result?.email ? 'Email action recorded' : 'Workflow run')}</small></span>${badge(run.status)}</li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No runs yet</strong><p>Runs appear here after an enabled workflow receives a booking or response.</p></div>`}
+    </section>
+  </div>${failed.length ? html`<p class="workspace-overview__attention"><strong>${failed.length} failed ${failed.length === 1 ? 'run needs' : 'runs need'} attention.</strong> <a href="/flow/runs?status=failed">Review failed runs →</a></p>` : ''}`);
+}
+
+async function connectionsTab(ctx, panel) {
+  const flows = await api('GET', wsPath('/flows'));
+  if (!ctx.alive()) return;
+  const cards = [
+    ['Meet bookings', 'A booking, cancellation, or reschedule can start a follow-up workflow.', 'meet.booking.', '/meet?tab=meetings', 'Open Meet bookings'],
+    ['Forms responses', 'A submitted form can create a task or send a follow-up email.', 'forms.response.created', '/forms?tab=all', 'Open Forms']
+  ];
+  mount(panel, html`<p class="muted">Meet and Forms connect directly to Flow inside this workspace. Choose a trigger while creating a workflow; then select an email or task action.</p><div class="workspace-overview__grid flow-connections">${cards.map(([title, text, trigger, href, link]) => {
+    const matching = flows.filter(flow => trigger === 'meet.booking.' ? isBookingTrigger(flow.trigger_type) : flow.trigger_type === trigger);
+    const count = matching.length;
+    const enabled = matching.filter(flow => flow.status === 'enabled').length;
+    return html`<section class="workspace-overview-panel"><header><div><p class="page-eyebrow">NATIVE CONNECTION</p><h2>${title}</h2></div>${badge(enabled ? 'active' : 'neutral', enabled ? `${enabled} active` : 'Available')}</header><div class="workspace-overview__empty"><p>${text}</p><p>${count ? `${count} workflow${count === 1 ? '' : 's'} use this trigger.` : 'No workflows use this trigger yet.'}</p><div class="row"><a class="btn btn-small" href="${href}">${link}</a>${isAdmin() ? html`<a class="btn btn-small btn-primary" href="/flow/new">Create workflow</a>` : ''}</div></div></section>`;
+  })}</div>`);
 }
 
 async function flowsTab(ctx, panel) {
@@ -42,7 +88,7 @@ async function flowsTab(ctx, panel) {
   if (!flows.length) return mount(panel, html`<div class="empty flow-empty"><h2>No flows yet</h2><p>A flow connects one trigger to one action: when an appointment is booked or a form is submitted, send an email or create a task.</p>
     ${isAdmin() ? html`<p class="flow-empty-lead">Start from an outcome. Each opens as an unsaved draft you can edit; nothing runs until you enable it.</p>
       <ul class="flow-starter-links">${FLOW_STARTERS.map(starter => html`<li><a href="/flow/new?starter=${starter.id}"><strong>${starter.name}</strong><span>${starter.description}</span></a></li>`)}</ul>
-      <div class="row"><a class="btn" href="/flow/new">Start from scratch</a><a class="btn" href="/setup/flow">Guided setup</a></div>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
+      <div class="row"><a class="btn" href="/flow/new">Start from scratch</a><a class="btn" href="/setup/flow">Set up Flow</a></div>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
   mount(panel, html`<ul class="list">${flows.map(flow => html`<li class="row-between"><div>
       <div class="list-title">${flow.name}</div>
       <div class="meta"><span>${TRIGGERS[flow.trigger_type]} → ${ACTIONS[flow.action_type]}</span><span>${flow.run_count} runs</span>${flow.failed_count ? html`<a href="/flow/runs">${flow.failed_count} failed</a>` : ''}</div></div>
@@ -57,14 +103,16 @@ async function flowsTab(ctx, panel) {
 }
 
 async function runsTab(ctx, panel) {
+  const status = ['failed', 'succeeded', 'queued', 'retrying'].includes(ctx.query.get('status')) ? ctx.query.get('status') : 'all';
   const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">A run succeeds when its task is created or its email action is recorded. Each email outcome uses the sending method saved for that message, where available. Inbox delivery is not tracked. Retrying reuses the same run, so a created task or accepted email is not repeated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
+    <nav class="row section-gap" aria-label="Filter workflow runs">${[['all', 'All runs'], ['failed', 'Needs attention'], ['queued', 'Queued'], ['retrying', 'Retrying'], ['succeeded', 'Succeeded']].map(([key, label]) => html`<a class="btn btn-small ${status === key ? 'btn-primary' : ''}" href="/flow/runs${key === 'all' ? '' : `?status=${key}`}" ${status === key ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
     ${runs.length ? html`<div class="table-wrap stack-on-mobile"><table><thead><tr><th>Started</th><th>Flow</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Outcome</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
     ${runs.map(run => html`<tr><td data-label="Started">${fmtDateTime(run.created_at)}</td><td data-label="Flow">${run.flow_name}${run.flow_status === 'paused' && ['queued', 'retrying'].includes(run.status) ? html`<div class="muted">Held while paused</div>` : ''}</td>
-      <td data-label="Trigger">${run.event_type === 'meet.booking.created' ? 'Booking' : 'Response'}</td><td data-label="Status">${badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
+      <td data-label="Trigger">${TRIGGERS[run.event_type] || 'Workspace event'}</td><td data-label="Status">${badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
       <td data-label="Outcome"><div>${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailEvidence(run).text : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</div></td>
       <td class="${run.status === 'failed' && isAdmin() ? '' : 'empty-cell'}">${run.status === 'failed' && isAdmin() ? html`<button class="btn btn-small" data-retry="${run.id}">Retry<span class="visually-hidden"> ${run.flow_name}</span></button>` : ''}</td></tr>`)}</tbody></table></div>`
-    : html`<div class="empty">No runs yet. Runs appear when an enabled flow's trigger happens.</div>`}`);
-  const load = async () => { const runs = await api('GET', wsPath('/runs')); if (ctx.alive()) draw(runs); };
+    : html`<div class="empty">${status === 'failed' ? 'No failed runs. You’re all caught up.' : 'No runs yet. Runs appear when an enabled flow’s trigger happens.'}</div>`}`);
+  const load = async () => { const runs = await api('GET', wsPath(`/runs${status === 'all' ? '' : `?status=${encodeURIComponent(status)}`}`)); if (ctx.alive()) draw(runs); };
   await load();
   panel.addEventListener('click', async event => {
     if (event.target.id === 'refresh') return load();
@@ -140,15 +188,16 @@ export async function editor(ctx) {
     const form = forms.find(item => item.id === state.trigger_source);
     return form ? form.draft.fields.filter(field => field.type !== 'page_break') : [];
   };
-  const placeholders = () => [...PLACEHOLDERS[state.trigger_type], ...(state.trigger_type === 'forms.response.created' ? formFields().map(field => 'answer.' + field.id) : [])];
+  const placeholders = () => [...(isBookingTrigger(state.trigger_type) ? PLACEHOLDERS['meet.booking.created'] : PLACEHOLDERS['forms.response.created']), ...(state.trigger_type === 'forms.response.created' ? formFields().map(field => 'answer.' + field.id) : [])];
 
   // One sentence that names the actual source, action and recipient, so the result is predictable
   // before saving. It describes configuration only; nothing here runs or sends.
   const summary = (recipients, to) => {
-    const source = state.trigger_type === 'meet.booking.created'
+    const source = isBookingTrigger(state.trigger_type)
       ? eventTypes.find(item => item.id === state.trigger_source)?.title : forms.find(item => item.id === state.trigger_source)?.draft.title;
-    const when = state.trigger_type === 'meet.booking.created'
-      ? `When an appointment is booked${source ? ` for “${source}”` : ' for any event type'}`
+    const bookingAction = { 'meet.booking.canceled': 'canceled', 'meet.booking.rescheduled': 'rescheduled' }[state.trigger_type] || 'booked';
+    const when = isBookingTrigger(state.trigger_type)
+      ? `When an appointment is ${bookingAction}${source ? ` for “${source}”` : ' for any event type'}`
       : `When a response is submitted${source ? ` to “${source}”` : ' to any form'}`;
     const config = state.action_config || {};
     const who = to.startsWith('address:') ? (to.slice(8) || 'an address you have not entered yet') : { invitee: 'the invitee', host: 'the host' }[to] || (recipients.find(([value]) => value === to)?.[1].toLowerCase() ?? 'a recipient you have not chosen yet');
@@ -161,9 +210,10 @@ export async function editor(ctx) {
   };
 
   const draw = () => {
-    const sources = state.trigger_type === 'meet.booking.created' ? eventTypes.map(item => [item.id, item.title]) : forms.map(item => [item.id, item.draft.title]);
+    const bookingTrigger = isBookingTrigger(state.trigger_type);
+    const sources = bookingTrigger ? eventTypes.map(item => [item.id, item.title]) : forms.map(item => [item.id, item.draft.title]);
     const config = state.action_config || {};
-    const recipients = state.trigger_type === 'meet.booking.created'
+    const recipients = bookingTrigger
       ? [['invitee', 'The invitee'], ['host', 'The host']]
       : formFields().filter(field => field.type === 'email').map(field => ['field:' + field.id, `Answer to “${field.label.slice(0, 40)}”`]);
     const to = config.to || recipients[0]?.[0] || 'address:';
@@ -176,8 +226,8 @@ export async function editor(ctx) {
         <div class="flow-steps">
           <div class="flow-step"><h3><span class="step-number">1</span> When this happens</h3>
             <label for="trigger_type">Trigger</label><select id="trigger_type" name="trigger_type">${Object.entries(TRIGGERS).map(([key, label]) => html`<option value="${key}" ${key === state.trigger_type ? raw('selected') : ''}>${label}</option>`)}</select>
-            <label for="trigger_source">${state.trigger_type === 'meet.booking.created' ? 'Event type' : 'Form'}</label>
-            <select id="trigger_source" name="trigger_source"><option value="">${state.trigger_type === 'meet.booking.created' ? 'Any event type' : 'Any form'}</option>${sources.map(([id, label]) => html`<option value="${id}" ${id === state.trigger_source ? raw('selected') : ''}>${label}</option>`)}</select></div>
+            <label for="trigger_source">${bookingTrigger ? 'Event type' : 'Form'}</label>
+            <select id="trigger_source" name="trigger_source"><option value="">${bookingTrigger ? 'Any event type' : 'Any form'}</option>${sources.map(([id, label]) => html`<option value="${id}" ${id === state.trigger_source ? raw('selected') : ''}>${label}</option>`)}</select></div>
           <div class="flow-connector" aria-hidden="true"></div>
           <div class="flow-step"><h3><span class="step-number">2</span> Do this</h3>
             <fieldset><legend class="visually-hidden">Action</legend>${Object.entries(ACTIONS).map(([key, label]) => html`<label class="check"><input type="radio" name="action_type" value="${key}" ${key === state.action_type ? raw('checked') : ''}> ${label}</label>`)}</fieldset>
@@ -190,7 +240,7 @@ export async function editor(ctx) {
             : html`<label for="task-title">Task title</label><input id="task-title" name="title" maxlength="200" value="${config.title || ''}">
               <label for="details">Details</label><textarea id="details" name="details" maxlength="2000">${config.details || ''}</textarea>
               <label for="due_in_hours">Deadline</label><select id="due_in_hours" name="due_in_hours">${dueOptions(config.due_in_hours).map(([value, label]) => html`<option value="${value}" ${String(config.due_in_hours ?? '') === value ? raw('selected') : ''}>${label}</option>`)}</select>
-              <label for="assign_to">Assign to</label><select id="assign_to" name="assign_to"><option value="none">Nobody: any member can pick it up</option>${state.trigger_type === 'meet.booking.created' ? html`<option value="host" ${config.assign_to === 'host' ? raw('selected') : ''}>The booking's host</option>` : ''}${members.map(item => html`<option value="member:${item.id}" ${config.assign_to === 'member:' + item.id ? raw('selected') : ''}>${item.name}</option>`)}</select>
+              <label for="assign_to">Assign to</label><select id="assign_to" name="assign_to"><option value="none">Nobody: any member can pick it up</option>${bookingTrigger ? html`<option value="host" ${config.assign_to === 'host' ? raw('selected') : ''}>The booking's host</option>` : ''}${members.map(item => html`<option value="member:${item.id}" ${config.assign_to === 'member:' + item.id ? raw('selected') : ''}>${item.name}</option>`)}</select>
               <p class="hint">Enquiries show an open task as waiting until its deadline, then as overdue. A task without a deadline always needs attention.</p>`}
             <p class="hint">Insert details with placeholders: ${placeholders().map(item => html`<code>{{${item}}}</code> `)}</p></div>
           <div class="flow-connector" aria-hidden="true"></div>

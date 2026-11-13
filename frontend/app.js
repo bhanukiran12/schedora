@@ -10,6 +10,7 @@ import { loadStartupConfig } from './js/connection.mjs';
 import { productLanding } from './js/product-landing.mjs';
 import { pricingProposal } from './js/pricing-proposal-page.mjs';
 import { enquiries } from './js/enquiries.mjs';
+import { workspaceOverview } from './js/workspace-overview.mjs';
 import { ecosystemHome } from './js/ecosystem.mjs';
 import { liveOnboarding } from './js/onboarding.mjs';
 const previewView = name => async ctx => (await import('./js/studio.mjs'))[name](ctx);
@@ -21,6 +22,7 @@ import { renderShell, clearShell } from './js/shell.mjs';
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const routes = [
   [/^\/$/, ecosystemHome],
+  [/^\/overview$/, workspaceOverview],
   [/^\/demo(?:\/.*)?$/, previewView('studio')],
   [/^\/start(?:\/.*)?$/, previewView('onboarding')],
   [/^\/setup(?:\/(meet|forms|flow))?$/, liveOnboarding],
@@ -61,7 +63,9 @@ export const productFor = path => /^\/(?:products|setup)\/(meet|forms|flow)$/.ex
 export const lockup = (key, large = false) => html`<span class="lockup ${large ? 'lockup-lg' : ''}"><img src="${PRODUCTS[key].logo}" alt="" width="28" height="28"><span class="lockup-name">${PRODUCTS[key].name}${key === 'suite' ? '' : html`<small>by Schedora</small>`}</span></span>`;
 
 // ---- Theme ----
-document.documentElement.dataset.theme = 'light';
+const savedTheme = storage.get('schedora.theme');
+if (savedTheme === 'light' || savedTheme === 'dark') document.documentElement.dataset.theme = savedTheme;
+else document.documentElement.removeAttribute('data-theme');
 
 // ---- Layout ----
 let firstRender = true;
@@ -90,10 +94,25 @@ function renderFooter() {
 
 // ---- Consent (optional analytics only; essential storage is listed in the privacy notice) ----
 const CONSENT_KEY = 'schedora.consent.v1';
+const CONSENT_MAX_AGE = 365 * 86400000;
+function consentCookie() {
+  try {
+    const item = document.cookie.split('; ').find(value => value.startsWith(`${CONSENT_KEY}=`));
+    return item ? decodeURIComponent(item.slice(CONSENT_KEY.length + 1)) : null;
+  } catch { return null; }
+}
+function saveConsent(value) {
+  const serialized = JSON.stringify({ choice: value, time: Date.now() });
+  storage.set(CONSENT_KEY, serialized);
+  const hostname = location.hostname.toLowerCase();
+  const domain = hostname === 'schedora.in' || hostname.endsWith('.schedora.in') ? '; Domain=.schedora.in' : '';
+  const secure = location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie = `${CONSENT_KEY}=${encodeURIComponent(serialized)}; Path=/; Max-Age=31536000; SameSite=Lax${domain}${secure}`;
+}
 function consent() {
   try {
-    const saved = JSON.parse(storage.get(CONSENT_KEY));
-    return saved && Date.now() - saved.time < 180 * 86400000 ? saved.choice : null;
+    const saved = JSON.parse(consentCookie() || storage.get(CONSENT_KEY));
+    return saved && Date.now() - saved.time < CONSENT_MAX_AGE ? saved.choice : null;
   } catch { return null; }
 }
 function consentBanner(focus) {
@@ -103,9 +122,9 @@ function consentBanner(focus) {
   panel.setAttribute('aria-labelledby', 'consent-title');
   mount(panel, html`<h2 id="consent-title">Your privacy choices</h2>
     <p>Schedora uses a sign-in cookie and stores your theme, workspace and this choice in your browser. These are needed for the service. Optional analytics ${boot.analytics ? 'counts page views without identifiers' : 'is currently switched off'}. No advertising cookies. <a href="/privacy">Privacy policy</a>.</p>
-    <div class="actions"><button class="btn" data-choice="rejected">Reject optional</button><button class="btn btn-primary" data-choice="accepted">Accept analytics</button></div>`);
+    <div class="actions"><button class="btn" data-choice="rejected">Essential only</button><button class="btn btn-primary" data-choice="accepted">Allow analytics</button></div>`);
   panel.querySelectorAll('[data-choice]').forEach(button => button.onclick = () => {
-    storage.set(CONSENT_KEY, JSON.stringify({ choice: button.dataset.choice, time: Date.now() }));
+    saveConsent(button.dataset.choice);
     panel.remove();
     if (focus) ($('#auth-cookie-settings') || $('#cookie-settings'))?.focus(); else $('#main')?.focus({ preventScroll: true });
     countPage();
@@ -171,7 +190,10 @@ export async function render({ quiet = false } = {}) {
   document.body.classList.toggle('app-shell', shell);
   if (shell) renderShell({ product, current: currentSection(product, currentPath, query), links: { dashboard: boot.links, home: { suite: boot.links.suite, ...boot.landings } }, onWorkspaceChange: render });
   document.body.dataset.design = currentPath.startsWith('/demo') ? 'workspace' : currentPath.startsWith('/start') ? 'onboarding' : currentPath === '/' && product === 'suite' ? 'marketing' : '';
-  document.body.dataset.product = product === 'suite' ? 'meet' : product;
+  document.body.dataset.product = product;
+  const savedTheme = storage.get('schedora.theme');
+  if (document.body.dataset.design === 'marketing' || !['light', 'dark'].includes(savedTheme)) document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.dataset.theme = savedTheme;
   delete document.body.dataset.embed;
   if (query.get('embed') === '1' && currentPath.startsWith('/f/')) document.body.dataset.embed = '1';
   if (!shell) renderHeader(product);

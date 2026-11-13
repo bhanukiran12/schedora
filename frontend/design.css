@@ -1,13 +1,16 @@
 /* Figma's calm ecosystem and workspace, composed with the existing app primitives. */
 @font-face { font-family: 'Inter'; src: url('/assets/figma/InterVariable.woff2') format('woff2'); font-style: normal; font-weight: 100 900; font-display: swap; }
-body[data-design="marketing"], body[data-design="workspace"], body[data-design="onboarding"] {
-  --canvas: #f6f8f6; --surface: #fff; --surface-2: #f0f4f0; --ink: #202d27; --muted: #627168;
+body[data-design="marketing"] {
+  color-scheme:light;
+  --canvas: #f7f7f8; --surface: #fff; --surface-2: #f1f2f4; --ink: #202124; --muted: #5f6368;
   --line: #e2e8e3; --line-strong: #7c8e81; --meet: #176b45; --forms: #6941d9; --flow: #b64d18;
   --meet-tint: #eaf4ec; --forms-tint: #f1edfc; --flow-tint: #fff1e7; --on-accent: #fff;
   --accent: var(--meet); --accent-tint: var(--meet-tint); font-size: 14px; font-family: 'Inter', system-ui, sans-serif;
 }
+body[data-design="workspace"], body[data-design="onboarding"] { font-size:14px; font-family:'Inter',system-ui,sans-serif; }
 body[data-product="forms"] { --accent: var(--forms); --accent-tint: var(--forms-tint); }
 body[data-product="flow"] { --accent: var(--flow); --accent-tint: var(--flow-tint); }
+body[data-product="suite"] { --accent: var(--meet); --accent-tint: var(--meet-tint); --focus: var(--meet); }
 body[data-design="workspace"] > .site-header, body[data-design="workspace"] > .site-footer,
 body[data-design="onboarding"] > .site-header, body[data-design="onboarding"] > .site-footer { display: none; }
 body[data-design="marketing"] .header-inner, body[data-design="marketing"] .footer-inner { max-width: 1296px; }
@@ -38,7 +41,7 @@ body[data-design="marketing"] .lockup-name { font-size: 20px; font-weight: 550; 
 .eco-hero { background: var(--canvas); padding: 80px 0; }
 .eco-lead { font-size: 17px; line-height: 1.6; color: var(--muted); max-width: 510px; }
 .eco-hero .btn, .ecosystem-home .btn { font-size: 13px; font-weight: 500; border-radius: 8px; }
-.eco-hero-art { background: #e2edde; border-radius: 16px; padding: 32px; max-width: 510px; }
+.eco-hero-art { background:linear-gradient(135deg,var(--meet-tint),var(--surface) 82%); border-radius:16px; padding:32px; max-width:510px; }
 .eco-booking-card { background: var(--surface); padding: 28px; border: 1px solid var(--line); border-radius: 12px; margin: 0 24px 24px 0; }
 .eco-booking-card > .ds-pill { float: right; }
 .eco-booking-card .ds-eyebrow { margin-top: 24px; }
@@ -89,7 +92,7 @@ body[data-design="marketing"] .lockup-name { font-size: 20px; font-weight: 550; 
 .eco-use-case h3 { font-size: 19px; font-weight: 500; }
 .eco-use-case p { font-size: 13px; color: var(--muted); }
 .eco-use-case a { font-size: 12px; }
-.eco-value { background: var(--canvas); }
+.eco-value { background:var(--canvas); color:var(--ink); }
 .eco-value > .eco-split { padding-top: 64px; padding-bottom: 64px; }
 .eco-value-row { display: flex; gap: 20px; padding: 20px 0; }
 .eco-value-row > span { color: var(--accent); font-size: 12px; }
@@ -110,9 +113,9 @@ body[data-design="marketing"] .lockup-name { font-size: 20px; font-weight: 550; 
 .eco-faq details { border-bottom: 1px solid var(--line); padding: 18px 0; }
 .eco-faq summary { min-height: 26px; cursor: pointer; font-size: 16px; }
 .eco-faq details p { color: var(--muted); margin: 14px 0 0; }
-.eco-final { background: #172c22; color: white; padding: 72px 24px; text-align: center; }
-.eco-final .ds-eyebrow { color: #b8cec0; }
-.eco-final p { color: #b8cec0; }
+.eco-final { background:linear-gradient(125deg,var(--surface-2),var(--surface) 72%); color:var(--ink); padding:72px 24px; text-align:center; border-top:1px solid var(--line); }
+.eco-final .ds-eyebrow { color:var(--accent); }
+.eco-final p { color:var(--muted); }
 .eco-final .actions { justify-content: center; }
 
 /* Workspace and reusable data views. */
@@ -410,19 +413,6 @@ body[data-design="marketing"] .lockup-name { font-size: 20px; font-weight: 550; 
   .ds-respondent > .ds-pill { float: none; display: table; margin-top: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .ecosystem-home *, .ds-workspace *, .ds-setup * { scroll-behavior: auto !important; transition: none !important; } }
-:root[data-theme="dark"] body:is([data-design="marketing"], [data-design="workspace"], [data-design="onboarding"]) {
-  --canvas: #101d18; --surface: #192b23; --surface-2: #213629; --ink: #edf5ed; --muted: #b3c8ba;
-  --line: #3d5548; --line-strong: #6f8a7b; --meet: #a6d5a8; --forms: #d4b9ff; --flow: #ffc49e;
-  --meet-tint: #24402f; --forms-tint: #33294a; --flow-tint: #46301f; --on-accent: #13271b;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) body:is([data-design="marketing"], [data-design="workspace"], [data-design="onboarding"]) {
-    --canvas: #101d18; --surface: #192b23; --surface-2: #213629; --ink: #edf5ed; --muted: #b3c8ba;
-    --line: #3d5548; --line-strong: #6f8a7b; --meet: #a6d5a8; --forms: #d4b9ff; --flow: #ffc49e;
-    --meet-tint: #24402f; --forms-tint: #33294a; --flow-tint: #46301f; --on-accent: #13271b;
-  }
-}
-
 /* Public demo readability: scoped away from live builders and respondent themes. */
 body[data-design="workspace"] { font-size: 16px; }
 .ds-workspace-switch strong, .ds-profile strong { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }

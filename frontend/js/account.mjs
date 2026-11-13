@@ -1,4 +1,4 @@
-import { $, $$, api, applyMe, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, toast, workspace, wsPath } from './core.mjs';
+import { $, $$, api, applyMe, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, html, loadMe, loading, mount, notice, raw, selectWorkspace, session, storage, toast, workspace, wsPath } from './core.mjs';
 import { setTitle } from './pages.mjs';
 import * as settings from './settings.mjs';
 import { PRODUCT_INFO } from './products.mjs';
@@ -20,35 +20,49 @@ export async function account(ctx) {
   const ws = workspace();
   const owner = ws?.role === 'owner';
   const admin = ['owner', 'admin'].includes(ws?.role);
+  const themeMode = ['light', 'dark'].includes(storage.get('schedora.theme')) ? storage.get('schedora.theme') : 'system';
   const google = await api('GET', '/api/auth/google/status').catch(() => ({ enabled: false }));
   if (!ctx.alive()) return;
-  mount(ctx.main, html`<div class="container page"><span class="tag">${PRODUCT_INFO[ctx.product || 'suite'].name}</span><h1>Account & settings</h1>
-    <p>You're signed in across Schedora apps. Signing out ends this session in every app.</p>
+  mount(ctx.main, html`<div class="container page account-settings-page"><header class="account-page__header"><div><span class="tag">Workspace settings</span><h1>Account & settings</h1>
+    <p>Manage your profile, workspace access and connected services.</p></div><span class="account-role-pill">${owner ? 'Workspace owner' : admin ? 'Administrator' : 'Member'}</span></header>
 
-    <div class="grid-2">
-      <section class="card card-plain"><h2>Profile</h2><p><strong>${session.user.name}</strong><br>${session.user.email}</p><button class="btn" id="sign-out">Sign out</button>${google.enabled ? html`<hr><h3>Google sign-in</h3>${google.connected ? html`<p>Google is connected. You can use it to sign in.</p>` : html`<p>Connect Google with the same email to sign in next time. Calendar access is separate.</p><button class="btn" id="link-google">Connect Google sign-in</button>`}` : ''}${ctx.query.get('error') ? notice('bad', html`<p>${ctx.query.get('error')}</p>`) : ''}</section>
-      <section class="card card-plain"><h2>Workspace</h2>
-        ${session.workspaces.length ? html`<label for="ws-select">Current workspace</label><select id="ws-select">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name} (${item.role})</option>`)}</select>` : html`<p>You are not in a workspace yet.</p>`}
-        <form id="new-ws" novalidate><label for="new-ws-name">Create another workspace</label><div class="row"><input id="new-ws-name" name="name" required maxlength="100" placeholder="Team name"><button class="btn" type="submit">Create</button></div><div data-form-status tabindex="-1"></div></form>
+    <nav class="account-settings-tabs" aria-label="Settings categories" role="tablist">
+      <button type="button" role="tab" aria-selected="true" data-settings-tab="profile">Profile</button>
+      <button type="button" role="tab" aria-selected="false" data-settings-tab="appearance">Appearance</button>
+      <button type="button" role="tab" aria-selected="false" data-settings-tab="workspace">Workspace</button>
+      ${admin ? html`<button type="button" role="tab" aria-selected="false" data-settings-tab="booking">Booking page</button>` : ''}
+      ${owner ? html`<button type="button" role="tab" aria-selected="false" data-settings-tab="security">Sign-in</button>` : ''}
+      <button type="button" role="tab" aria-selected="false" data-settings-tab="developer">Developer tools</button>
+      ${admin ? html`<button type="button" role="tab" aria-selected="false" data-settings-tab="activity">Activity</button>` : ''}
+    </nav>
+    <div class="grid-2 account-settings-grid">
+      <section class="card card-plain account-panel account-panel--profile" data-settings-panel="profile"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">Personal details</span><h2>${session.user.name || 'Your profile'}</h2></div><span class="account-avatar" aria-hidden="true">${String(session.user.name || session.user.email || 'S').slice(0, 1).toUpperCase()}</span></div><dl class="account-profile-details"><div><dt>Name</dt><dd>${session.user.name || 'Not set'}</dd></div><div><dt>Email</dt><dd>${session.user.email || 'Not set'}</dd></div><div><dt>Workspace</dt><dd>${ws?.name || 'No workspace selected'}</dd></div></dl><button class="btn" id="sign-out">Sign out</button>${google.enabled ? html`<hr><h3>Sign-in method</h3>${google.connected ? html`<p>Google is connected to this account. You can use it to sign in.</p>` : html`<p>Connect Google to use it when signing in. Calendar access is managed separately.</p><button class="btn" id="link-google">Connect Google</button>`}` : ''}${ctx.query.get('error') ? notice('bad', html`<p>${ctx.query.get('error')}</p>`) : ''}</section>
+      <section class="card card-plain account-panel account-panel--appearance" data-settings-panel="appearance"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">Your preferences</span><h2>Appearance</h2><p>Choose a theme for this browser. “Use device setting” follows your phone or computer.</p></div></div>
+        <label for="appearance-mode">Color theme</label><select id="appearance-mode"><option value="system" ${themeMode === 'system' ? raw('selected') : ''}>Use device setting</option><option value="light" ${themeMode === 'light' ? raw('selected') : ''}>Light</option><option value="dark" ${themeMode === 'dark' ? raw('selected') : ''}>Dark</option></select>
+        ${admin ? html`<form id="appearance-brand-form"><h3>Booking page color</h3><p class="hint">This accent appears on the public booking page for ${ws?.name || 'this workspace'}.</p><label for="appearance-brand-color">Accent color</label><input id="appearance-brand-color" name="brand_color" type="color" value="${ws?.brand_color || '#225c43'}"><div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Save booking page color</button></div></form>` : ''}
+      </section>
+      <section class="card card-plain account-panel account-panel--workspace" data-settings-panel="workspace"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">Team and access</span><h2>Workspace</h2><p>A workspace keeps a team’s meetings, forms and settings together.</p></div></div>
+        ${session.workspaces.length ? html`<label for="ws-select">Choose a workspace</label><select id="ws-select">${session.workspaces.map(item => html`<option value="${item.id}" ${item.id === session.workspaceId ? raw('selected') : ''}>${item.name} · ${item.role}</option>`)}</select>` : html`<p>You are not in a workspace yet.</p>`}
+        <details class="account-create-workspace"><summary>Set up a separate workspace</summary><p class="hint">Use this for a different business or team that needs separate members, forms and meeting settings. It does not add someone to this workspace.</p><form id="new-ws" novalidate><label for="new-ws-name">Name the workspace</label><div class="row"><input id="new-ws-name" name="name" required maxlength="100" placeholder="Business or team name"><button class="btn" type="submit">Create workspace</button></div><div data-form-status tabindex="-1"></div></form></details>
       </section>
     </div>
     ${ws ? html`
-      <section class="card card-plain"><h2>${ws.name} settings</h2>
+      <section class="card card-plain account-panel account-panel--preferences" data-settings-panel="workspace"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">Workspace basics</span><h2>${ws.name}</h2><p>These details apply to everyone in this workspace.</p></div></div>
         <form id="ws-settings" novalidate><fieldset ${admin ? '' : raw('disabled')}>
-          <label for="ws-name">Workspace name</label><input id="ws-name" name="name" required maxlength="100" value="${ws.name}">
-          <label for="retention">Keep form responses and appointment details for (days)</label><span class="hint">Older responses are deleted and past appointments are anonymized automatically. 30–3650 days.</span>
+          <label for="ws-name">Business or team name</label><span class="hint">Shown to members and on your public booking page.</span><input id="ws-name" name="name" required maxlength="100" value="${ws.name}">
+          <label for="retention">Automatically remove old records after (days)</label><span class="hint">Form responses are deleted and past meeting details are anonymized after this period. Choose 30–3650 days.</span>
           <input id="retention" name="retention_days" type="number" min="30" max="3650" value="${ws.retention_days || 365}">
           <div data-form-status tabindex="-1"></div>${admin ? html`<div class="actions"><button class="btn btn-primary" type="submit">Save settings</button></div>` : html`<p class="hint">Only owners and administrators can change these settings.</p>`}
         </fieldset></form></section>
-      <section class="card card-plain"><h2>Members</h2><div id="members">${loading()}</div>
+      <section class="card card-plain account-panel account-panel--members" data-settings-panel="workspace"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">People</span><h2>Members</h2><p>Invite teammates and choose what they can manage in ${ws.name}.</p></div></div><div id="members">${loading()}</div>
         ${admin ? html`<form id="add-member" novalidate><h3 class="label">Add a member</h3><p class="hint">They need a Schedora account with this email first.</p>
           <div class="inline-fields"><div><label for="member-email">Email</label><input id="member-email" name="email" type="email" required></div>
           <div><label for="member-role">Role</label><select id="member-role" name="role"><option value="member">Member: own event types, forms, tasks</option>${owner ? html`<option value="admin">Administrator: everything except billing and deletion</option>` : ''}</select></div></div>
           <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Add member</button></div></form>` : ''}
       </section>` : ''}
-    ${ws ? html`<div id="settings-extra" class="section-gap"></div>` : ''}
-    <section class="card card-plain section-gap"><h2>Danger zone</h2>
-      ${owner ? html`<p>Deleting <strong>${ws.name}</strong> permanently removes its event types, appointments, forms, responses, flows and subscriptions records.</p><button class="btn btn-danger" id="delete-ws">Delete workspace</button><hr>` : ws ? html`<button class="btn btn-danger" id="leave-ws">Leave ${ws.name}</button><hr>` : ''}
+    ${ws ? html`<div id="settings-extra" class="account-settings-extra"></div>` : ''}
+    <section class="card card-plain account-panel account-panel--danger" data-settings-panel="workspace"><div class="account-panel__heading"><div><span class="account-panel__eyebrow">Account and workspace actions</span><h2>Remove access or data</h2><p>These actions cannot be undone.</p></div></div>
+      ${owner ? html`<p>Deleting <strong>${ws.name}</strong> permanently removes its meetings, forms, responses, workflows and subscription records.</p><button class="btn btn-danger" id="delete-ws">Delete workspace</button><hr>` : ws ? html`<button class="btn btn-danger" id="leave-ws">Leave ${ws.name}</button><hr>` : ''}
       <p>Deleting your account also deletes every workspace where you are the only owner.</p><button class="btn btn-danger" id="delete-account">Delete my account</button>
     </section></div>`);
 
@@ -57,6 +71,17 @@ export async function account(ctx) {
     try { const result = await api('POST', '/api/auth/google/link', {}); location.assign(result.url); }
     catch (error) { toast(error.message); }
   };
+  $('#appearance-mode').addEventListener('change', event => {
+    const mode = event.target.value;
+    storage.set('schedora.theme', mode);
+    if (mode === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.dataset.theme = mode;
+  });
+  if ($('#appearance-brand-form')) handleSubmit($('#appearance-brand-form'), async data => {
+    await api('PATCH', wsPath(''), { brand_color: data.brand_color });
+    await loadMe();
+    toast('Booking page color saved.');
+  });
   $('#ws-select')?.addEventListener('change', event => { selectWorkspace(event.target.value); ctx.render(); });
   handleSubmit($('#new-ws'), async data => {
     const result = await api('POST', '/api/workspaces', data);
@@ -87,7 +112,29 @@ export async function account(ctx) {
     } catch (error) { mount($('#members'), errorBlock(error)); }
   }
   drawMembers();
-  settings.render(ctx, $('#settings-extra'));
+  await settings.render(ctx, $('#settings-extra'));
+  const settingsTabs = $$('[data-settings-tab]');
+  const settingsPanels = $$('[data-settings-panel]');
+  settingsPanels.forEach((panel, index) => { panel.id = `settings-panel-${panel.dataset.settingsPanel}-${index}`; panel.setAttribute('role', 'tabpanel'); panel.tabIndex = 0; });
+  settingsTabs.forEach(tab => tab.setAttribute('aria-controls', settingsPanels.find(panel => panel.dataset.settingsPanel === tab.dataset.settingsTab)?.id || ''));
+  const showSettings = category => {
+    settingsPanels.forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== category; });
+    settingsTabs.forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.settingsTab === category)));
+  };
+  settingsTabs.forEach((tab, index) => {
+    tab.hidden = !settingsPanels.some(panel => panel.dataset.settingsPanel === tab.dataset.settingsTab);
+    tab.addEventListener('click', () => showSettings(tab.dataset.settingsTab));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const visibleTabs = settingsTabs.filter(item => !item.hidden);
+      const current = visibleTabs.indexOf(tab);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? visibleTabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : visibleTabs.length - 1)) % visibleTabs.length;
+      visibleTabs[next].focus();
+      showSettings(visibleTabs[next].dataset.settingsTab);
+    });
+  });
+  showSettings('profile');
 
   $('#delete-ws')?.addEventListener('click', async () => {
     const result = await ask({ title: `Delete ${ws.name}?`, body: 'This cannot be undone.', fields: html`<label for="confirm-name">Type the workspace name to confirm</label><input id="confirm-name" name="confirm" required autocomplete="off">`, confirm: 'Delete workspace', danger: true });
@@ -116,7 +163,7 @@ export async function account(ctx) {
 function signedOut(ctx) {
   const signup = ctx.path === '/signup' || (ctx.path === '/account' && ctx.query.get('mode') === 'signup');
   const product = ctx.product || 'suite';
-  const next = safeReturnPath(ctx.query.get('next'), signup ? (product === 'suite' ? '/setup' : '/setup/' + product) : (PRODUCT_INFO[product].dashboard === '/' ? '/enquiries' : PRODUCT_INFO[product].dashboard));
+  const next = safeReturnPath(ctx.query.get('next'), signup ? '/setup' : (PRODUCT_INFO[product].dashboard === '/' ? '/enquiries' : PRODUCT_INFO[product].dashboard));
   const googleNext = hostInfo(location.hostname, boot.productDomain).production ? new URL(next, location.origin).href : next;
   const signInCard = html`<section class="auth-fields" aria-label="Sign in with email"><form id="signin" novalidate>
       <label for="si-email">Email</label><input id="si-email" name="email" type="email" required autocomplete="email">

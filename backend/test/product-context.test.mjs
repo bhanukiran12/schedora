@@ -70,11 +70,11 @@ test('password sign-in returns only to same-host paths', () => {
 });
 
 
-test('all ten Meet sections remain discoverable and editor routes retain the correct active section', async () => {
+test('all twelve Meet sections remain discoverable and editor routes retain the correct active section', async () => {
   const { NAVIGATION, currentSection } = await import('../../frontend/js/products.mjs');
   const entries = NAVIGATION.meet.flatMap(([,items]) => items);
-  assert.equal(entries.length, 10);
-  assert.equal(new Set(entries.map(([key]) => key)).size, 10);
+  assert.equal(entries.length, 12);
+  assert.equal(new Set(entries.map(([key]) => key)).size, 12);
   for (const [key,,href] of entries) assert.equal(currentSection('meet', '/meet', new URL(href, 'https://meet.schedora.in').searchParams), key);
   assert.equal(currentSection('meet', '/meet/event-types/new', new URLSearchParams()), 'types');
   assert.equal(currentSection('flow', '/flow/tasks', new URLSearchParams()), 'tasks');

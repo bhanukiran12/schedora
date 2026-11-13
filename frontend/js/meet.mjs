@@ -8,21 +8,19 @@ import { checkAnswer, FIELD_TYPES } from '/shared/forms-logic.mjs';
 import * as team from './meet-team.mjs';
 import { deliveryEvidence } from './email-evidence.mjs';
 import { videoTab } from './meet-video.mjs';
-import { assessReadiness } from './meet-readiness.mjs';
-import { readinessAreas } from './readiness-view.mjs';
-import { hostReadinessView, matchingHostEvidence } from './host-readiness-view.mjs';
+import { icon } from './design-system.mjs';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const KINDS = {
-  one_on_one: ['One-on-one', 'One host meets one invitee.'],
-  group: ['Group', 'One host meets several invitees at once.'],
-  collective: ['Collective', 'Several hosts meet one invitee; only times when all are free.'],
-  round_robin: ['Round robin', 'Meetings are shared out across a team.']
+  one_on_one: ['One-on-one meeting', 'One host meets one invitee.'],
+  group: ['Group meeting', 'One host meets several invitees at once.'],
+  collective: ['Shared-host meeting', 'One invitee meets the selected hosts when everyone is free.'],
+  round_robin: ['Assign each booking to a host', 'Each booking goes to one available host, sharing meetings across your team.']
 };
 // One line per location choice, shown under the picker in the event editor.
 const LOCATION_HELP = {
-  video: 'Paste a meeting link you already have (any video service).', google_meet: 'A Google Meet link is created for each booking. Connect Google under Calendars & apps first.',
-  zoom: 'A Zoom link is created for each booking. Connect Zoom under Calendars & apps first.', teams: 'A Teams link is created for each booking. Connect Microsoft under Calendars & apps first.',
+  video: 'Paste a meeting link you already have (any video service).', google_meet: 'A Google Meet link is created for each booking. Connect Google under Connections first.',
+  zoom: 'A Zoom link is created for each booking. Connect Zoom under Connections first.', teams: 'A Teams link is created for each booking. Connect Microsoft under Connections first.',
   in_person: 'An address or place where you will meet.', phone_host_calls: 'The invitee gives a number and you call them.', phone_invitee_calls: 'You give a number and the invitee calls you.',
   custom: 'Any other instructions, shown to the invitee as written.', schedora_meet: 'Built-in video room. Each attendee gets a personal join link that opens shortly before the start. Connected time uses Meet credits.'
 };
@@ -45,15 +43,15 @@ export function applyBrand(color) {
 // ---------------------------------------------------------------------------------------------
 // Host dashboard
 
-const TABS = [['types', 'Event types'], ['meetings', 'Meetings'], ['video', 'Video'], ['polls', 'Polls'], ['contacts', 'Contacts'], ['workflows', 'Workflows'],
-  ['analytics', 'Analytics'], ['integrations', 'Calendars & apps'], ['insights', 'Notes & AI'], ['emails', 'Delivery']];
+const TABS = [['overview', 'Overview'], ['types', 'Events'], ['meetings', 'Bookings'], ['availability', 'Availability'], ['video', 'Video'], ['polls', 'Polls'], ['contacts', 'Contacts'], ['workflows', 'Reminders'],
+  ['analytics', 'Analytics'], ['integrations', 'Connections'], ['insights', 'Notes & AI'], ['emails', 'Email delivery']];
 // Shown directly on narrow screens; the rest move into a "More" menu so nothing hides off-screen.
 const PRIMARY_TABS = ['types', 'meetings', 'video'];
 const TAB_LEADS = {
-  types: 'The kinds of meetings people can book with you.', meetings: 'Appointments booked with you and your team.',
+  overview: 'Your bookings, event types and connected calendar at a glance.', types: 'The kinds of meetings people can book with you.', meetings: 'Appointments booked with you and your team.', availability: 'Set the hours when people can book time with you.',
   video: 'Built-in Schedora Meet video rooms.', polls: 'Find a time that suits a group.', contacts: 'People who have booked or responded.',
-  workflows: 'Reminders and follow-ups sent around meetings.', analytics: 'Bookings over time, by event type and host.',
-  integrations: 'Calendars and video apps connected to Meet.', insights: 'Meeting notes, transcripts and AI recaps.', emails: 'Delivery status of every email Meet sent.'
+  workflows: 'Choose what invitees receive before and after a meeting.', analytics: 'Bookings over time, by event type and host.',
+  integrations: 'Calendars, video and payment apps connected to Meet.', insights: 'Meeting notes, transcripts and AI recaps.', emails: 'See whether confirmations and reminders were sent.'
 };
 const sentence = text => text ? text[0].toUpperCase() + text.slice(1).replace(/_/g, ' ') : text;
 
@@ -63,7 +61,7 @@ export async function dashboard(ctx) {
     return mount(ctx.main, signInPrompt(ctx, { product: 'meet', title: 'A little less back-and-forth.', lead: 'Publish your availability once. Invitees choose a time in their own time zone, receive a confirmation, and can reschedule or cancel without emailing you. Calendar, payment and AI features depend on your workspace setup.' }));
   }
   if (!needsSession(ctx)) return;
-  const tab = TABS.some(([key]) => key === ctx.query.get('tab')) ? ctx.query.get('tab') : ctx.query.get('tab') === 'calendar' ? 'integrations' : 'types';
+  const tab = TABS.some(([key]) => key === ctx.query.get('tab')) ? ctx.query.get('tab') : ctx.query.get('tab') === 'calendar' ? 'integrations' : 'overview';
   const ws = workspace();
   const label = TABS.find(([key]) => key === tab)[1];
   setTitle(`${label} · Meet by Schedora`);
@@ -78,9 +76,29 @@ export async function dashboard(ctx) {
     ${ws.entitlements.meet.active ? '' : notice('warn', html`<p>This workspace has no active Meet or Suite plan, so booking pages are not accepting appointments. <a href="/billing">Review plans</a>.</p>`)}
     <section id="tab-panel" aria-live="polite" aria-label="${label}">${loading()}</section></div>`);
   const panel = $('#tab-panel');
-  const views = { types: eventTypesTab, meetings: meetingsTab, video: videoTab, polls: team.pollsTab, contacts: team.contactsTab, workflows: team.workflowsTab, analytics: team.analyticsTab, integrations: team.integrationsTab, insights: team.insightsTab, emails: emailsTab };
+  const views = { overview: meetOverview, types: eventTypesTab, meetings: meetingsTab, availability: team.availabilityTab, video: videoTab, polls: team.pollsTab, contacts: team.contactsTab, workflows: team.workflowsTab, analytics: team.analyticsTab, integrations: team.integrationsTab, insights: team.insightsTab, emails: emailsTab };
   try { await views[tab](ctx, panel); }
   catch (error) { if (ctx.alive()) mount(panel, errorBlock(error)); }
+}
+
+async function meetOverview(ctx, panel) {
+  const [types, bookings] = await Promise.all([api('GET', wsPath('/event-types')), api('GET', wsPath('/bookings?scope=upcoming'))]);
+  if (!ctx.alive()) return;
+  const regular = types.filter(type => !type.managed_template);
+  const live = regular.filter(type => type.published);
+  mount(panel, html`<div class="meet-overview-metrics">
+    <a class="workspace-metric workspace-metric--meet" href="/meet?tab=meetings"><span>Upcoming bookings</span><strong>${bookings.length}</strong><small>Appointments on your calendar</small></a>
+    <a class="workspace-metric workspace-metric--meet" href="/meet?tab=types"><span>Live event types</span><strong>${live.length}</strong><small>${regular.length} event types in total</small></a>
+    <a class="workspace-metric workspace-metric--meet" href="/meet?tab=availability"><span>Availability</span><strong>Manage</strong><small>Working hours and time zone</small></a>
+  </div>
+  <div class="workspace-overview__grid">
+    <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">YOUR CALENDAR</p><h2>Upcoming bookings</h2></div><a href="/meet?tab=meetings">All bookings →</a></header>
+      ${bookings.length ? html`<ul class="workspace-overview-list">${bookings.slice(0, 5).map(booking => html`<li><time>${fmtDateTime(booking.starts_at, booking.host_timezone)}</time><span><strong>${booking.event_title}</strong><small>${booking.invitee_name} · ${booking.invitee_email}</small></span>${badge(booking.status)}</li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No upcoming bookings</strong><p>Share an event link so people can find a time with you.</p><a class="btn btn-small btn-primary" href="/meet/event-types/new">Create an event type</a></div>`}
+    </section>
+    <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">BOOKING OPTIONS</p><h2>Your event types</h2></div><a href="/meet?tab=types">Manage events →</a></header>
+      ${regular.length ? html`<ul class="workspace-overview-list meet-overview-event-types">${regular.slice(0, 5).map(type => html`<li><span><strong>${type.title}</strong><small>${type.duration_min} minutes · ${type.kind.replace(/_/g, ' ')}</small></span>${badge(type.published ? 'published' : 'draft', type.published ? 'Live' : 'Draft')}<a class="btn btn-small" href="/meet/event-types/${type.id}">Edit</a></li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No event types yet</strong><p>Create a meeting people can book with you.</p><a class="btn btn-small" href="/meet/event-types/new">Create event type</a></div>`}
+    </section>
+  </div>`);
 }
 
 async function eventTypesTab(ctx, panel) {
@@ -88,17 +106,18 @@ async function eventTypesTab(ctx, panel) {
   if (!ctx.alive()) return;
   const templates = types.filter(type => type.managed_template);
   const regular = types.filter(type => !type.managed_template);
-  const item = type => html`<li class="row-between">
-    <div><div class="list-title">${type.title}</div><div class="meta"><span>${KINDS[type.kind][0]}</span><span>${type.duration_min} min</span>
+  const item = type => html`<li class="meet-event-row">
+    <span class="meet-event-kind-icon meet-event-kind-icon--${type.kind}" aria-hidden="true">${icon(type.kind === 'one_on_one' ? 'CircleUserRound' : 'Users')}</span>
+    <div class="meet-event-row__summary"><div class="list-title">${type.title}</div><div class="meta"><span>${KINDS[type.kind][0]}</span><span>${type.duration_min} min</span>
       ${type.kind !== 'one_on_one' ? html`<span>${type.hosts.map(host => host.name).join(', ')}</span>` : ''}
-      ${type.price_cents ? html`<span>${money(type.price_cents, type.currency)}</span>` : ''}${type.one_off ? html`<span>One-off link</span>` : ''}${type.secret && !type.one_off ? html`<span>Hidden</span>` : ''}
+      ${type.price_cents ? html`<span>${money(type.price_cents, type.currency)}</span>` : ''}${type.one_off ? html`<span>One-time link</span>` : ''}${type.secret && !type.one_off ? html`<span>Hidden</span>` : ''}
       ${type.managed_parent_title ? html`<span>Managed: ${type.managed_parent_title}</span>` : ''}</div></div>
-    <div class="row">${type.managed_template ? badge('neutral', 'Template') : type.published ? badge('published') : badge('draft', 'Not published')}
+    <div class="meet-event-row__actions">${type.managed_template ? badge('neutral', 'Template') : html`<span class="meet-event-status ${type.published ? 'is-live' : 'is-draft'}">${icon(type.published ? 'CircleCheck' : 'EyeOff')}<span>${type.published ? 'Published' : 'Draft'}</span></span>`}
       ${type.published && !type.managed_template ? html`<button class="btn btn-small" data-copy="${bookingUrl(type)}">Copy link</button>` : ''}
-      <a class="btn btn-small" href="/meet/event-types/${type.id}">Edit</a></div></li>`;
-  mount(panel, html`<div class="row"><a class="btn btn-small" href="/meet/event-types/new?one_off=1">New one-off link</a>${isAdmin() ? html`<a class="btn btn-small" href="/meet/event-types/new?kind=round_robin">New team event</a><a class="btn btn-small" href="/meet/event-types/new?template=1">New managed template</a>` : ''}</div>
-    ${regular.length ? html`<ul class="list section-gap">${regular.map(item)}</ul>` : html`<div class="empty section-gap"><h2>Create your first event type</h2><p>An event type is a kind of meeting people can book, such as a 30-minute introduction call.</p><div class="actions"><a class="btn btn-primary" href="/meet/event-types/new">New event type</a><a class="btn" href="/setup/meet">Guided setup</a></div></div>`}
-    ${templates.length ? html`<h2 class="section-gap">Managed templates</h2><ul class="list">${templates.map(item)}</ul>` : ''}`);
+      <a class="btn btn-small" href="/meet/event-types/${type.id}">Edit details</a></div></li>`;
+  mount(panel, html`<div class="meet-event-types"><div class="row meet-event-actions"><a class="btn btn-small btn-primary" href="/meet/event-types/new">Create booking link</a><details class="meet-event-more"><summary class="btn btn-small">More options</summary><div class="meet-event-more__menu"><a href="/meet/event-types/new?one_off=1">One-time booking link</a>${isAdmin() ? html`<a href="/meet/event-types/new?kind=round_robin">Team event</a><a href="/meet/event-types/new?template=1">Reusable team template</a>` : ''}</div></details></div>
+    ${regular.length ? html`<ul class="meet-event-list section-gap">${regular.map(item)}</ul>` : html`<div class="empty section-gap"><h2>Let people book time with you</h2><p>Create your first booking link. Your saved working hours will be used automatically, and you can add extra settings later.</p></div>`}
+    ${templates.length ? html`<h2 class="section-gap meet-event-templates-title">Managed templates</h2><ul class="meet-event-list">${templates.map(item)}</ul>` : ''}</div>`);
   $$('[data-copy]', panel).forEach(button => button.onclick = () => copy(button.dataset.copy, 'Booking link'));
 }
 
@@ -185,9 +204,12 @@ async function emailsTab(ctx, panel) {
   const emails = await api('GET', wsPath('/emails'));
   if (!ctx.alive()) return;
   const reports = boot.providers.email === 'http' ? (boot.providers.email_reports ? 'Delivery reports from the provider are connected.' : 'Delivery reports from the provider are not connected, so acceptance is the last step shown.') : 'This server uses the local outbox: messages are recorded here and never sent.';
-  mount(panel, html`${notice('info', html`<p>Every confirmation, reminder, workflow email and SMS is tracked here. A failed message never affects the meeting it belongs to.</p><p><strong>Accepted</strong> means the email provider took the message. <strong>Delivered</strong> means the recipient's mail server accepted it, as reported by the provider. Schedora cannot see spam-folder placement or whether a message was read. ${reports}</p>`)}
-    ${isAdmin() ? html`<form id="delivery-test" class="card"><h2>Check email delivery</h2><p>Send a test message to one of your own inboxes. Each inbox receives at most one test per hour.</p><label for="delivery-target">Test inbox</label><select id="delivery-target" name="target"><option value="account">My Schedora account email</option><option value="google">My connected Google email</option></select><div data-form-status tabindex="-1"></div><button class="btn" type="submit">Send test email</button></form>` : ''}
-    ${emails.length ? html`<div class="table-wrap"><table><thead><tr><th>Created</th><th>Type</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
+  mount(panel, html`<p class="muted meet-delivery-intro">Track confirmations, reminders and follow-ups sent from Meet. A delivery issue never changes the booking itself.</p>
+    ${boot.providers.email !== 'http' ? notice('warn', html`<p>Email sending is not connected on this server. Messages are recorded here but are not sent to recipients.</p>`) : ''}
+    <details class="email-delivery-help"><summary>How delivery status works</summary><p><strong>Accepted</strong> means the email provider took the message. <strong>Delivered</strong> means the recipient's mail server accepted it. Schedora cannot see spam-folder placement or whether a message was read. ${reports}</p></details>
+    ${isAdmin() ? html`<form id="delivery-test"><h2>Send a test email</h2><p>Send one to an inbox you can check. You can send another test to the same inbox after an hour.</p><label for="delivery-target">Send to</label><select id="delivery-target" name="target"><option value="account">My Schedora account email</option><option value="google">My connected Google email</option></select><div data-form-status tabindex="-1"></div><button class="btn btn-small" type="submit">Send test email</button></form>` : ''}
+    <h2 class="meet-delivery-heading">Recent messages</h2>
+    ${emails.length ? html`<div class="table-wrap"><table><thead><tr><th>Sent</th><th>Type</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
     ${emails.map(email => html`<tr><td>${fmtDateTime(email.created_at)}</td><td>${email.channel === 'sms' ? 'SMS · ' : ''}${email.kind.replace(/_/g, ' ')}</td><td>${email.to_address}</td><td>${email.subject || '—'}</td>
       <td>${badge(email.status)}${email.status === 'scheduled' ? html`<div class="muted">${fmtDateTime(email.next_attempt_at)}</div>` : ''}${email.status === 'sent' && email.channel === 'email' ? html`<div class="muted">${email.accepted_transport ? deliveryEvidence({ status: email.status, transport: email.accepted_transport, report: email.delivery_status }).text : 'Sent before the sending method was recorded; delivery is unknown.'}</div>` : ''}${email.last_error ? html`<div class="muted">${email.last_error}</div>` : ''}</td></tr>`)}
     </tbody></table></div>` : html`<div class="empty">No messages yet.</div>`}`);
@@ -207,20 +229,22 @@ export async function editor(ctx) {
   const isNew = ctx.params[0] === 'new';
   setTitle((isNew ? 'New event type' : 'Edit event type') + ' · Meet by Schedora');
   mount(ctx.main, html`<div class="container page">${loading()}</div>`);
-  let type, members;
+  let type, members, savedWorkingHours;
   try {
-    [type, members] = await Promise.all([
+    [type, members, savedWorkingHours] = await Promise.all([
       isNew ? {
         title: '', slug: '', description: '', locations: [], duration_min: 30, slot_interval_min: 30, timezone: browserZone(), min_notice_min: 240, horizon_days: 60, buffer_before_min: 0, buffer_after_min: 0,
         reminder_min: 1440, published: !ctx.query.get('template'), kind: ctx.query.get('kind') || 'one_on_one', seats: 10, hosts: [{ user_id: session.user.id, priority: 2 }], questions: [],
         max_per_day: null, max_per_week: null, max_per_month: null, start_date: null, end_date: null, price_cents: null, currency: 'inr', secret: Boolean(ctx.query.get('one_off')), one_off: Boolean(ctx.query.get('one_off')),
-        single_use: Boolean(ctx.query.get('one_off')), expires_at: null, offered_slots: null, rr_strategy: 'availability', use_host_schedules: false, confirmation_message: '', redirect_url: null,
-        managed_template: Boolean(ctx.query.get('template')), locked_fields: [], rules: [1, 2, 3, 4, 5].map(weekday => ({ weekday, start_min: 540, end_min: 1020 })), overrides: []
+        single_use: Boolean(ctx.query.get('one_off')), expires_at: null, offered_slots: null, rr_strategy: 'availability', use_host_schedules: true, confirmation_message: '', redirect_url: null,
+        managed_template: Boolean(ctx.query.get('template')), locked_fields: [], rules: [], overrides: []
       } : api('GET', wsPath('/event-types/' + ctx.params[0])),
-      api('GET', wsPath('/members'))
+      api('GET', wsPath('/members')),
+      api('GET', wsPath('/schedule')).catch(() => null)
     ]);
   } catch (error) { return mount(ctx.main, html`<div class="container page">${errorBlock(error)}<a href="/meet">Back to Meet</a></div>`); }
   if (!ctx.alive()) return;
+  if (isNew && savedWorkingHours) Object.assign(type, { timezone: savedWorkingHours.timezone, rules: savedWorkingHours.rules, overrides: savedWorkingHours.overrides, use_host_schedules: true });
   const ws = workspace();
   const admin = isAdmin();
   const state = {
@@ -231,17 +255,13 @@ export async function editor(ctx) {
   };
   const lockedForMe = field => type.managed_parent_id && !admin && type.locked_fields.includes(field);
   const lockAttr = field => lockedForMe(field) ? raw('disabled title="Managed by your administrator"') : '';
-  let readiness = null;
-  const markDirty = () => { document.body.dataset.dirty = '1'; readiness?.unsaved(); };
+  const markDirty = () => { document.body.dataset.dirty = '1'; };
 
-  mount(ctx.main, html`<div class="container page">
+  mount(ctx.main, html`<div class="container page meet-event-editor">
     <a href="/meet">← Back to Meet</a>
-    <h1>${isNew ? (type.one_off ? 'New one-off link' : type.managed_template ? 'New managed template' : 'New event type') : type.title}</h1>
+    <h1>${isNew ? (type.one_off ? 'Create a one-time booking link' : type.managed_template ? 'Create a team template' : 'Create a booking link') : type.title}</h1>
     ${type.managed_parent_id ? notice('info', html`<p>This event type is managed by your administrator from “${type.managed_parent_title}”. ${type.locked_fields.length ? `Locked settings: ${type.locked_fields.join(', ')}.` : ''}</p>`) : ''}
-    ${isNew ? html`<p class="hint">After you save, <strong>Ready to share?</strong> checks the saved settings before you send the link.</p>` : html`<section class="card card-plain readiness" id="readiness" aria-labelledby="readiness-heading">
-      <div class="row-between"><h2 id="readiness-heading" tabindex="-1">Ready to share?</h2><button class="btn btn-small" type="button" data-recheck>Check again</button></div>
-      <p class="hint" id="readiness-checked">Statuses come from saved settings and checks on this server. Unsaved edits are not included.</p>
-      <div id="readiness-unsaved"></div><div id="readiness-body"></div><p class="visually-hidden" id="readiness-status" role="status"></p></section>`}
+    ${isNew ? html`<p class="hint">Save as a draft. Publish when you’re ready to accept bookings.</p>` : html`<section class="event-share-strip" aria-label="Booking link"><div class="event-share-strip__copy"><span class="tag">${type.published ? 'Published' : 'Draft saved'}</span>${type.published ? html`<strong>Your booking page is live</strong><a href="${bookingUrl(type)}" target="_blank" rel="noopener">${bookingUrl(type)}</a>` : html`<span class="muted">Private until you publish it.</span>`}</div><div class="event-share-strip__actions">${type.published ? html`<button class="btn btn-small" type="button" id="copy-event-link">Copy link</button>` : ''}<a class="btn btn-small" href="${bookingUrl(type)}" target="_blank" rel="noopener">Preview</a></div></section>`}
     <form id="event-form" class="stack" novalidate>
       <section class="card card-plain"><h2>Meeting type</h2>
         <fieldset><legend class="visually-hidden">Meeting type</legend><div class="kind-grid">${Object.entries(KINDS).map(([key, [label, help]]) => html`<label class="kind-card">
@@ -249,34 +269,42 @@ export async function editor(ctx) {
         <div id="kind-extra"></div>
       </section>
       <section class="card card-plain" id="section-details"><h2 tabindex="-1">Details</h2>
-        <label for="title">Name <span class="required-mark" aria-hidden="true">*</span></label>
+        <label for="title">Booking name <span class="required-mark" aria-hidden="true">*</span></label>
         <input id="title" name="title" required maxlength="120" value="${type.title}" placeholder="30-minute introduction" ${lockAttr('title')}>
-        <label for="slug">Link</label><span class="hint" id="slug-hint">${location.origin}/meet/${ws.slug}/<strong id="slug-preview">${type.slug || 'your-link'}</strong></span>
+        <label for="slug">Booking page address</label><span class="hint" id="slug-hint">${location.origin}/meet/${ws.slug}/<strong id="slug-preview">${type.slug || 'your-link'}</strong></span>
         <input id="slug" name="slug" maxlength="60" value="${type.slug}" aria-describedby="slug-hint" placeholder="Created from the name if left blank">
         <label for="description">Description</label><textarea id="description" name="description" maxlength="2000" ${lockAttr('description')}>${type.description}</textarea>
         <div class="inline-fields">
-          <div><label for="duration_min">Duration (minutes)</label><input id="duration_min" name="duration_min" type="number" min="5" max="720" step="5" required value="${type.duration_min}" ${lockAttr('duration_min')}></div>
-          <div><label for="slot_interval_min">Start times every (minutes)</label><input id="slot_interval_min" name="slot_interval_min" type="number" min="5" max="720" step="5" required value="${type.slot_interval_min}"></div>
+          <div><label for="duration_min">Meeting length (minutes) <span class="required-mark" aria-hidden="true">*</span></label><input id="duration_min" name="duration_min" type="number" min="5" max="720" step="5" required value="${type.duration_min}" ${lockAttr('duration_min')}></div>
+          <div><label for="slot_interval_min">Offer a time every (minutes) <span class="required-mark" aria-hidden="true">*</span></label><input id="slot_interval_min" name="slot_interval_min" type="number" min="5" max="720" step="5" required value="${type.slot_interval_min}"><span class="hint">How often a new start time appears.</span></div>
         </div>
-        <h3 class="editor-subhead" id="location-heading">Where you meet</h3><p class="hint">Offer one or more options; invitees choose when there are several.</p><div id="locations" aria-labelledby="location-heading"></div>
-        <label for="new-location">Add a location</label>
-        <div class="row"><select id="new-location" aria-describedby="location-help${boot.video?.enabled ? '' : ' video-unavailable'}">${Object.entries(LOCATION_LABELS).map(([key, label]) => key === 'schedora_meet' && !boot.video?.enabled ? html`<option value="" disabled>${label}: not available yet</option>` : html`<option value="${key}">${label}</option>`)}</select><button class="btn btn-small" type="button" id="add-location" ${lockAttr('locations')}>Add location</button></div>
+        <h3 class="editor-subhead" id="location-heading">Meeting location</h3><p class="hint">Choose how you’ll meet. Add another option only if invitees can choose.</p><div id="locations" aria-labelledby="location-heading"></div>
+        <label for="new-location">How should you meet?</label>
+        <div class="row"><select id="new-location" aria-describedby="location-help${boot.video?.enabled ? '' : ' video-unavailable'}">${Object.entries(LOCATION_LABELS).map(([key, label]) => key === 'schedora_meet' && !boot.video?.enabled ? html`<option value="" disabled>${label}: not available yet</option>` : html`<option value="${key}">${label}</option>`)}</select><button class="btn btn-small" type="button" id="add-location" ${lockAttr('locations')}>Add option</button></div>
         <p class="hint" id="location-help" aria-live="polite">${LOCATION_HELP.video}</p>
         ${boot.video?.enabled ? '' : html`<p class="hint" id="video-unavailable">Schedora Meet built-in video is not enabled on this server yet, so it cannot be chosen. Use a connected video app or your own video link for now.</p>`}
       </section>
-      <section class="card card-plain" id="section-availability"><h2 tabindex="-1">Availability</h2>
-        <label for="timezone">Time zone</label><span class="hint">Weekly hours are in this time zone. Invitees see times converted to theirs, including daylight-saving changes.</span>
-        <select id="timezone" name="timezone">${zoneOptions(type.timezone)}</select>
+      <section class="event-options-section" aria-labelledby="event-options-heading"><header class="event-options-heading"><div><h2 id="event-options-heading">More options</h2><p>Start with your usual availability. Open only the settings this meeting needs.</p></div></header><div class="event-options-grid">
+      <details class="optional-event-settings event-option event-availability" id="section-availability"><summary><span class="event-option-icon">${icon('Clock')}</span><span class="event-option-copy"><strong>Availability</strong><small>${type.use_host_schedules ? savedWorkingHours ? 'Using your usual working hours' : 'Set your usual hours once in Availability' : 'Custom hours for this meeting'}</small></span></summary>
+        <div class="event-availability__body"><p class="hint">Use your usual working hours for this and other meetings. Change the hours here only when this meeting needs a different schedule.</p>
+        ${!savedWorkingHours ? html`<p class="event-option-note">You have not set usual working hours yet. <a href="/meet?tab=availability">Set them once in Availability</a>, then this event will use them.</p>` : ''}
+        <label class="check"><input type="checkbox" name="use_host_schedules" ${type.use_host_schedules ? raw('checked') : ''}> Use the hosts’ saved working hours</label>
+        <p class="hint" id="hours-source-hint">${type.use_host_schedules ? 'Each host’s saved hours and time zone determine when invitees can book.' : 'This meeting uses its own hours and time zone.'}</p>
         ${type.one_off ? html`<h3 class="label">Specific times (optional)</h3><p class="hint">Offer only these times instead of your weekly hours. Times use your browser's time zone.</p><div id="offered"></div><button class="btn btn-small" type="button" id="add-offered">Add a time</button>` : ''}
-        <h3 class="label">Weekly hours</h3><div id="weekly"></div>
-        <h3 class="label">Date exceptions</h3><p class="hint">Block a date (holidays) or replace that day's hours.</p><div id="exceptions"></div>
-        <button class="btn btn-small" type="button" id="add-exception">Add a date exception</button>
+        <div id="event-specific-hours" ${type.use_host_schedules ? raw('hidden') : ''}>
+          <label for="timezone">Time zone</label><span class="hint">Invitees see times converted to their own time zone.</span>
+          <select id="timezone" name="timezone">${zoneOptions(type.timezone)}</select>
+          <h3 class="label">Weekly hours for this event</h3><div id="weekly"></div>
+          <h3 class="label">Days off or changed hours</h3><p class="hint">Block a holiday or set different hours for one date.</p><div id="exceptions"></div>
+          <button class="btn btn-small" type="button" id="add-exception">Add a date change</button>
+        </div>
         <div class="inline-fields section-gap">
           <div><label for="start_date">Bookable from (optional)</label><input id="start_date" name="start_date" type="date" value="${type.start_date || ''}"></div>
           <div><label for="end_date">Bookable until (optional)</label><input id="end_date" name="end_date" type="date" value="${type.end_date || ''}"></div>
         </div>
-      </section>
-      <section class="card card-plain" id="section-limits"><h2 tabindex="-1">Limits and reminders</h2>
+        </div>
+      </details>
+      <details class="optional-event-settings event-option" id="section-limits"><summary><span class="event-option-icon">${icon('Bell')}</span><span class="event-option-copy"><strong>Limits and reminders</strong><small>Set notice, buffers, booking caps or a reminder</small></span></summary>
         <div class="inline-fields">
           <div><label for="min_notice_hours">Minimum notice (hours)</label><input id="min_notice_hours" name="min_notice_hours" type="number" min="0" max="720" step="0.5" value="${type.min_notice_min / 60}" ${lockAttr('min_notice_min')}></div>
           <div><label for="horizon_days">Bookable up to (days ahead)</label><input id="horizon_days" name="horizon_days" type="number" min="1" max="365" value="${type.horizon_days}" ${lockAttr('horizon_days')}></div>
@@ -289,36 +317,41 @@ export async function editor(ctx) {
         <label for="reminder_min">Reminder email to invitee</label>
         <select id="reminder_min" name="reminder_min">${[[null, 'No reminder'], [60, '1 hour before'], [240, '4 hours before'], [1440, '24 hours before'], [2880, '48 hours before']].map(([value, label]) => html`<option value="${value ?? ''}" ${value === type.reminder_min ? raw('selected') : ''}>${label}</option>`)}</select>
         <p class="hint">Add SMS reminders and follow-ups on the <a href="/meet?tab=workflows">Workflows</a> tab.</p>
-      </section>
-      <section class="card card-plain"><h2>Invitee questions</h2><p class="hint">Name and email are always asked. Answers appear in confirmations, the meeting list and workflows ({{answer.key}}).</p>
-        <div id="questions"></div><button class="btn btn-small" type="button" id="add-question" ${lockAttr('questions')}>Add a question</button></section>
-      <section class="card card-plain"><h2>Payment</h2>
+      </details>
+      <details class="optional-event-settings event-option"><summary><span class="event-option-icon">${icon('CircleHelp')}</span><span class="event-option-copy"><strong>Invitee questions</strong><small>Ask for details beyond name and email</small></span></summary><p class="hint">Ask for any extra details you need before the meeting.</p>
+        <div id="questions"></div><button class="btn btn-small" type="button" id="add-question" ${lockAttr('questions')}>Add a question</button></details>
+      <details class="optional-event-settings event-option"><summary><span class="event-option-icon">${icon('BriefcaseBusiness')}</span><span class="event-option-copy"><strong>Payment</strong><small>Leave this off for a free meeting</small></span></summary>
         <div class="inline-fields"><div><label for="price">Price (leave empty for free)</label><input id="price" name="price" type="number" min="0.5" step="0.01" value="${type.price_cents ? type.price_cents / 100 : ''}" ${lockAttr('price_cents')}></div>
           <div><label for="currency">Currency</label><select id="currency" name="currency" ${lockAttr('price_cents')}>${['inr', 'usd', 'eur', 'gbp', 'aud', 'cad', 'sgd', 'aed'].map(code => html`<option value="${code}" ${code === (type.currency || 'inr') ? raw('selected') : ''}>${code.toUpperCase()}</option>`)}</select></div></div>
-        <p class="hint">Invitees pay when booking. The payment page shows the hold deadline (20 minutes with Razorpay). Connect a payment provider under <a href="/meet?tab=integrations">Calendars &amp; apps</a>.</p></section>
-      <section class="card card-plain"><h2>After booking</h2>
+        <p class="hint">To collect payment, first connect a provider under <a href="/meet?tab=integrations">Connections</a>.</p></details>
+      <details class="optional-event-settings event-option"><summary><span class="event-option-icon">${icon('CheckCircle2')}</span><span class="event-option-copy"><strong>After booking</strong><small>Customize the confirmation or send people to another page</small></span></summary>
         <label for="confirmation_message">Message on the confirmation page and email</label><textarea id="confirmation_message" name="confirmation_message" maxlength="1000" ${lockAttr('confirmation_message')}>${type.confirmation_message}</textarea>
-        <label for="redirect_url">Or send invitees to your own page (https://…)</label><input id="redirect_url" name="redirect_url" type="url" value="${type.redirect_url || ''}"></section>
-      <section class="card card-plain" id="section-visibility"><h2 tabindex="-1">Visibility</h2>
+        <label for="redirect_url">Send invitees to another page (optional)</label><input id="redirect_url" name="redirect_url" type="url" value="${type.redirect_url || ''}"></details>
+      <details class="optional-event-settings event-option" id="section-visibility"><summary><span class="event-option-icon">${icon('EyeOff')}</span><span class="event-option-copy"><strong>Link visibility</strong><small>Choose where people can find this booking link</small></span></summary>
         <label class="check"><input type="checkbox" name="published" ${type.published ? raw('checked') : ''}> Accept bookings on the link</label>
         <label class="check"><input type="checkbox" name="secret" ${type.secret ? raw('checked') : ''}> Hide from my booking page (only people with the link can book)</label>
         ${type.one_off ? html`<label class="check"><input type="checkbox" name="single_use" ${type.single_use ? raw('checked') : ''}> Close the link after one booking</label>
           <label for="expires_at">Link expires</label><input id="expires_at" name="expires_at" type="datetime-local" value="${type.expires_at ? new Date(type.expires_at - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''}">` : ''}
-      </section>
-      ${admin && !type.managed_parent_id ? html`<section class="card card-plain"><h2>Managed template</h2>
+      </details>
+      ${admin && !type.managed_parent_id ? html`<details class="optional-event-settings event-option" ${type.managed_template ? raw('open') : ''}><summary><span class="event-option-icon">${icon('LayoutTemplate')}</span><span class="event-option-copy"><strong>Team template</strong><small>Reuse and assign a standard meeting for teammates</small></span></summary>
         <label class="check"><input type="checkbox" name="managed_template" ${type.managed_template ? raw('checked') : ''}> Use as a template that I assign to members</label>
         <fieldset id="locked"><legend class="label">Members cannot change</legend><div class="check-grid">${['title', 'description', 'locations', 'duration_min', 'questions', 'buffer_before_min', 'buffer_after_min', 'min_notice_min', 'horizon_days', 'price_cents', 'confirmation_message', 'max_per_day', 'max_per_week', 'max_per_month'].map(field => html`
           <label class="check"><input type="checkbox" data-lock="${field}" ${state.locked.includes(field) ? raw('checked') : ''}> ${field.replace(/_min$/, '').replace(/_/g, ' ')}</label>`)}</div></fieldset>
-        ${!isNew && type.managed_template ? html`<button class="btn" type="button" id="assign">Assign to members</button>` : ''}</section>` : ''}
+        ${!isNew && type.managed_template ? html`<button class="btn" type="button" id="assign">Assign to members</button>` : ''}</details>` : ''}
+      </div></section>
       <div data-form-status tabindex="-1"></div>
-      <div class="actions"><button class="btn btn-primary" type="submit">Save event type</button>
-        ${isNew ? '' : html`<button class="btn" type="button" data-goto="readiness">Review readiness</button><a class="btn" href="/meet/${ws.slug}/${type.slug}" target="_blank" rel="noopener">${type.published ? 'View booking page' : 'Preview booking page'}</a><button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
+      <div class="actions"><button class="btn btn-primary" type="submit">${isNew ? 'Save booking link' : 'Save changes'}</button>
+        ${isNew ? '' : html`<button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
     </form></div>`);
 
   const form = $('#event-form');
+  const optionDetails = $$('.event-option', form);
+  optionDetails.forEach(option => option.addEventListener('toggle', () => {
+    if (option.open) optionDetails.forEach(other => { if (other !== option && other.open) other.open = false; });
+  }));
   form.addEventListener('input', markDirty);
   form.addEventListener('click', event => { const goto = event.target.closest('[data-goto]'); if (goto) goToSection(goto.dataset.goto); });
-  if (!isNew) readiness = readinessPanel(ctx, type);
+  if (!isNew && $('#copy-event-link')) $('#copy-event-link').onclick = () => copy(bookingUrl(type), 'Booking link');
   $('#title').addEventListener('input', () => { if (!$('#slug').value) $('#slug-preview').textContent = $('#title').value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'your-link'; });
   $('#slug').addEventListener('input', () => { $('#slug-preview').textContent = $('#slug').value || 'your-link'; });
 
@@ -331,15 +364,21 @@ export async function editor(ctx) {
       ${team ? html`<fieldset><legend class="label">Hosts</legend>${members.map(member => {
         const host = state.hosts.find(item => item.user_id === member.id);
         return html`<div class="range"><label class="check"><input type="checkbox" data-host="${member.id}" ${host ? raw('checked') : ''}> ${member.name}</label>
-          ${state.kind === 'round_robin' && host ? html`<select data-priority="${member.id}" aria-label="Priority for ${member.name}">${[[4, 'Highest'], [3, 'High'], [2, 'Medium'], [1, 'Low'], [0, 'Lowest']].map(([value, label]) => html`<option value="${value}" ${host.priority === value ? raw('selected') : ''}>${label} priority</option>`)}</select>` : ''}</div>`;
+          ${state.kind === 'round_robin' && host ? html`<label class="visually-hidden" for="host-pref-${member.id}">Booking preference for ${member.name}</label><select id="host-pref-${member.id}" data-priority="${member.id}">${[[4, 'Try this host first'], [3, 'Prefer this host'], [2, 'No preference'], [1, 'Prefer other hosts'], [0, 'Try this host last']].map(([value, label]) => html`<option value="${value}" ${host.priority === value ? raw('selected') : ''}>${label}</option>`)}</select>` : ''}</div>`;
       })}</fieldset>
-      ${state.kind === 'round_robin' ? html`<label for="rr_strategy">Distribute meetings by</label><select id="rr_strategy" name="rr_strategy"><option value="availability" ${type.rr_strategy === 'availability' ? raw('selected') : ''}>Priority, then fewest recent meetings</option><option value="equal" ${type.rr_strategy === 'equal' ? raw('selected') : ''}>Equal distribution</option></select>
-        <p class="hint">Known contacts with an owner are routed to that owner when they are free.</p>` : ''}
-      <label class="check"><input type="checkbox" name="use_host_schedules" ${type.use_host_schedules ? raw('checked') : ''}> Use each host's personal working hours (set under Calendars &amp; apps)</label>` : ''}`);
+      ${state.kind === 'round_robin' ? html`<label for="rr_strategy">How should bookings be shared?</label><select id="rr_strategy" name="rr_strategy"><option value="availability" ${type.rr_strategy === 'availability' ? raw('selected') : ''}>Try preferred hosts first, then balance recent bookings</option><option value="equal" ${type.rr_strategy === 'equal' ? raw('selected') : ''}>Share evenly and ignore host preferences</option></select>
+        <p class="hint">If a known contact has a preferred host, Schedora tries that host first when they are available.</p>` : ''}
+      ` : ''}`);
   };
   renderKind();
   form.addEventListener('change', event => {
     if (event.target.name === 'kind') { state.kind = event.target.value; renderKind(); }
+    if (event.target.name === 'use_host_schedules') {
+      type.use_host_schedules = event.target.checked;
+      const help = $('#hours-source-hint');
+      if (help) help.textContent = event.target.checked ? 'Each host’s saved hours and time zone determine when invitees can book.' : 'This meeting uses its own hours and time zone.';
+      $('#event-specific-hours').hidden = event.target.checked;
+    }
     if (event.target.dataset.host) {
       const id = event.target.dataset.host;
       if (event.target.checked) state.hosts.push({ user_id: id, priority: 2 }); else state.hosts = state.hosts.filter(host => host.user_id !== id);
@@ -474,6 +513,7 @@ export async function editor(ctx) {
   };
 
   handleSubmit(form, async data => {
+    if (!form.reportValidity()) return;
     if (state.overrides.some(override => !override.date)) throw Object.assign(new Error('Each date exception needs a date.'), { details: {} });
     const body = {
       title: data.title, description: data.description, duration_min: data.duration_min, slot_interval_min: data.slot_interval_min, timezone: data.timezone,
@@ -487,7 +527,7 @@ export async function editor(ctx) {
     if (!type.managed_parent_id) Object.assign(body, { kind: state.kind, hosts: state.hosts });
     if (state.kind === 'group') body.seats = data.seats;
     if (state.kind === 'round_robin') body.rr_strategy = data.rr_strategy;
-    if (['collective', 'round_robin'].includes(state.kind)) body.use_host_schedules = data.use_host_schedules;
+    body.use_host_schedules = data.use_host_schedules;
     if (type.one_off) Object.assign(body, { one_off: true, single_use: data.single_use, expires_at: data.expires_at ? new Date(data.expires_at).toISOString() : null, offered_slots: state.offered.filter(Boolean).length ? state.offered.filter(Boolean) : null });
     if (admin && !type.managed_parent_id) Object.assign(body, { managed_template: data.managed_template, locked_fields: state.locked });
     if (data.slug) body.slug = data.slug;
@@ -495,7 +535,7 @@ export async function editor(ctx) {
     if (type.managed_parent_id && !admin) for (const field of type.locked_fields) { delete body[field]; if (field === 'price_cents') delete body.currency; }
     const saved = isNew ? await api('POST', wsPath('/event-types'), body) : await api('PATCH', wsPath('/event-types/' + type.id), body);
     delete document.body.dataset.dirty;
-    toast(saved.managed_template ? 'Template saved.' : saved.published ? 'Saved and published. Check “Ready to share?” before sending the link.' : 'Saved. Publish when you are ready to accept bookings.');
+    toast(saved.managed_template ? 'Template saved.' : saved.published ? 'Changes saved. Your booking page is live.' : 'Draft saved. Publish when you’re ready to accept bookings.');
     ctx.navigate('/meet/event-types/' + saved.id, { replace: isNew });
   });
   $('#assign')?.addEventListener('click', async () => {
@@ -511,83 +551,6 @@ export async function editor(ctx) {
     try { await api('DELETE', wsPath('/event-types/' + type.id)); delete document.body.dataset.dirty; toast('Event type deleted.'); ctx.navigate('/meet', { replace: true }); }
     catch (error) { showErrors(form, error); }
   });
-}
-
-// "Ready to share?": statuses come from saved data and server checks (meet-readiness.mjs), never from
-// unsaved form values. The editor re-renders after every successful save, which re-runs the check.
-const SECTION_IDS = { details: 'section-details', availability: 'section-availability', limits: 'section-limits', visibility: 'section-visibility', readiness: 'readiness' };
-const fmtDate = date => fmt(date + 'T12:00:00Z', 'UTC', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-
-function goToSection(key) {
-  const section = document.getElementById(SECTION_IDS[key]);
-  if (!section) return;
-  section.scrollIntoView({ block: 'start' });
-  section.querySelector('h2').focus({ preventScroll: true });
-}
-
-function readinessPanel(ctx, savedType) {
-  const root = $('#readiness');
-  const body = $('#readiness-body', root);
-  let type = savedType;
-  let announce = false;
-  let checkSequence = 0;
-  const settle = result => result.status === 'fulfilled' ? { ok: true, value: result.value } : { ok: false, error: result.reason };
-  const share = () => {
-    const url = bookingUrl(type);
-    return html`<label for="share-link">Booking link</label>
-      <div class="share-row"><input id="share-link" readonly value="${url}">${type.published ? html`<button class="btn btn-small" type="button" id="copy-share">Copy link</button>` : ''}
-        <a class="btn btn-small" href="${url}" target="_blank" rel="noopener">Preview booking page<span class="visually-hidden"> (opens in a new tab)</span></a></div>
-      <p class="hint">Preview opens the booking page in a new tab. It does not publish, book or send anything. ${type.published ? 'Copying the link does not show that booking, email or video works.' : 'Copy link appears once the event type is published.'}</p>
-      <p class="copy-status" id="copy-status" role="status"></p>`;
-  };
-  const draw = (result, hosts) => {
-    mount(body, html`${readinessAreas(result, { extra: area => area.key === 'sharing' && !type.managed_template ? share() : '' })}${hostReadinessView(hosts, type, session.user.id)}`);
-    if (announce) $('#readiness-status', root).textContent = result.headline;
-  };
-  const check = async refetch => {
-    const sequence = ++checkSequence;
-    body.setAttribute('aria-busy', 'true');
-    mount(body, loading('Checking saved settings…'));
-    const sources = await Promise.allSettled([
-      refetch ? api('GET', wsPath('/event-types/' + type.id)) : type,
-      api('GET', wsPath(`/event-types/${type.id}/slots`)),
-      api('GET', wsPath('/calendar')),
-      api('GET', wsPath('/integrations')),
-      api('GET', wsPath(`/event-types/${type.id}/host-readiness`))
-    ]);
-    if (!ctx.alive() || !root.isConnected || sequence !== checkSequence) return;
-    body.removeAttribute('aria-busy');
-    if (sources[0].status === 'rejected') {
-      $('#readiness-status', root).textContent = 'Readiness could not be checked.';
-      return mount(body, html`${notice('bad', html`<p>Readiness could not be checked: ${sources[0].reason.message} Nothing is marked ready.</p>`)}<button class="btn btn-small" type="button" data-recheck>Check again</button>`);
-    }
-    type = sources[0].value;
-    const [, slots, calendar, integrations, hosts] = sources.map(settle);
-    $('#readiness-checked', root).textContent = `Based on the settings saved ${fmtDateTime(type.updated_at)}, checked at ${fmtTime(Date.now())}. Unsaved edits are not included.`;
-    const assessment = assessReadiness({
-      type, viewer: { id: session.user.id, admin: isAdmin() }, slots, calendar, integrations,
-      hostSummaryAvailable: type.hosts.length > 1 && matchingHostEvidence(hosts, type) && hosts.value.scope === 'all_hosts',
-      flags: { videoEnabled: Boolean(boot.video?.enabled), emailProvider: boot.providers?.email, testPayments: Boolean(boot.integrations?.testPayments), meetActive: Boolean(workspace().entitlements?.meet?.active) },
-      format: { dateTime: fmtDateTime, date: fmtDate, zone: zoneLabel, money }
-    });
-    draw(assessment, hosts);
-  };
-  root.addEventListener('click', async event => {
-    const goto = event.target.closest('[data-goto]');
-    if (goto) return goToSection(goto.dataset.goto);
-    if (event.target.closest('[data-recheck]')) { announce = true; return check(true); }
-    if (!event.target.closest('#copy-share')) return;
-    const status = $('#copy-status', root);
-    try { await navigator.clipboard.writeText(bookingUrl(type)); status.textContent = 'Link copied. This does not test booking, email or video.'; }
-    catch { $('#share-link', root).select(); status.textContent = 'Copy failed. The link is selected so you can copy it yourself.'; }
-  });
-  check(false);
-  return {
-    unsaved() {
-      const slot = $('#readiness-unsaved', root);
-      if (slot && !slot.childElementCount) mount(slot, notice('warn', html`<p><strong>You have unsaved changes.</strong> This summary describes the last saved version. Save to check your changes.</p>`));
-    }
-  };
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -26,12 +26,12 @@ const formStatus = form => pill(form.status === 'published' ? 'Published' : 'Dra
 const navigation = {
   suite: [['Overview', '/demo', 'LayoutDashboard'], ['Activity', '/demo/activity', 'Activity'], ['Connections', '/demo/connections', 'Plug'], ['People', '/demo/people', 'Users']],
   meet: [['Overview', '/demo/meet', 'LayoutDashboard'], ['Bookings', '/demo/meet/bookings', 'CalendarDays'], ['Event types', '/demo/meet/events', 'Link'], ['Availability', '/demo/meet/availability', 'Clock'], ['Calendar connections', '/demo/meet/connections', 'CalendarCheck']],
-  forms: [['Overview', '/demo/forms', 'LayoutDashboard'], ['All forms', '/demo/forms/all', 'Files'], ['Responses', '/demo/forms/responses', 'Inbox'], ['Templates', '/demo/forms/templates', 'LayoutTemplate']],
+  forms: [['Overview', '/demo/forms', 'LayoutDashboard'], ['All forms', '/demo/forms/all', 'Files'], ['Responses', '/demo/forms/responses', 'Inbox']],
   flow: [['Overview', '/demo/flow', 'LayoutDashboard'], ['Workflows', '/demo/flow/workflows', 'Workflow'], ['Run history', '/demo/flow/runs', 'History'], ['Tasks', '/demo/flow/tasks', 'CheckCircle2'], ['Connections', '/demo/flow/connections', 'Plug']]
 };
 
 function shell(ctx, key, content) {
-  document.body.dataset.product = key === 'suite' ? 'meet' : key;
+  document.body.dataset.product = key;
   const current = ctx.path;
   const scoped = ctx.entryProduct && ctx.entryProduct !== 'suite';
   return html`<div class="ds-workspace"><aside class="ds-sidebar" id="demo-sidebar"><a href="/" aria-label="${scoped ? productNames[ctx.product] : 'Schedora'} home">${brand(scoped ? ctx.product : 'suite')}</a>
@@ -153,7 +153,6 @@ export async function studio(ctx) {
       const only = data.forms.find(form => form.id === ctx.query.get('form'));
       content = html`${intro('FORMS / RESPONSES', 'Every answer, ready to review.', only ? `Sample responses to ${only.title}.` : 'Explore the sample response inbox.', action('Export CSV', 'export'))}${only ? html`<p class="ds-note"><a href="/demo/forms/responses">Show responses to every form</a></p>` : ''}${panel(only ? `Responses · ${only.title}` : 'Responses', responseTable(only ? data.responses.filter(response => response.form === only.id) : data.responses))}`;
     }
-    else if (screen === 'templates') content = html`${intro('FORMS / TEMPLATES', 'Start with a good question.', 'Pick a starting point and make it yours.')}<div class="ds-event-grid">${data.forms.slice(0, 3).map(form => html`<article class="ds-panel ds-panel-body">${icon('LayoutTemplate')}<h2>${form.title}</h2><p>${form.description}</p>${action('Use template', 'duplicate-form', form.id, true)}</article>`)}</div>`;
     else content = formsOverview(ctx);
   } else if (key === 'flow' && !sharedScreen) {
     if (screen === 'edit') {

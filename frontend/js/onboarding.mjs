@@ -6,7 +6,6 @@
 import { $, $$, api, badge, boot, errorBlock, handleSubmit, html, isAdmin, loading, mount, notice, raw, session, toast, workspace, wsPath, zoneOptions } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { PRODUCT_INFO } from './products.mjs';
-import { assessReadiness } from './meet-readiness.mjs';
 import { assessFormReadiness } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
 import { createdSource, draftAddress, mountStartingPoints } from './forms-picker.mjs';
@@ -37,7 +36,7 @@ function orderedSteps(selectedProducts, includeProductsStep) {
   if (selectedProducts.includes('flow')) {
     steps.push({ key: 'flow', product: 'flow', label: 'Flow · Draft workflow' });
   }
-  steps.push({ key: 'review', product: 'suite', label: 'Readiness & next steps' });
+  steps.push({ key: 'review', product: 'suite', label: 'Review setup' });
   return steps;
 }
 
@@ -51,8 +50,8 @@ function stepStatusSummary(stepKey, state) {
   const { records } = state;
   if (stepKey === 'products') return `${state.selected_products.map(key => PRODUCT_INFO[key].name).join(', ')}`;
   if (stepKey === 'calendar') {
-    if (records.meet.connections.length) return records.meet.connections.every(c => c.status === 'active' && c.last_success_at) ? 'Busy times checked' : 'Calendar check needed';
-    if (state.meet_calendar_skipped) return 'Skipped · not verified';
+    if (records.meet.connections.length) return 'Connected';
+    if (state.meet_calendar_skipped) return 'Skipped';
     return 'Optional';
   }
   if (stepKey === 'availability') {
@@ -67,15 +66,17 @@ function stepStatusSummary(stepKey, state) {
     if (!records.flow.flow) return 'No workflow yet';
     return records.flow.flow.status === 'enabled' ? 'Enabled' : records.flow.flow.status === 'paused' ? 'Paused' : 'Draft saved';
   }
-  if (stepKey === 'review') return state.completed_at ? 'Reviewed' : 'Check readiness';
+  if (stepKey === 'review') return state.completed_at ? 'Reviewed' : 'Review';
   return '';
 }
 
 export async function liveOnboarding(ctx) {
-  const routeProd = ctx.params[0] || (ctx.product !== 'suite' ? ctx.product : null);
-  const effectiveProduct = routeProd || ctx.product || 'suite';
+  // Product subdomains and /setup/:product show only that product's steps. /setup on Schedora
+  // remains the all-in-one workspace setup.
+  const effectiveProduct = ctx.params[0] || (ctx.product !== 'suite' ? ctx.product : 'suite');
   const info = PRODUCT_INFO[effectiveProduct] || PRODUCT_INFO.suite;
-  setTitle(`Guided setup · ${info.name}${effectiveProduct === 'suite' ? '' : ' by Schedora'}`);
+  const isSuiteView = effectiveProduct === 'suite';
+  setTitle(`${isSuiteView ? 'All products' : info.name} setup · Schedora`);
 
   if (!session.user) {
     return mount(ctx.main, signInPrompt(ctx, {
@@ -92,30 +93,25 @@ export async function liveOnboarding(ctx) {
   try {
     state = await api('GET', wsPath('/onboarding'));
     const requestedStep = ctx.query.get('step');
-    if (!state.started && routeProd) {
-      state = await api('PATCH', wsPath('/onboarding'), {
-        selected_products: [routeProd],
-        active_product: routeProd,
-        active_step: requestedStep || firstStepFor(routeProd)
-      });
-    } else if (routeProd && (!state.selected_products.includes(routeProd) || state.active_product !== routeProd || requestedStep)) {
-      const merged = ['meet', 'forms', 'flow'].filter(key => state.selected_products.includes(key) || key === routeProd);
-      state = await api('PATCH', wsPath('/onboarding'), {
-        selected_products: merged,
-        active_product: routeProd,
-        active_step: requestedStep || (state.active_product === routeProd ? state.active_step : firstStepFor(routeProd))
-      });
-    } else if (requestedStep) {
-      state = await api('PATCH', wsPath('/onboarding'), { active_step: requestedStep });
-    }
+    const allowedSteps = {
+      suite: ['products', 'calendar', 'availability', 'form', 'flow', 'review'],
+      meet: ['calendar', 'availability', 'review'],
+      forms: ['form', 'review'],
+      flow: ['flow', 'review']
+    }[effectiveProduct];
+    if (allowedSteps.includes(requestedStep)) state = await api('PATCH', wsPath('/onboarding'), { active_step: requestedStep });
   } catch (error) {
     if (ctx.alive()) mount(ctx.main, html`<div class="container page">${errorBlock(error)}</div>`);
     return;
   }
   if (!ctx.alive()) return;
 
-  const isSuiteView = !routeProd && effectiveProduct === 'suite';
   let simulationNote = null;
+  const selectedProductsForView = () => isSuiteView ? state.selected_products : [effectiveProduct];
+  const stepList = () => {
+    const selected = selectedProductsForView();
+    return orderedSteps(selected, isSuiteView || selected.length > 1);
+  };
 
   let justCreated = null; // the picker source of a draft created in this visit, for one notice
   const saveStateQuietly = async patch => { state = await api('PATCH', wsPath('/onboarding'), patch); };
@@ -125,33 +121,37 @@ export async function liveOnboarding(ctx) {
   };
 
   const draw = () => {
-    const steps = orderedSteps(state.selected_products, isSuiteView || state.selected_products.length > 1);
+    const steps = stepList();
     const validKeys = steps.map(item => item.key);
     const currentStep = validKeys.includes(state.active_step)
       ? state.active_step
       : (isSuiteView && !state.started ? 'products' : validKeys[0]);
+    const currentIndex = Math.max(0, validKeys.indexOf(currentStep));
+    const progress = Math.round(((currentIndex + 1) / Math.max(steps.length, 1)) * 100);
 
-    mount(ctx.main, html`<div class="container page live-onboarding" id="live-onboarding">
-      <div class="row-between">
-        <div>
-          <span class="tag" id="live-setup-badge">${info.name} · Live workspace setup</span>
-          <h1>Set up ${isSuiteView ? ws.name : info.name}</h1>
-          <p class="lead">Saved directly to <strong>${ws.name}</strong>. Refresh or sign in from another browser to pick up where you left off. Draft event types, forms and workflows stay unpublished or disabled until you choose to make them live.</p>
+    mount(ctx.main, html`<div class="container page live-onboarding setup-page" id="live-onboarding">
+      <header class="setup-page__header">
+        <div class="setup-page__intro">
+          <span class="tag" id="live-setup-badge">${isSuiteView ? 'All products' : info.name} · Setup</span>
+          <h1>${isSuiteView ? `Set up all products in ${ws.name}` : `Set up ${info.name} for ${ws.name}`}</h1>
+          <p class="lead">${isSuiteView ? 'Set up Meet, Forms and Flow together in this workspace. Progress is saved automatically; drafts stay private until you publish them.' : `This guide covers ${info.name} only. Your progress is saved in ${ws.name}; drafts stay private until you publish them.`}</p>
+          <div class="setup-save-note"><span class="setup-save-note__dot" aria-hidden="true"></span>Saving to <strong>${ws.name}</strong></div>
         </div>
-        <div class="actions">
-          <a class="btn btn-small" href="${effectiveProduct === 'suite' ? '/enquiries' : PRODUCT_INFO[effectiveProduct].dashboard}">Go to ${effectiveProduct === 'suite' ? 'workspace' : info.name}</a>
-          <a class="btn btn-small btn-quiet" href="${effectiveProduct === 'suite' ? '/start' : '/start/' + effectiveProduct}">Browser-only demo setup</a>
-        </div>
-      </div>
+      </header>
 
-      <nav class="tabs section-gap" aria-label="Live setup steps">
-        ${steps.map(step => html`<button type="button" data-setup-step="${step.key}" ${step.key === currentStep ? raw('aria-current="step"') : ''}>
-          <span>${step.label}</span>
-          <small class="step-pill-meta"> · ${stepStatusSummary(step.key, state)}</small>
+      <section class="setup-progress" aria-label="Setup progress">
+        <div class="setup-progress__summary"><strong>Step ${currentIndex + 1} of ${steps.length}</strong><span>${steps.length - currentIndex - 1} ${steps.length - currentIndex - 1 === 1 ? 'step' : 'steps'} left</span></div>
+        <progress class="setup-progress__track" aria-label="Current setup step" max="100" value="${progress}">${progress}%</progress>
+      </section>
+
+      <nav class="setup-stepper" aria-label="${isSuiteView ? 'All products setup steps' : info.name + ' setup steps'}">
+        ${steps.map((step, index) => html`<button type="button" class="setup-stepper__step" data-setup-step="${step.key}" ${step.key === currentStep ? raw('aria-current="step"') : ''}>
+          <span class="setup-stepper__number" aria-hidden="true">${index < currentIndex ? '✓' : index + 1}</span>
+          <span class="setup-stepper__copy"><strong>${step.label.replace(/^.*? · /, '')}</strong><small>${stepStatusSummary(step.key, state)}</small></span>
         </button>`)}
       </nav>
 
-      <div id="live-setup-panel" class="section-gap">
+      <div id="live-setup-panel" class="setup-panel">
         ${renderStep(currentStep)}
       </div>
     </div>`);
@@ -196,13 +196,11 @@ export async function liveOnboarding(ctx) {
     const { connections, integrations } = state.records.meet;
     const google = integrations.find(item => item.provider === 'google' && item.user_id === session.user.id);
     const microsoft = integrations.find(item => item.provider === 'microsoft' && item.user_id === session.user.id);
-    return html`<div class="grid-2">
-      <section class="card card-plain">
+    return html`<section class="card card-plain setup-calendar">
         <h2>Connect a calendar (optional)</h2>
-        <p class="muted">Connecting a calendar lets Meet check your busy times before offering slots. This step is optional: you can skip it now and connect a calendar later.</p>
-        ${connections.length ? html`<div class="notice ${connections.every(c => c.status === 'active' && c.last_success_at) ? 'notice-ok' : 'notice-warn'}"><p><strong>Calendar connections (${connections.length}):</strong> ${connections.map(c => `${c.label || c.provider} (${c.status}${c.last_success_at ? '; successful check recorded' : '; successful check not verified'})`).join(', ')}.</p></div>`
-          : state.meet_calendar_skipped ? notice('warn', html`<p><strong>Calendar connection skipped (not verified):</strong> No external calendar is connected. External conflicts are not checked; only Schedora bookings in ${ws.name} are checked.</p>`)
-          : notice('info', html`<p><strong>No external calendar connected yet.</strong> Connect an ICS feed or OAuth calendar below, or skip this optional step.</p>`)}
+        <p class="muted">Meet already checks bookings made through Schedora. Connect an outside calendar to check those busy times too; you can do this later.</p>
+        ${connections.length ? html`<p class="setup-calendar__status"><strong>Connected:</strong> ${connections.map(c => c.label || c.provider).join(', ')}</p>`
+          : html`<p class="setup-calendar__status">${state.meet_calendar_skipped ? 'Skipped for now.' : 'No outside calendar connected.'}</p>`}
 
         <form id="live-calendar-form" novalidate>
           <label for="live-ics-url">Calendar feed address (ICS URL or webcal://)</label>
@@ -220,21 +218,10 @@ export async function liveOnboarding(ctx) {
         <h3>OAuth calendar accounts</h3>
         <p class="hint">Google Calendar: ${google ? badge(google.status === 'active' ? 'ok' : 'warn', google.status) : badge('neutral', 'not connected')} · Microsoft Outlook: ${microsoft ? badge(microsoft.status === 'active' ? 'ok' : 'warn', microsoft.status) : badge('neutral', 'not connected')}</p>
         <div class="actions">
-          <a class="btn btn-small" href="/meet?tab=integrations">Open full Calendars & apps settings</a>
+          <button class="btn btn-primary" type="button" id="continue-from-calendar">${connections.length ? 'Continue to availability' : 'Continue without a calendar'}</button>
         </div>
       </section>
-
-      <section class="card card-plain">
-        <h2>Continue setup</h2>
-        <p class="muted">Whether you connect a calendar now or skip this step, your choice is saved to ${ws.name} and reflected honestly in your readiness summary.</p>
-        <div class="actions">
-          ${connections.length
-            ? html`<button class="btn btn-primary" type="button" id="continue-from-calendar">Continue to availability →</button>`
-            : html`<button class="btn btn-primary" type="button" id="skip-live-calendar">Skip calendar for now (not verified) →</button>
-                   <button class="btn" type="button" id="continue-from-calendar">Continue to availability →</button>`}
-        </div>
-      </section>
-    </div>`;
+    `;
   }
 
   function renderAvailabilityStep() {
@@ -295,7 +282,7 @@ export async function liveOnboarding(ctx) {
     </form>`;
   }
 
-  // No draft yet: the same starting-point picker as /forms (Blank, Import JSON, Templates). Once a
+  // No draft yet: the same starting-point picker as /forms (blank form or JSON import). Once a
   // draft exists, this step edits its basics and links to the builder, which links back here.
   function renderFormStep() {
     const existingForm = state.records.forms.form;
@@ -388,50 +375,34 @@ export async function liveOnboarding(ctx) {
     const entitlements = state.entitlements;
 
     let meetSection = '';
-    if (state.selected_products.includes('meet')) {
+    if (selectedProductsForView().includes('meet')) {
       if (meet.event_type) {
-        const readiness = assessReadiness({
-          type: meet.event_type,
-          viewer: { id: session.user.id, admin: isAdmin() },
-          flags: {
-            videoEnabled: Boolean(boot.video?.enabled),
-            emailProvider: boot.providers?.email || 'outbox',
-            testPayments: Boolean(boot.allowTestPayments),
-            meetActive: Boolean(entitlements?.meet?.active)
-          },
-          slots: meet.slots ? { ok: true, value: meet.slots } : { ok: false, error: new Error('Slots not loaded') },
-          calendar: { ok: true, value: { connections: meet.connections } },
-          integrations: { ok: true, value: meet.integrations }
-        });
         meetSection = html`<section class="card card-plain" id="live-ready-meet">
           <div class="row-between">
             <div>
-              <span class="tag">Meet readiness · Saved record</span>
+              <span class="tag">Booking link</span>
               <h2>${meet.event_type.title} ${badge(meet.event_type.published ? 'ok' : 'neutral', meet.event_type.published ? 'Published' : 'Draft (not published)')}</h2>
             </div>
             <div class="row">
-              <a class="btn btn-small btn-primary" href="/meet/event-types/${meet.event_type.id}">Open in Event Type Editor</a>
-              <a class="btn btn-small" href="/meet/${ws.slug}/${meet.event_type.slug}">Preview booking page</a>
-              <button class="btn btn-small" type="button" data-setup-step="availability">Edit Meet setup</button>
+              <a class="btn btn-small btn-primary" href="/meet/event-types/${meet.event_type.id}">Edit booking link</a>
+              <a class="btn btn-small" href="/meet/${ws.slug}/${meet.event_type.slug}">Preview</a>
             </div>
           </div>
-          ${!meet.connections.length && state.meet_calendar_skipped
-            ? notice('warn', html`<p><strong>Optional calendar step skipped (not verified):</strong> You skipped connecting an external calendar. External busy times are not checked; only Schedora meetings in ${ws.name} are checked.</p>`)
-            : ''}
-          ${readinessAreas(readiness)}
+          <p class="muted">${meet.event_type.published ? 'Your booking page is available to invitees.' : 'This draft is private and cannot be booked until you publish it.'}</p>
+          ${meet.event_type.published ? html`<a class="setup-booking-link" href="/meet/${ws.slug}/${meet.event_type.slug}">/meet/${ws.slug}/${meet.event_type.slug}</a>` : ''}
         </section>`;
       } else {
         meetSection = html`<section class="card card-plain" id="live-ready-meet">
-          <span class="tag">Meet readiness</span>
-          <h2>No event type saved yet</h2>
-          <p class="muted">Create your first draft event type and working hours to see live Meet readiness.</p>
-          <div class="actions"><button class="btn btn-primary" type="button" data-setup-step="availability">Set up Meet availability & event</button></div>
+          <span class="tag">Booking link</span>
+          <h2>No booking link yet</h2>
+          <p class="muted">Create your first booking link when you’re ready.</p>
+          <div class="actions"><button class="btn btn-primary" type="button" data-setup-step="availability">Create a booking link</button></div>
         </section>`;
       }
     }
 
     let formsSection = '';
-    if (state.selected_products.includes('forms')) {
+    if (selectedProductsForView().includes('forms')) {
       if (forms.form) {
         const formReadiness = assessFormReadiness({
           form: forms.form,
@@ -467,7 +438,7 @@ export async function liveOnboarding(ctx) {
     }
 
     let flowSection = '';
-    if (state.selected_products.includes('flow')) {
+    if (selectedProductsForView().includes('flow')) {
       if (flow.flow) {
         const publishedEvents = meet.event_types.filter(item => item.published).length;
         const publishedForms = forms.forms.filter(item => item.published_version != null).length;
@@ -524,7 +495,7 @@ export async function liveOnboarding(ctx) {
             <p class="muted">Your setup progress and draft records are saved in <strong>${ws.name}</strong>. Finishing setup never publishes events or forms, never enables workflows and never changes billing plans.</p>
           </div>
           <div class="actions">
-            <button class="btn btn-primary" type="button" id="finish-live-setup">Save setup & go to ${effectiveProduct === 'suite' ? 'workspace' : info.name} →</button>
+            <button class="btn btn-primary" type="button" id="finish-live-setup">Save setup & go to ${effectiveProduct === 'suite' ? 'workspace overview' : info.name} →</button>
           </div>
         </div>
       </div>`;
@@ -568,11 +539,8 @@ export async function liveOnboarding(ctx) {
           toast('Calendar disconnected.');
         };
       }
-      if ($('#skip-live-calendar')) {
-        $('#skip-live-calendar').onclick = () => saveState({ meet_calendar_skipped: true, active_step: 'availability' }).catch(err => toast(err.message));
-      }
       if ($('#continue-from-calendar')) {
-        $('#continue-from-calendar').onclick = () => saveState({ active_step: 'availability' }).catch(err => toast(err.message));
+        $('#continue-from-calendar').onclick = () => saveState({ meet_calendar_skipped: !state.records.meet.connections.length, active_step: 'availability' }).catch(err => toast(err.message));
       }
     }
 
@@ -614,7 +582,7 @@ export async function liveOnboarding(ctx) {
           : await api('POST', wsPath('/event-types'), { ...payload, published: false });
         await saveState({
           meet_event_type_id: savedEvent.id,
-          active_step: nextStepAfter('availability', state.selected_products)
+          active_step: nextStepAfter('availability', selectedProductsForView())
         });
         toast(existing ? 'Availability and event type updated.' : 'Draft event type saved (unpublished).');
       });
@@ -631,7 +599,7 @@ export async function liveOnboarding(ctx) {
         },
         heading: 'Create your first draft form',
         lead: 'The same choice as Create form in Forms. You come back here once the draft is created.',
-        cancel: { label: 'Skip Forms for now', onCancel: () => saveState({ active_step: nextStepAfter('form', state.selected_products) }) }
+        cancel: { label: 'Skip Forms for now', onCancel: () => saveState({ active_step: nextStepAfter('form', selectedProductsForView()) }) }
       });
     }
     if (currentStep === 'form' && $('#live-forms-form')) {
@@ -651,7 +619,7 @@ export async function liveOnboarding(ctx) {
         justCreated = null;
         await saveState({
           forms_form_id: savedForm.id,
-          active_step: nextStepAfter('form', state.selected_products)
+          active_step: nextStepAfter('form', selectedProductsForView())
         });
         toast('Draft form updated (unpublished).');
       });
@@ -692,7 +660,7 @@ export async function liveOnboarding(ctx) {
             });
         await saveState({
           flow_id: savedFlow.id,
-          active_step: 'review'
+          active_step: nextStepAfter('flow', selectedProductsForView())
         });
         toast(existing ? 'Workflow updated.' : 'Draft workflow created (status: draft).');
       });
@@ -718,10 +686,10 @@ export async function liveOnboarding(ctx) {
         $('#finish-live-setup').onclick = async () => {
           await saveState({ completed: true });
           const dest = effectiveProduct !== 'suite'
-            ? PRODUCT_INFO[effectiveProduct].dashboard
+            ? info.dashboard
             : state.selected_products.length === 1
               ? PRODUCT_INFO[state.selected_products[0]].dashboard
-              : '/enquiries';
+              : '/overview';
           ctx.navigate(dest);
         };
       }

@@ -16,22 +16,22 @@ export const PRODUCT_INFO = {
 const meetTab = (key, label, icon) => [key, label, `/meet?tab=${key}`, icon];
 export const NAVIGATION = {
   meet: [
-    ['Scheduling', [meetTab('types', 'Event types', 'CalendarDays'), meetTab('meetings', 'Meetings', 'CalendarCheck'), meetTab('video', 'Video', 'Video'), meetTab('polls', 'Polls', 'Clock')]],
+    ['Meet', [meetTab('overview', 'Overview', 'LayoutDashboard'), meetTab('meetings', 'Bookings', 'CalendarCheck'), meetTab('availability', 'Availability', 'Clock'), meetTab('types', 'Events', 'CalendarDays'), meetTab('video', 'Video', 'Video'), meetTab('polls', 'Polls', 'Users')]],
     // "Meet reminders" are Meet's own emails around a meeting; Flow is the separate automation product.
     ['People & follow-up', [meetTab('contacts', 'Contacts', 'Users'), meetTab('workflows', 'Meet reminders', 'Bell')]],
     ['Insights', [meetTab('analytics', 'Analytics', 'Activity'), meetTab('insights', 'Notes & AI', 'FileText')]],
-    ['Setup', [meetTab('integrations', 'Calendars & apps', 'Plug'), meetTab('emails', 'Email delivery', 'Inbox')]]
+    ['Setup', [meetTab('integrations', 'Connections', 'Plug'), meetTab('emails', 'Email delivery', 'Inbox')]]
   ],
   forms: [
-    ['Forms', [['forms', 'All forms', '/forms', 'Files']]],
-    ['Responses', [['enquiries', 'Enquiries', '/enquiries', 'Inbox']]]
+    ['Forms', [['overview', 'Overview', '/forms?tab=overview', 'LayoutDashboard'], ['forms', 'All forms', '/forms?tab=all', 'Files']]],
+    ['Responses', [['enquiries', 'Responses', '/enquiries?from=response', 'Inbox']]]
   ],
   flow: [
-    ['Automations', [['flows', 'Flows', '/flow', 'Workflow'], ['runs', 'Run history', '/flow/runs', 'History'], ['tasks', 'Tasks', '/flow/tasks', 'CheckCircle2']]],
+    ['Flow', [['overview', 'Overview', '/flow?tab=overview', 'LayoutDashboard'], ['flows', 'Workflows', '/flow?tab=flows', 'Workflow'], ['runs', 'Run history', '/flow/runs', 'History'], ['tasks', 'Tasks', '/flow/tasks', 'CheckCircle2'], ['connections', 'Connections', '/flow?tab=connections', 'Plug']]],
     ['Follow-up', [['enquiries', 'Enquiries', '/enquiries', 'Inbox']]]
   ],
   suite: [
-    ['Across products', [['home', 'Overview', '/', 'LayoutDashboard'], ['enquiries', 'Enquiries', '/enquiries', 'Inbox']]]
+    ['Across products', [['home', 'Overview', '/overview', 'LayoutDashboard'], ['enquiries', 'Enquiries', '/enquiries', 'Inbox']]]
   ]
 };
 
@@ -39,6 +39,7 @@ const MEET_TABS = new Set(NAVIGATION.meet.flatMap(([, items]) => items.map(([key
 
 // The sidebar item for the current page, or null.
 export function currentSection(product, path, query) {
+  if (path === '/overview') return 'home';
   if (path === '/setup' || path.startsWith('/setup/')) return 'setup';
   if (path === '/account') return 'account';
   if (path === '/billing') return 'billing';
@@ -47,15 +48,19 @@ export function currentSection(product, path, query) {
     if (path.startsWith('/meet/event-types/')) return 'types';
     if (path.startsWith('/meet/contacts/')) return 'contacts';
     const tab = query.get('tab') === 'calendar' ? 'integrations' : query.get('tab');
-    return MEET_TABS.has(tab) ? tab : 'types';
+    return MEET_TABS.has(tab) ? tab : 'overview';
   }
-  if (product === 'forms') return 'forms';
-  if (product === 'flow') return /^\/flow\/(runs|tasks)$/.exec(path)?.[1] || 'flows';
+  if (product === 'forms') return query.get('tab') === 'all' ? 'forms' : 'overview';
+  if (product === 'flow') {
+    const route = /^\/flow\/(runs|tasks)$/.exec(path)?.[1];
+    if (route) return route;
+    return ['overview', 'flows', 'connections'].includes(query.get('tab')) ? query.get('tab') : 'overview';
+  }
   return path === '/' ? 'home' : null;
 }
 
 export function sectionLabel(product, key) {
-  if (key === 'setup') return 'Guided setup';
+  if (key === 'setup') return 'Help & setup';
   if (key === 'account') return 'Account & settings';
   if (key === 'billing') return 'Plans & billing';
   for (const [, items] of NAVIGATION[product] || []) for (const [id, label] of items) if (id === key) return label;

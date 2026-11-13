@@ -1,5 +1,6 @@
 import { $, $$, api, ask, badge, boot, browserZone, copy, dateKey, errorBlock, fmtDateTime, fmtFull, handleSubmit, html, isAdmin, loading, minutesToTime, mount, notice, raw, session, timeToMinutes, toast, workspace, wsPath, zoneOptions } from './core.mjs';
 import { setTitle } from './pages.mjs';
+import { icon } from './design-system.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // Polls
@@ -7,8 +8,8 @@ import { setTitle } from './pages.mjs';
 export async function pollsTab(ctx, panel) {
   const polls = await api('GET', wsPath('/polls'));
   if (!ctx.alive()) return;
-  mount(panel, html`<div class="row-between"><p class="muted">Propose times, let people vote without an account, then book the winner for everyone.</p><button class="btn btn-primary" id="new-poll">New poll</button></div>
-    <div id="poll-form"></div>
+  mount(panel, html`<div class="meet-section-intro"><p class="muted">Suggest a few times. Guests vote from a link, then you book the time that works for the group.</p><button class="btn btn-primary" id="new-poll">Create a poll</button></div>
+    <div id="poll-form" class="meet-inline-editor"></div>
     ${polls.length ? html`<ul class="list section-gap">${polls.map(poll => html`<li class="row-between"><div><div class="list-title">${poll.title}</div>
       <div class="meta"><span>${poll.vote_count} ${poll.vote_count === 1 ? 'vote' : 'votes'}</span><span>${fmtDateTime(poll.created_at)}</span>${isAdmin() ? html`<span>${poll.host_name}</span>` : ''}</div></div>
       <div class="row">${badge(poll.status === 'open' ? 'pending' : poll.status === 'booked' ? 'confirmed' : 'canceled', poll.status)}<button class="btn btn-small" data-copy="${location.origin}/meet/poll/${poll.slug}">Copy link</button><button class="btn btn-small" data-open="${poll.id}">Results</button></div></li>
@@ -16,17 +17,20 @@ export async function pollsTab(ctx, panel) {
   $$('[data-copy]', panel).forEach(button => button.onclick = () => copy(button.dataset.copy, 'Poll link'));
   $$('[data-open]', panel).forEach(button => button.onclick = () => pollResults(ctx, button.dataset.open));
   $('#new-poll').onclick = () => {
+    $('#new-poll').disabled = true;
     const options = [''];
-    mount($('#poll-form'), html`<form class="card card-plain section-gap" id="create-poll" novalidate><h2>New poll</h2>
-      <label for="poll-title">Title</label><input id="poll-title" name="title" required maxlength="120" placeholder="Quarterly planning">
-      <div class="inline-fields"><div><label for="poll-duration">Duration (minutes)</label><input id="poll-duration" name="duration_min" type="number" min="5" max="720" value="30"></div>
-        <div><label for="poll-zone">Time zone</label><select id="poll-zone" name="timezone">${zoneOptions(browserZone())}</select></div></div>
-      <label for="poll-location">Location</label><input id="poll-location" name="location" maxlength="300">
-      <label for="poll-description">Description</label><textarea id="poll-description" name="description" maxlength="2000"></textarea>
-      <fieldset><legend class="label">Proposed times (your browser's time zone)</legend><div id="poll-options"></div><button class="btn btn-small" type="button" id="add-option">Add a time</button></fieldset>
-      <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Create poll</button></div></form>`);
+    mount($('#poll-form'), html`<form class="meet-poll-form section-gap" id="create-poll" novalidate><div class="row-between meet-poll-form__header"><div><p class="page-eyebrow">GROUP AVAILABILITY</p><h2>Find a time that works</h2><p class="muted">Suggest times; invitees choose when they can attend.</p></div><button class="btn btn-small" type="button" id="cancel-poll">Cancel</button></div>
+      <div class="meet-poll-form__layout"><div class="meet-poll-form__details">
+        <label for="poll-title">What is this meeting for?</label><input id="poll-title" name="title" required maxlength="120" placeholder="Quarterly planning">
+        <div class="inline-fields"><div><label for="poll-duration">Meeting length</label><select id="poll-duration" name="duration_min">${[15, 30, 45, 60, 90, 120].map(minutes => html`<option value="${minutes}" ${minutes === 30 ? raw('selected') : ''}>${minutes} minutes</option>`)}</select></div>
+          <div><label for="poll-zone">Time zone for proposed times</label><select id="poll-zone" name="timezone">${zoneOptions(browserZone())}</select></div></div>
+        <label for="poll-location">Where will you meet? <span class="muted">Optional</span></label><input id="poll-location" name="location" maxlength="300" placeholder="Video call or meeting place">
+        <details class="meet-advanced-field"><summary>Add a note for voters</summary><label for="poll-description">What should invitees know?</label><textarea id="poll-description" name="description" maxlength="2000" rows="3" placeholder="Add context people need before voting"></textarea></details>
+      </div><fieldset class="meet-poll-times"><legend class="label">Possible times <span class="muted">shown in ${browserZone().replace(/_/g, ' ')}</span></legend><p class="hint">Invitees can select every time they’re available. You choose the final time.</p><div id="poll-options"></div><button class="btn btn-small" type="button" id="add-option">+ Add another time</button></fieldset></div>
+      <div data-form-status tabindex="-1"></div><div class="actions meet-poll-form__actions"><button class="btn btn-primary" type="submit">Create poll</button></div></form>`);
     const draw = () => mount($('#poll-options'), html`${options.map((value, index) => html`<div class="range"><input type="datetime-local" data-option="${index}" value="${value}" aria-label="Proposed time ${index + 1}"></div>`)}`);
     draw();
+    $('#cancel-poll').onclick = () => { $('#poll-form').replaceChildren(); $('#new-poll').disabled = false; };
     $('#add-option').onclick = () => { options.push(''); draw(); };
     $('#poll-options').addEventListener('change', event => { options[Number(event.target.dataset.option)] = event.target.value; });
     handleSubmit($('#create-poll'), async data => {
@@ -92,8 +96,8 @@ export async function contactsTab(ctx, panel) {
   const search = ctx.query.get('q') || '';
   const contacts = await api('GET', wsPath('/contacts' + (search ? '?q=' + encodeURIComponent(search) : '')));
   if (!ctx.alive()) return;
-  mount(panel, html`<form class="row" id="contact-search" role="search"><label class="visually-hidden" for="cq">Search contacts</label><input id="cq" name="q" value="${search}" placeholder="Search name, email or company"><button class="btn" type="submit">Search</button><button class="btn" type="button" id="new-contact">Add contact</button></form>
-    <p class="hint">Contacts are created automatically from bookings and form responses.</p>
+  mount(panel, html`<div class="meet-section-intro"><p class="muted">People are added here when they book a meeting or submit a form.</p><button class="btn" type="button" id="new-contact">Add contact</button></div>
+    <form class="meet-search" id="contact-search" role="search"><label class="visually-hidden" for="cq">Search contacts</label><span>${icon('Search')}</span><input id="cq" name="q" value="${search}" placeholder="Search by name, email or company"><button class="btn btn-small" type="submit">Search</button></form>
     ${contacts.length ? html`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Owner</th><th>Meetings</th><th>Last activity</th></tr></thead><tbody>
       ${contacts.map(contact => html`<tr><td><a href="/meet/contacts/${contact.id}">${contact.name || '(no name)'}</a>${contact.tags.length ? html`<div class="muted">${contact.tags.join(', ')}</div>` : ''}</td><td>${contact.email}</td><td>${contact.company || '—'}</td><td>${contact.owner_name || '—'}</td><td>${contact.meeting_count}</td><td>${fmtDateTime(contact.last_activity_at || contact.created_at)}</td></tr>`)}
     </tbody></table></div>` : html`<div class="empty">${search ? 'No contacts match.' : 'No contacts yet.'}</div>`}`);
@@ -113,7 +117,7 @@ export async function contactPage(ctx) {
   catch (error) { return mount(ctx.main, html`<div class="container page">${errorBlock(error)}<a href="/meet?tab=contacts">Back to contacts</a></div>`); }
   if (!ctx.alive()) return;
   setTitle(`${contact.name || contact.email} · Meet by Schedora`);
-  mount(ctx.main, html`<div class="container page"><a href="/meet?tab=contacts">← Contacts</a>
+  mount(ctx.main, html`<div class="container page meet-contact-page"><a href="/meet?tab=contacts">← Contacts</a>
     <div class="row-between"><div><h1>${contact.name || contact.email}</h1><p class="muted">${contact.email}${contact.phone ? ' · ' + contact.phone : ''}</p></div>
       <div class="row"><a class="btn btn-primary" href="/meet?tab=meetings#schedule" id="book-contact">Schedule a follow-up</a></div></div>
     <div class="grid-2">
@@ -121,10 +125,12 @@ export async function contactPage(ctx) {
         <label for="c-name">Name</label><input id="c-name" name="name" maxlength="100" value="${contact.name}">
         <label for="c-company">Company</label><input id="c-company" name="company" maxlength="150" value="${contact.company}">
         <label for="c-phone">Phone</label><input id="c-phone" name="phone" type="tel" maxlength="30" value="${contact.phone || ''}">
-        <label for="c-owner">Owner</label><span class="hint">Round-robin events send this contact to their owner when the owner is free.</span>
+        <label for="c-owner">Follow-up owner</label><span class="hint">When a team member is available, future team bookings with this contact can go to them.</span>
         <select id="c-owner" name="owner_id"><option value="">No owner</option>${members.map(member => html`<option value="${member.id}" ${member.id === contact.owner_id ? raw('selected') : ''}>${member.name}</option>`)}</select>
-        <label for="c-tags">Tags (comma separated)</label><input id="c-tags" name="tags" value="${contact.tags.join(', ')}">
-        <label for="c-custom">Custom fields (one "key: value" per line)</label><textarea id="c-custom" name="custom">${Object.entries(contact.custom).map(([key, value]) => `${key}: ${value}`).join('\n')}</textarea>
+        <details class="meet-contact-extra"><summary>Tags and extra details</summary>
+          <label for="c-tags">Tags</label><input id="c-tags" name="tags" value="${contact.tags.join(', ')}" placeholder="Add tags separated by commas">
+          <label for="c-custom">Extra details</label><span class="hint">One detail per line, in the format “key: value”.</span><textarea id="c-custom" name="custom">${Object.entries(contact.custom).map(([key, value]) => `${key}: ${value}`).join('\n')}</textarea>
+        </details>
         <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Save</button>${isAdmin() ? html`<button class="btn btn-danger" type="button" id="delete-contact">Delete contact</button>` : ''}</div></form>
       <div class="stack">
         <section class="card card-plain"><h2>Notes</h2><form id="note-form" novalidate><label for="note" class="visually-hidden">New note</label><textarea id="note" name="body" required maxlength="5000" placeholder="Add a private note"></textarea><div class="actions"><button class="btn btn-small" type="submit">Add note</button></div></form>
@@ -165,28 +171,28 @@ export async function workflowsTab(ctx, panel) {
   const [workflows, types, options] = await Promise.all([api('GET', wsPath('/workflows')), api('GET', wsPath('/event-types')), api('GET', wsPath('/meet/options'))]);
   if (!ctx.alive()) return;
   const admin = isAdmin();
-  mount(panel, html`<div class="row-between"><p class="muted">Automatic emails and text messages around each meeting: reminders, follow-ups, thank-you notes.</p><button class="btn btn-primary" id="new-workflow">New workflow</button></div>
+  mount(panel, html`<div class="meet-section-intro"><p class="muted">Set reminders and follow-up messages once. Meet sends them automatically for new bookings.</p><button class="btn btn-primary" id="new-workflow">Add a reminder or follow-up</button></div>
     <div id="workflow-form"></div>
     ${workflows.length ? html`<ul class="list section-gap">${workflows.map(workflow => html`<li class="row-between"><div><div class="list-title">${workflow.name}</div>
-      <div class="meta"><span>${TRIGGER_LABELS[workflow.trigger_type]}${workflow.offset_min ? ` (${workflow.offset_min >= 60 ? workflow.offset_min / 60 + ' h' : workflow.offset_min + ' min'})` : ''}</span><span>${workflow.channel === 'sms' ? 'Text message' : 'Email'} to ${workflow.recipient}</span>
+      <div class="meta"><span>${TRIGGER_LABELS[workflow.trigger_type]}${workflow.offset_min ? ` (${workflow.offset_min >= 60 ? workflow.offset_min / 60 + ' h' : workflow.offset_min + ' min'})` : ''}</span><span>${workflow.channel === 'sms' ? 'Text message' : 'Email'} to ${workflow.recipient === 'invitee' ? 'invitee' : 'host'}</span>
         <span>${workflow.event_title || 'All event types'}</span>${workflow.condition ? html`<span>Only if ${workflow.condition.question} ${workflow.condition.op.replace('_', ' ')} ${workflow.condition.value ?? ''}</span>` : ''}</div></div>
       <div class="row">${badge(workflow.active ? 'active' : 'paused', workflow.active ? 'On' : 'Off')}<button class="btn btn-small" data-toggle="${workflow.id}" data-active="${workflow.active}">${workflow.active ? 'Turn off' : 'Turn on'}</button><button class="btn btn-small btn-danger" data-delete="${workflow.id}">Delete</button></div></li>`)}</ul>`
-      : html`<div class="empty section-gap">No workflows yet. A good first one: a text reminder an hour before each meeting.</div>`}`);
+      : html`<div class="empty section-gap">No reminders or follow-ups yet. Add one to keep guests informed automatically.</div>`}`);
   $$('[data-toggle]', panel).forEach(button => button.onclick = async () => { try { await api('PATCH', wsPath('/workflows/' + button.dataset.toggle), { active: button.dataset.active !== 'true' }); ctx.render(); } catch (error) { toast(error.message); } });
   $$('[data-delete]', panel).forEach(button => button.onclick = async () => { if (await ask({ title: 'Delete this workflow?', body: 'Messages already scheduled still send.', confirm: 'Delete', danger: true })) { try { await api('DELETE', wsPath('/workflows/' + button.dataset.delete)); ctx.render(); } catch (error) { toast(error.message); } } });
   $('#new-workflow').onclick = () => {
-    mount($('#workflow-form'), html`<form class="card card-plain section-gap" id="wf" novalidate><h2>New workflow</h2>
-      <label for="wf-name">Name</label><input id="wf-name" name="name" required maxlength="120" placeholder="Text reminder">
+    mount($('#workflow-form'), html`<form class="meet-reminder-form section-gap" id="wf" novalidate><h2>Choose a reminder or follow-up</h2>
+      <label for="wf-name">Name this message</label><input id="wf-name" name="name" required maxlength="120" placeholder="Reminder before your meeting">
       <div class="inline-fields">
         <div><label for="wf-event">Event type</label><select id="wf-event" name="event_type_id">${admin ? html`<option value="">All event types</option>` : ''}${types.filter(type => !type.managed_template).map(type => html`<option value="${type.id}">${type.title}</option>`)}</select></div>
         <div><label for="wf-trigger">When</label><select id="wf-trigger" name="trigger_type">${Object.entries(TRIGGER_LABELS).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select></div>
-        <div><label for="wf-offset">Minutes before/after</label><input id="wf-offset" name="offset_min" type="number" min="0" max="43200" value="60"></div>
+        <div><label for="wf-offset">How long before or after?</label><input id="wf-offset" name="offset_min" type="number" min="0" max="43200" value="60"></div>
         <div><label for="wf-channel">Send</label><select id="wf-channel" name="channel"><option value="email">Email</option><option value="sms">Text message (SMS)</option></select></div>
         <div><label for="wf-to">To</label><select id="wf-to" name="recipient"><option value="invitee">Invitee</option><option value="host">Host(s)</option></select></div>
       </div>
       <label for="wf-subject">Email subject</label><input id="wf-subject" name="subject" maxlength="200" value="Reminder: {{event.title}}">
       <label for="wf-body">Message</label><textarea id="wf-body" name="body" required maxlength="5000">Hi {{invitee.name}}, see you {{booking.start}}. Join or change: {{manage_url}}</textarea>
-      <p class="hint">Placeholders: ${options.placeholders.map(item => html`<code>{{${item}}}</code> `)} and <code>{{answer.question_key}}</code>. Text messages go to the phone number the invitee gives.</p>
+      <p class="hint">Schedora fills these from the booking, event and invitee: ${options.placeholders.map(item => html`<code>{{${item}}}</code> `)} and <code>{{answer.question_key}}</code>. Text messages go to the phone number the invitee gives.</p>
       <details><summary>Only send when an answer matches (optional)</summary><div class="inline-fields"><div><label for="wf-q">Question key</label><input id="wf-q" name="cq" placeholder="budget"></div>
         <div><label for="wf-op">Rule</label><select id="wf-op" name="cop"><option value="equals">is</option><option value="not_equals">is not</option><option value="contains">includes</option><option value="answered">is answered</option></select></div>
         <div><label for="wf-v">Value (option key)</label><input id="wf-v" name="cv"></div></div></details>
@@ -207,9 +213,11 @@ export async function workflowsTab(ctx, panel) {
 
 export async function analyticsTab(ctx, panel) {
   const zone = browserZone();
-  // Default: the last 30 days and the next 30, so upcoming bookings show too.
-  const to = ctx.query.get('to') || dateKey(Date.now() + 30 * 86400000, zone);
-  const from = ctx.query.get('from') || dateKey(Date.now() - 30 * 86400000, zone);
+  const today = dateKey(Date.now(), zone);
+  const to = ctx.query.get('to') || today;
+  const from = ctx.query.get('from') || dateKey(Date.now() - 29 * 86400000, zone);
+  const presetDays = [7, 30, 90].find(days => to === today && from === dateKey(Date.now() - (days - 1) * 86400000, zone));
+  const customRange = !presetDays;
   const data = await api('GET', wsPath(`/analytics?from=${from}&to=${to}&tz=${encodeURIComponent(zone)}`));
   if (!ctx.alive()) return;
   const { totals } = data;
@@ -228,7 +236,15 @@ export async function analyticsTab(ctx, panel) {
   const hours = [...Array(24).keys()];
   const bars = (rows, max, caption) => rows.length ? html`<ul class="hbars" aria-label="${caption}">${rows.slice(0, 10).map(row => html`<li><span class="hbar-label">${row.label}</span>
     <span class="hbar-track"><span class="hbar" data-width="${Math.round(row.booked / max * 100)}" title="${row.label}: ${row.booked} booked, ${row.canceled} canceled"></span></span><span class="hbar-value">${row.booked}${row.canceled ? html` <span class="muted">(${row.canceled} canceled)</span>` : ''}</span></li>`)}</ul>` : html`<p class="muted">No data.</p>`;
-  mount(panel, html`<form class="row" id="range"><label for="a-from">From</label><input id="a-from" name="from" type="date" value="${from}"><label for="a-to">To</label><input id="a-to" name="to" type="date" value="${to}"><button class="btn btn-small" type="submit">Update</button><span class="muted">Times in ${zone.replace(/_/g, ' ')}</span></form>
+  mount(panel, html`<div class="meet-analytics">
+    <div class="meet-analytics__range" aria-label="Analytics date range">
+      <div class="meet-analytics__presets" role="group" aria-label="Choose a reporting period">
+        ${[[7, '7 days'], [30, '30 days'], [90, '90 days']].map(([days, label]) => html`<button class="btn btn-small" type="button" data-analytics-days="${days}" aria-pressed="${Number(days) === presetDays ? 'true' : 'false'}">${label}</button>`)}
+      </div>
+      <details class="meet-analytics__custom" ${customRange ? raw('open') : ''}><summary>Choose dates</summary>
+        <form class="meet-analytics__date-form" id="range"><label for="a-from">From</label><input id="a-from" name="from" type="date" value="${from}"><label for="a-to">To</label><input id="a-to" name="to" type="date" value="${to}"><button class="btn btn-small btn-primary" type="submit">Apply</button><span class="muted">Times in ${zone.replace(/_/g, ' ')}</span></form>
+      </details>
+    </div>
     <div class="stat-grid section-gap">${[['Scheduled', totals.scheduled], ['Confirmed', totals.confirmed], ['Canceled', totals.canceled], ['Cancellation rate', totals.cancellation_rate + '%'], ['Median lead time', totals.median_lead_hours == null ? '—' : totals.median_lead_hours >= 48 ? Math.round(totals.median_lead_hours / 24) + ' days' : totals.median_lead_hours + ' h'], ['Rescheduled', totals.rescheduled]]
       .map(([label, value]) => html`<div class="stat"><span class="stat-value">${value}</span><span class="stat-label">${label}</span></div>`)}</div>
     ${data.revenue.length ? html`<p>Revenue from paid bookings: ${data.revenue.map(item => new Intl.NumberFormat(undefined, { style: 'currency', currency: item.currency.toUpperCase() }).format(item.cents / 100)).join(', ')}</p>` : ''}
@@ -240,11 +256,16 @@ export async function analyticsTab(ctx, panel) {
     <section class="card card-plain section-gap"><h2>Busiest times</h2>
       <div class="heatmap" role="img" aria-label="Meetings by weekday and hour; the darkest cell has ${maxCell}"><span></span>${hours.map(hour => html`<span class="heat-hour">${hour % 3 === 0 ? hour : ''}</span>`)}
         ${days.map((day, index) => html`<span class="heat-day">${day}</span>${hours.map(hour => html`<span class="heat-cell" data-level="${data.heatmap[index][hour] / maxCell}" title="${day} ${String(hour).padStart(2, '0')}:00 — ${data.heatmap[index][hour]}"></span>`)}`)}</div>
-      <details><summary>Show as a table</summary><div class="table-wrap"><table><thead><tr><th>Day</th>${hours.map(hour => html`<th>${hour}</th>`)}</tr></thead><tbody>${days.map((day, index) => html`<tr><th scope="row">${day}</th>${hours.map(hour => html`<td>${data.heatmap[index][hour] || ''}</td>`)}</tr>`)}</tbody></table></div></details></section>`);
+      <details><summary>Show as a table</summary><div class="table-wrap"><table><thead><tr><th>Day</th>${hours.map(hour => html`<th>${hour}</th>`)}</tr></thead><tbody>${days.map((day, index) => html`<tr><th scope="row">${day}</th>${hours.map(hour => html`<td>${data.heatmap[index][hour] || ''}</td>`)}</tr>`)}</tbody></table></div></details></section></div>`);
   $$('[data-width]', panel).forEach(bar => { bar.style.width = Math.max(1, bar.dataset.width) + '%'; });
   $$('[data-height]', panel).forEach(column => { column.style.height = Number(column.dataset.height) ? column.dataset.height + '%' : '0'; });
   $$('[data-level]', panel).forEach(cell => { const level = Number(cell.dataset.level); if (level > 0) cell.style.background = `color-mix(in oklab, var(--accent) ${Math.round(15 + level * 85)}%, var(--surface))`; });
   $('#range').onsubmit = event => { event.preventDefault(); ctx.navigate(`/meet?tab=analytics&from=${$('#a-from').value}&to=${$('#a-to').value}`, { replace: true }); };
+  $$('[data-analytics-days]', panel).forEach(button => button.addEventListener('click', () => {
+    const end = Date.now();
+    const days = Number(button.dataset.analyticsDays);
+    ctx.navigate(`/meet?tab=analytics&from=${dateKey(end - (days - 1) * 86400000, zone)}&to=${dateKey(end, zone)}`, { replace: true });
+  }));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -253,8 +274,29 @@ export async function analyticsTab(ctx, panel) {
 const PROVIDERS = [['google', 'Google Calendar and Meet', 'Busy times, events added to your calendar, Google Meet links.'], ['microsoft', 'Microsoft 365 / Outlook', 'Busy times, events in Outlook, Teams links.'], ['zoom', 'Zoom', 'A unique Zoom link for each meeting.']];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+export async function availabilityTab(ctx, panel) {
+  const schedule = await api('GET', wsPath('/schedule'));
+  if (!ctx.alive()) return;
+  const rules = (schedule?.rules || [1, 2, 3, 4, 5].map(weekday => ({ weekday, start_min: 540, end_min: 1020 }))).map(rule => ({ ...rule }));
+  mount(panel, html`<section class="card card-plain meet-availability"><div class="page-head"><div class="page-head-text"><p class="page-eyebrow">WHEN PEOPLE CAN BOOK</p><h2>My working hours</h2><p class="lead">Choose your usual hours. Event types can use these hours when checking availability for bookings.</p></div><a class="btn" href="/meet?tab=integrations">Connect a calendar</a></div>
+    <form id="hours-form" novalidate><label for="h-zone">Time zone</label><select id="h-zone" name="timezone">${zoneOptions(schedule?.timezone || browserZone())}</select><div id="hours"></div><div data-form-status tabindex="-1"></div><div class="actions"><button class="btn btn-primary" type="submit">Save working hours</button></div></form></section>`);
+  const drawHours = () => mount($('#hours'), html`${[1, 2, 3, 4, 5, 6, 0].map(day => {
+    const rule = rules.find(item => item.weekday === day);
+    return html`<div class="range"><label class="check day-label"><input type="checkbox" data-hday="${day}" ${rule ? raw('checked') : ''}> ${WEEKDAYS[day]}</label>
+      ${rule ? html`<input type="time" aria-label="${WEEKDAYS[day]} start" data-hstart="${day}" value="${minutesToTime(rule.start_min)}"><span aria-hidden="true">–</span><input type="time" aria-label="${WEEKDAYS[day]} end" data-hend="${day}" value="${minutesToTime(rule.end_min)}">` : html`<span class="muted">Off</span>`}</div>`;
+  })}`);
+  drawHours();
+  $('#hours').addEventListener('change', event => {
+    const { hday, hstart, hend } = event.target.dataset;
+    if (hday !== undefined) { if (event.target.checked) rules.push({ weekday: Number(hday), start_min: 540, end_min: 1020 }); else rules.splice(rules.findIndex(rule => rule.weekday === Number(hday)), 1); drawHours(); }
+    if (hstart !== undefined) rules.find(rule => rule.weekday === Number(hstart)).start_min = timeToMinutes(event.target.value, false);
+    if (hend !== undefined) rules.find(rule => rule.weekday === Number(hend)).end_min = timeToMinutes(event.target.value, true);
+  });
+  handleSubmit($('#hours-form'), async data => { await api('PUT', wsPath('/schedule'), { timezone: data.timezone, rules, overrides: schedule?.overrides || [] }); toast('Working hours saved.'); });
+}
+
 export async function integrationsTab(ctx, panel) {
-  const [calendar, integrations, schedule] = await Promise.all([api('GET', wsPath('/calendar')), api('GET', wsPath('/integrations')), api('GET', wsPath('/schedule'))]);
+  const [calendar, integrations] = await Promise.all([api('GET', wsPath('/calendar')), api('GET', wsPath('/integrations'))]);
   if (!ctx.alive()) return;
   const connected = provider => integrations.find(item => item.provider === provider && item.user_id === session.user.id);
   const stripe = integrations.find(item => item.provider === 'stripe' && !item.user_id);
@@ -278,11 +320,8 @@ export async function integrationsTab(ctx, panel) {
         <form id="calendar-form" novalidate><label for="feed_url">Private calendar address</label><input id="feed_url" name="feed_url" type="url" required placeholder="https://… or webcal://…" autocomplete="off">
           <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Add calendar</button></div></form></details>
     </section>
-    <section class="card card-plain section-gap"><h2>My working hours</h2><p class="hint">Used by team event types that are set to follow each host's working hours.</p>
-      <form id="hours-form" novalidate><label for="h-zone">Time zone</label><select id="h-zone" name="timezone">${zoneOptions(schedule?.timezone || browserZone())}</select><div id="hours"></div>
-        <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Save working hours</button></div></form></section>
-    ${isAdmin() ? html`<section class="card card-plain section-gap"><h2>Payments (Razorpay)</h2>
-      ${razorpay ? html`<p>${badge('active', `Connected (${razorpay.account} mode)`)}</p><p>Payments use Razorpay's hosted checkout. Any customer-paid processing fees are controlled by your approved Razorpay Fee Bearer settings. Schedora adds no extra fee.</p><button class="btn btn-small btn-danger" id="razorpay-disconnect">Disconnect Razorpay</button>` : html`
+    ${isAdmin() ? html`<details class="meet-payment-options section-gap"><summary><span><strong>Accept payments</strong><small>${razorpay ? `Connected · Razorpay (${razorpay.account} mode)` : stripe ? `Connected · Stripe (${stripe.account} mode)` : 'Optional · only set this up if you charge for appointments'}</small></span></summary><div class="meet-payment-options__body">
+      ${razorpay ? html`<details class="provider-setup"><summary><span>Razorpay</span>${badge('active', `Connected · ${razorpay.account} mode`)}</summary><div><p>Payments use Razorpay's hosted checkout. Customer-paid processing fees follow your approved Razorpay settings; Schedora adds no extra fee.</p><button class="btn btn-small btn-danger" id="razorpay-disconnect">Disconnect Razorpay</button></div></details>` : html`<details class="provider-setup"><summary>Connect Razorpay</summary><div>
         <p>Accept INR appointment payments into your own Razorpay account. Start with test keys. Configure a webhook for <code>payment_link.paid</code> at:</p><p class="hint">${location.origin}/api/payments/razorpay/${workspace().id}</p>
         <p>To collect processing charges from customers, ask Razorpay to enable its Convenience Fee model, then select it under Fee Bearer. Razorpay shows the actual fee and applicable tax before payment. There is no additional Schedora charge. Fee Bearer changes can affect both test and live mode.</p>
         ${stripe ? html`<p>Disconnect Stripe before connecting Razorpay.</p>` : html`<form id="razorpay-form" novalidate>
@@ -291,14 +330,13 @@ export async function integrationsTab(ctx, panel) {
           <label for="rzp-webhook">Webhook signing secret</label><input id="rzp-webhook" name="webhook_secret" type="password" required minlength="16" autocomplete="new-password">
           <label class="check"><input type="checkbox" name="customer_pays_processing"> Razorpay has approved and enabled customer-paid convenience fees on this account</label>
           <p class="hint">This checkbox records your setup; it does not enable fees at Razorpay. Leave it unchecked until Razorpay confirms activation.</p>
-          <div data-form-status tabindex="-1"></div><button class="btn" type="submit">Connect Razorpay</button></form>`}`}
-      </section><section class="card card-plain section-gap"><h2>Payments (Stripe)</h2>
-      ${stripe ? html`<p>${badge('active', `Connected (${stripe.account} mode)`)}</p><button class="btn btn-small btn-danger" id="stripe-disconnect">Disconnect Stripe</button>`
-        : html`<p class="hint">Invitees pay through your own Stripe account. Create a restricted key with Checkout Sessions write access and a webhook for <code>checkout.session.completed</code>.</p>
+          <div data-form-status tabindex="-1"></div><button class="btn" type="submit">Connect Razorpay</button></form>`}</div></details>`}
+      ${stripe ? html`<details class="provider-setup"><summary><span>Stripe</span>${badge('active', `Connected · ${stripe.account} mode`)}</summary><div><button class="btn btn-small btn-danger" id="stripe-disconnect">Disconnect Stripe</button></div></details>`
+        : html`<details class="provider-setup"><summary>Connect Stripe</summary><div><p class="hint">Invitees pay through your own Stripe account. Create a restricted key with Checkout Sessions write access and a webhook for <code>checkout.session.completed</code>.</p>
         <form id="stripe-form" novalidate><label for="sk">Restricted or secret key</label><input id="sk" name="secret_key" required autocomplete="off" placeholder="rk_live_…">
           <label for="whsec">Webhook signing secret</label><input id="whsec" name="webhook_secret" required autocomplete="off" placeholder="whsec_…">
-          <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Connect Stripe</button></div></form>`}
-      ${!stripe && !razorpay && boot.integrations?.testPayments ? html`<p class="muted">Until a payment provider is connected, paid event types use a test checkout (no money moves).</p>` : ''}</section>` : ''}`);
+          <div data-form-status tabindex="-1"></div><div class="actions"><button class="btn" type="submit">Connect Stripe</button></div></form></div></details>`}
+      ${!stripe && !razorpay && boot.integrations?.testPayments ? html`<p class="muted">Until a payment provider is connected, paid event types use a test checkout (no money moves).</p>` : ''}</div></details>` : ''}`);
 
   $$('[data-connect]', panel).forEach(button => button.onclick = async () => { try { location.href = (await api('GET', wsPath(`/integrations/${button.dataset.connect}/start`))).url; } catch (failure) { toast(failure.message); } });
   $$('[data-disconnect]', panel).forEach(button => button.onclick = async () => { if (await ask({ title: 'Disconnect?', body: 'Busy times and calendar events from this app stop syncing.', confirm: 'Disconnect', danger: true })) { await api('DELETE', wsPath('/integrations/' + button.dataset.disconnect)); ctx.render(); } });
@@ -306,20 +344,6 @@ export async function integrationsTab(ctx, panel) {
   $('#sync-now')?.addEventListener('click', async () => { try { await api('POST', wsPath('/calendar/sync')); ctx.render(); } catch (failure) { toast(failure.message); } });
   handleSubmit($('#calendar-form'), async data => { const result = await api('POST', wsPath('/calendar'), data); toast(result.connection.status === 'active' ? 'Calendar added.' : 'Calendar saved, but the first check failed.'); ctx.render(); });
 
-  const rules = (schedule?.rules || [1, 2, 3, 4, 5].map(weekday => ({ weekday, start_min: 540, end_min: 1020 }))).map(rule => ({ ...rule }));
-  const drawHours = () => mount($('#hours'), html`${[1, 2, 3, 4, 5, 6, 0].map(day => {
-    const rule = rules.find(item => item.weekday === day);
-    return html`<div class="range"><label class="check day-label"><input type="checkbox" data-hday="${day}" ${rule ? raw('checked') : ''}> ${WEEKDAYS[day]}</label>
-      ${rule ? html`<input type="time" aria-label="${WEEKDAYS[day]} start" data-hstart="${day}" value="${minutesToTime(rule.start_min)}"><span aria-hidden="true">–</span><input type="time" aria-label="${WEEKDAYS[day]} end" data-hend="${day}" value="${minutesToTime(rule.end_min)}">` : html`<span class="muted">Off</span>`}</div>`;
-  })}`);
-  drawHours();
-  $('#hours').addEventListener('change', event => {
-    const { hday, hstart, hend } = event.target.dataset;
-    if (hday !== undefined) { if (event.target.checked) rules.push({ weekday: Number(hday), start_min: 540, end_min: 1020 }); else rules.splice(rules.findIndex(rule => rule.weekday === Number(hday)), 1); drawHours(); }
-    if (hstart !== undefined) rules.find(rule => rule.weekday === Number(hstart)).start_min = timeToMinutes(event.target.value, false);
-    if (hend !== undefined) rules.find(rule => rule.weekday === Number(hend)).end_min = timeToMinutes(event.target.value, true);
-  });
-  handleSubmit($('#hours-form'), async data => { await api('PUT', wsPath('/schedule'), { timezone: data.timezone, rules, overrides: schedule?.overrides || [] }); toast('Working hours saved.'); });
   if ($('#stripe-form')) handleSubmit($('#stripe-form'), async data => {
     const result = await api('POST', wsPath('/integrations/stripe'), data);
     await ask({ title: 'Stripe connected', body: 'Add this webhook endpoint in Stripe (Developers → Webhooks) for checkout.session.completed:', fields: html`<input readonly value="${result.webhook_url}" aria-label="Webhook URL">`, confirm: 'Done' });
@@ -346,7 +370,7 @@ export async function insightsTab(ctx, panel) {
   const transcripts = await api('GET', wsPath('/transcripts' + (search ? '?q=' + encodeURIComponent(search) : '')));
   if (!ctx.alive()) return;
   const ai = boot.integrations?.ai;
-  mount(panel, html`${ai ? '' : notice('info', html`<p>AI recaps, briefs and chat need an Anthropic API key on the server (ANTHROPIC_API_KEY). Transcripts can be stored and searched without it.</p>`)}
+  mount(panel, html`${ai ? '' : notice('info', html`<p>AI meeting summaries aren’t available on this server yet. You can still save, upload and search transcripts.</p>`)}
     ${ai ? html`<section class="card card-plain"><h2>Ask about your meetings</h2><div id="chat-log" class="chat-log" aria-live="polite"></div>
       <form id="chat-form" class="row" novalidate><label for="chat-input" class="visually-hidden">Question</label><input id="chat-input" name="q" required maxlength="2000" placeholder="Who am I meeting tomorrow, and what did they tell us?"><button class="btn btn-primary" type="submit">Ask</button></form>
       <p class="hint">The assistant reads your meetings, availability, contacts and transcripts. It cannot book or cancel.</p></section>` : ''}
@@ -355,7 +379,7 @@ export async function insightsTab(ctx, panel) {
       <div id="transcript-form"></div>
       ${transcripts.length ? html`<ul class="list section-gap">${transcripts.map(item => html`<li><div class="row-between"><div><div class="list-title">${item.title}</div><div class="meta"><span>${fmtDateTime(item.created_at)}</span><span>${item.source}</span><span>${item.recap_count} recap(s)</span></div><p class="muted">${item.snippet}…</p></div>
         <div class="row"><button class="btn btn-small" data-view="${item.id}">Open</button></div></div><div id="t-${item.id}"></div></li>`)}</ul>` : html`<div class="empty section-gap">${search ? 'No transcripts match.' : 'No transcripts yet. Paste one from your call recorder, or upload a .vtt, .srt or .txt file.'}</div>`}
-      <p class="hint">Call-recording services can send transcripts automatically to <code>POST /api/workspaces/${workspace().id}/notetaker/transcripts</code> with an API key.</p></section>`);
+      <details class="meet-transcript-integration"><summary>Connect a call-recording service</summary><p class="hint">A call-recording service can send transcripts to your workspace using its API key.</p><code>POST /api/workspaces/${workspace().id}/notetaker/transcripts</code></details></section>`);
 
   $('#t-search').onsubmit = event => { event.preventDefault(); ctx.navigate('/meet?tab=insights&q=' + encodeURIComponent($('#tq').value), { replace: true }); };
   $('#add-transcript').onclick = () => {
