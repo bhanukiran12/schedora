@@ -6,16 +6,18 @@ Meet (scheduling), Forms (forms and intake) and Flow (automation) under one acco
 - [Supabase persistent storage](docs/SUPABASE.md): DATABASE_URL now selects PostgreSQL through the session pooler.
 - [Meet production release checklist](docs/MEET_RELEASE.md) · run `npm run production-check` in backend before release.
 - [Product vision](VISION.md) · [Product requirements](PRD.md) · [Product design](PRODUCT_DESIGN.md) · [Brand](BRAND.md)
+- [Product guide and external QA handbook](docs/PRODUCT_GUIDE_AND_QA.md): suite overview, route map, safe test setup and role-based acceptance scenarios.
+- [Meet production readiness plan](docs/MEET_PRODUCTION_READINESS_PLAN.md): the ordered design, feature, pricing, operations and future-vision checkpoints.
 - [Sprint roadmap and implementation status](SPRINT_ROADMAP.md) · [Launch status](LAUNCH.md)
-- [Deployment: GitHub → Vercel + Render](docs/DEPLOYMENT.md) · [Operations runbook](docs/OPERATIONS.md)
+- [Render Docker deployment preparation](docs/RENDER_DOCKER_DEPLOYMENT.md) · [Existing Vercel + Render deployment notes](docs/DEPLOYMENT.md) · [Operations runbook](docs/OPERATIONS.md)
 - [Authorization matrix](docs/AUTHORIZATION.md) · [Parity matrix](docs/PARITY_MATRIX.md) · [Pricing worksheet](docs/PRICING_WORKSHEET.md)
 
 ## Repository
 
 | Path | Deployed to | Contents |
 | --- | --- | --- |
-| `frontend/` | Vercel (static) | Browser app: HTML shell, ES modules, styles, logos, `vercel.json` |
-| `backend/` | Render (Node 24 web service) | API, background worker, SQLite migrations, tests, ops scripts |
+| `frontend/` | Render Docker image or Vercel (current split setup) | Browser app: HTML shell, ES modules, styles, logos |
+| `backend/` | Render Docker image | API, background worker, database migrations, tests, ops scripts |
 | `render.yaml` | Render Blueprint | Service, persistent disk and environment definition |
 | `.github/workflows/ci.yml` | GitHub Actions | Syntax check, shared-module check, tests, headless browser journeys |
 
