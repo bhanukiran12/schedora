@@ -284,7 +284,9 @@ async function behaviour(area, db, world, { kind, target, schema, counts }) {
 // ---- Rollback -------------------------------------------------------------------------------------------
 
 async function legacyService() {
-  const source = execFileSync('git', ['show', 'HEAD:backend/src/flow/service.mjs'], { cwd: backend, encoding: 'utf8' });
+  // A rehearsal must keep testing the deployed dispatcher after the release is committed.
+  const revision = process.env.FLOW_REHEARSAL_LEGACY_REF || '989cda5fc7972a6a907e97b4936faf30aa6327b6';
+  const source = execFileSync('git', ['show', `${revision}:backend/src/flow/service.mjs`], { cwd: backend, encoding: 'utf8' });
   const dir = join(work, 'legacy');
   mkdirSync(dir, { recursive: true });
   const src = pathToFileURL(join(backend, 'src') + '/').href;
@@ -294,7 +296,7 @@ async function legacyService() {
 
 async function rollbackRehearsal(area, path, world, flows, existing = null) {
   const legacy = await legacyService();
-  if (!existing) notes.push('Previous-release dispatcher: the committed (HEAD) backend/src/flow/service.mjs, run against the migrated database with current helper modules. Its dispatch, claim and recovery SQL matches the deployed image; later uncommitted edits to that file are the Flow v1 changes and response-edit context.');
+  if (!existing) notes.push(`Previous-release dispatcher: ${process.env.FLOW_REHEARSAL_LEGACY_REF || '989cda5fc7972a6a907e97b4936faf30aa6327b6'} backend/src/flow/service.mjs, run against the migrated database with current helper modules.`);
   // Negative control: the previous release without preparation, on a copy (SQLite only; the SQL is shared).
   if (path) {
     const control = path.replace(/\.db$/, '-control.db');
