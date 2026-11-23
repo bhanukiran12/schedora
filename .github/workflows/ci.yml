@@ -38,7 +38,11 @@ jobs:
       - name: Unit, API and integration tests
         run: npm test
       - name: Sheets editor browser journeys
-        run: npm run sheets-check
+        run: npm run sheets-check -- --expanded --products
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Flow v1 builder journeys
+        run: npm run flow-builder-check
         env:
           CHROME_PATH: /usr/bin/google-chrome
       - name: Browser journeys and responsive layout
@@ -81,6 +85,19 @@ jobs:
         run: |
           export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
           npm run test:postgres -- test/flow.test.mjs test/meet-readiness.test.mjs test/host-readiness.test.mjs test/enquiry-trail.test.mjs test/forms-reliability.test.mjs test/forms-media.test.mjs test/forms-jumps.test.mjs test/forms-choice-rules.test.mjs test/forms-url-params.test.mjs test/forms-evaluation-policy.test.mjs test/forms-rollout-compat.test.mjs test/forms-freeze.test.mjs test/forms-definition-io.test.mjs test/forms-respondent-signin.test.mjs test/forms-respondent-switch.test.mjs test/forms-response-filter.test.mjs test/forms-themes.test.mjs test/forms-groups.test.mjs test/meet-session.test.mjs test/monitoring.test.mjs test/email-reports.test.mjs test/task-deadlines.test.mjs test/postgres.test.mjs
+      - name: Flow v1 and connected product PostgreSQL checks
+        env:
+          DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
+        run: |
+          export DATABASE_CA_CERT="$(cat "$RUNNER_TEMP/schedora-pg-tls/server.crt")"
+          npm run test:postgres -- test/flow-engine.test.mjs test/flow-triggers.test.mjs test/flow-schedule.test.mjs test/flow-templates.test.mjs test/forms-payments.test.mjs test/forms-receipts.test.mjs test/google-sheets-sync.test.mjs test/meeting-followups.test.mjs test/meet-video-guidance.test.mjs test/meet-product-tools.test.mjs test/twilio.test.mjs
+      - name: Shared database upgrade and rollback from v23
+        env:
+          REHEARSAL_DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres
+          REHEARSAL_PG_CONTAINER: schedora-test-pg
+        run: |
+          export REHEARSAL_DATABASE_CA_FILE="$RUNNER_TEMP/schedora-pg-tls/server.crt"
+          npm run flow-rehearsal -- --postgres --pg-from 23
       - name: Release rehearsal against the revision production runs
         env:
           DATABASE_URL: postgres://postgres:schedora-ci-disposable@127.0.0.1:54329/postgres

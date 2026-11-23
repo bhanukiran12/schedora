@@ -154,7 +154,7 @@ async function waitFor(expression, label, timeout = 10000) {
   const seen = await evaluate("JSON.stringify({ url: location.href, ready: document.readyState, text: (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 160) })").catch(error => 'page unreadable: ' + error.message);
   throw new Error(`timed out waiting for ${label} after ${timeout} ms :: ${seen} :: log: ${browserLog.join(' | ') || 'none'}`);
 }
-const open = async (path, ready) => { await send('Page.navigate', { url: base + path }); await waitFor(`document.readyState === 'complete' && ${ready}`, path); };
+const open = async (path, ready) => { await send('Page.navigate', { url: base + path }); await waitFor(`document.readyState === 'complete' && location.href === ${JSON.stringify(base + path)} && (${ready})`, path); };
 const fill = (selector, value) => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error('missing ${selector}'); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); })()`);
 const click = selector => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error('missing ${selector}'); el.click(); })()`);
 const shown = selector => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
@@ -266,7 +266,8 @@ async function upgradeSection() {
   await startServer(newBackend, newFrontend, 'rh_upgrade');
   const after = (await q('rh_upgrade', 'SELECT name FROM schema_migrations ORDER BY name')).map(row => row.name);
   const added = after.filter(name => !oldMigrations.includes(name));
-  check(S, 'upgrade: applies exactly the five new steps', added.join() === 'postgres_v13_form_assets,postgres_v14_session_offers,postgres_v15_form_themes,postgres_v16_response_attribution,postgres_v17_respondent_signin', added.join());
+  const expectedAdded = freshMigrations.filter(name => !oldMigrations.includes(name));
+  check(S, 'upgrade: applies exactly the current release steps missing from the previous build', JSON.stringify(added) === JSON.stringify(expectedAdded), JSON.stringify({ expected: expectedAdded, added }));
   check(S, 'upgrade: every existing form stays public and no response gains an identity', Number((await q('rh_upgrade', "SELECT COUNT(*) AS count FROM forms WHERE access <> 'public'"))[0].count) === 0 && Number((await q('rh_upgrade', 'SELECT COUNT(*) AS count FROM responses WHERE respondent IS NOT NULL'))[0].count) === 0);
   check(S, 'upgrade: forms, published versions and responses are byte for byte unchanged', (await snapshot()) === before);
   check(S, 'upgrade: existing responses have no attribution', Number((await q('rh_upgrade', 'SELECT COUNT(*) AS count FROM responses WHERE attribution IS NOT NULL'))[0].count) === 0);
@@ -794,7 +795,11 @@ async function freezeSection() {
   };
   // The builder, as an author sees it: told first, then the server refuses even if the page is forced.
   const uiWrites = async label => {
-    await evaluate(`fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(owner.email)}, password: 'a sufficiently long password' }) })`);
+    // The preceding journey may be on the old standalone frontend origin. Sign
+    // in on this server's origin so its host-only session reaches the builder.
+    await open('/login', "document.querySelector('input[type=email]')");
+    const login = await evaluate(`(async () => { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(owner.email)}, password: 'a sufficiently long password' }) }); return response.status; })()`);
+    if (login !== 200) throw new Error(label + ': browser login failed (' + login + ')');
     await open(`/forms/${draftOnly.id}`, "document.querySelector('#save') && document.querySelector('[data-authoring-frozen]')");
     check(S, `${label}: the builder says editing is paused and disables Save and Publish`, await evaluate("document.querySelector('#save').disabled && document.querySelector('#publish').disabled"));
     await evaluate("(() => { const save = document.querySelector('#save'); save.disabled = false; save.removeAttribute('aria-disabled'); document.querySelector('#f-title')?.dispatchEvent(new Event('input', { bubbles: true })); save.click(); })()");
