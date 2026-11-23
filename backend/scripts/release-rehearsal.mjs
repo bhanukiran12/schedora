@@ -67,7 +67,9 @@ async function stopServer() {
 // Only what the server needs: nothing is inherited from a private environment.
 async function startServer(backend, frontend, database, extraEnv = {}) {
   await stopServer();
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'development', PORT: String(PORT), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl(database), DATABASE_CA_CERT: ca, SERVE_FRONTEND: 'true', FRONTEND_DIR: frontend, RATE_LIMIT_PER_MINUTE: '100000', ...extraEnv };
+  // Test mode uses host-only cookies. Development's .localhost cookie cannot
+  // authenticate a browser visiting this isolated 127.0.0.1 server.
+  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP, NODE_ENV: 'test', PORT: String(PORT), HOST: '127.0.0.1', BASE_URL: base, DATABASE_URL: dbUrl(database), DATABASE_CA_CERT: ca, SERVE_FRONTEND: 'true', FRONTEND_DIR: frontend, RATE_LIMIT_PER_MINUTE: '100000', ...extraEnv };
   let output = '';
   server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server.mjs'], { cwd: backend, env, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
@@ -800,6 +802,8 @@ async function freezeSection() {
     await open('/login', "document.querySelector('input[type=email]')");
     const login = await evaluate(`(async () => { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(owner.email)}, password: 'a sufficiently long password' }) }); return response.status; })()`);
     if (login !== 200) throw new Error(label + ': browser login failed (' + login + ')');
+    const signedIn = await evaluate("fetch('/api/me').then(response => response.json()).then(me => Boolean(me.user))");
+    if (!signedIn) throw new Error(label + ': browser did not retain the sign-in cookie');
     await open(`/forms/${draftOnly.id}`, "document.querySelector('#save') && document.querySelector('[data-authoring-frozen]')");
     check(S, `${label}: the builder says editing is paused and disables Save and Publish`, await evaluate("document.querySelector('#save').disabled && document.querySelector('#publish').disabled"));
     await evaluate("(() => { const save = document.querySelector('#save'); save.disabled = false; save.removeAttribute('aria-disabled'); document.querySelector('#f-title')?.dispatchEvent(new Event('input', { bubbles: true })); save.click(); })()");
