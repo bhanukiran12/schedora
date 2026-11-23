@@ -1,0 +1,117 @@
+{
+  "recorded_at": "2026-11-23T14:22:53.587411+00:00",
+  "source_commit": "1b8560f64efdef807ffe6b7bad7fcb447ae40302",
+  "branch": "codex/flow-v1-release-20261123",
+  "ci_run": "https://github.com/bhanukiran12/schedora/actions/runs/45191164513",
+  "ci_conclusion": "success",
+  "image_digest": "sha256:64fff4614c8f3709716bac87a497a38ad8069f46a5cb7e3c08f910b07dfb5670",
+  "aws": {
+    "region": "ap-south-1",
+    "stack": "schedora-web-staging",
+    "stack_status": "UPDATE_COMPLETE",
+    "task_definition": "schedora-web:21",
+    "desired": 1,
+    "running": 1,
+    "pending": 0,
+    "rollout": "COMPLETED",
+    "activation": "held",
+    "task_changes": [
+      "image",
+      "FLOW_V1_ACTIVATION=held"
+    ]
+  },
+  "database": {
+    "shared": true,
+    "before": 23,
+    "after": 33,
+    "pending": [],
+    "existing_table_row_counts_preserved": true,
+    "preexisting_tables": 82,
+    "preexisting_rows": 327,
+    "new_tables": 23,
+    "classic_workflows": [
+      {
+        "action_type": "task",
+        "status": "paused",
+        "count": 2
+      }
+    ],
+    "quiet_window_seconds": 181
+  },
+  "backup": {
+    "started_at": "2026-11-23T14:16:54.060Z",
+    "dump": "schedora-2026-11-23T14-16-54-059Z.dump",
+    "image": "postgres:17",
+    "source": "live",
+    "bytes": 299270,
+    "sha256": "8ff01c697516a0db7d5c06aaff3bdc9174d8322e8d8d99e1acb50a182199ba08",
+    "archive_entries": 484,
+    "tables": 82,
+    "rows": 327,
+    "differences": [],
+    "migrations": "postgres_v23_workbook_trash",
+    "verified": true,
+    "note": "Restored row counts match the source exactly.",
+    "finished_at": "2026-11-23T14:17:03.437Z"
+  },
+  "acceptance": {
+    "routing_health_hold_preflight": {
+      "checks": 12,
+      "failed": 0
+    },
+    "held_staging_journey": {
+      "checks": 9,
+      "failed": 0,
+      "synthetic_accounts_deleted": 2,
+      "messages_requested": 0,
+      "payments_requested": 0
+    },
+    "signed_in_chrome": "Flow overview loaded in existing workspace"
+  },
+  "legacy_service": {
+    "name": "schedora-api",
+    "revision": "989cda5fc7972a6a907e97b4936faf30aa6327b6",
+    "temporarily_suspended": true,
+    "resumed": true,
+    "dashboard_status": "Live",
+    "public_health": "unverified: scripted request timed out"
+  },
+  "verification": {
+    "unit": {
+      "tests": 556,
+      "passed": 548,
+      "failed": 0,
+      "skipped": 8
+    },
+    "postgres_regular": {
+      "tests": 210,
+      "passed": 209,
+      "failed": 0,
+      "skipped": 1
+    },
+    "postgres_flow_products": {
+      "tests": 67,
+      "passed": 67,
+      "failed": 0,
+      "skipped": 0
+    },
+    "flow_shared_database_rehearsal": {
+      "checks": 84,
+      "passed": 84
+    },
+    "full_release_rehearsal": {
+      "checks": 160,
+      "passed": 160
+    },
+    "flow_builder_journeys": 12,
+    "browser_layout_checks": 1200,
+    "browser_runtime_errors": 0,
+    "sheets_expanded_products": "passed"
+  },
+  "remaining": [
+    "Do not lift Flow activation hold until every shared-database worker runs compatible code or the legacy worker is retired",
+    "Provider verification: WhatsApp, SMS, AI, Slack, external Google Sheets sync, live payments and delivery reports",
+    "Supabase free plan egress quota: 13.285/5 GB; dashboard warns of restrictions from 2026-11-24",
+    "Supabase free plan has no automatic backups; verified local dump retained in protected storage"
+  ]
+}

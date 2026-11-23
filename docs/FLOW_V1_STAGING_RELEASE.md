@@ -1,6 +1,6 @@
 # Flow v1 release package: shared-database production migration
 
-Prepared on 23 November 2026. **Nothing has been deployed, committed, pushed or sent.** Use this package together with [the Flow v1 implementation record](FLOW_V1_IMPLEMENTATION.md) and the evidence files in [docs/evidence](evidence/).
+Updated on 23 November 2026. **Committed and pushed to the release branch; AWS staging deployed as task 21; shared database upgraded to v33; Flow activation remains held.** See §10 for execution evidence. No live message or payment was requested. Use this package together with [the Flow v1 implementation record](FLOW_V1_IMPLEMENTATION.md) and the evidence files in [docs/evidence](evidence/).
 
 ## 1. Decisions and open items
 
@@ -20,16 +20,15 @@ Prepared on 23 November 2026. **Nothing has been deployed, committed, pushed or 
 - With the hold in place, the older production build stays compatible with the upgraded schema. The rehearsal showed that it keeps running, listing and creating classic workflows.
 - The hold is lifted (§4, phase 6) only once every service on this database runs the release.
 
-**Still open:**
-1. **Deployment access.**
-   - The AWS keys on this machine are root keys for a different account and cannot see staging. Deploy through the GitHub Actions role or the staging deploy identity, and retire the local root keys.
-   - Pausing production needs Render dashboard or API access, which has not been used or tested from here.
-2. **Source for the image.** The release is an uncommitted working tree (§2). It must be committed to a reviewed branch before an image is built. That needs separate authorization.
-3. **Maintenance window.** Phases 2–5 pause production on Render for about 10–20 minutes. Announce it.
-4. **Provider verification.** WhatsApp Flow templates, AI, Slack and Google Sheets sync are not configured (§8). Email delivery reports are off, so only provider acceptance can be checked. Workflows that use an unconfigured provider stay unable to turn on, which is correct.
-5. **Live acceptance** (§7) needs the hold lifted and explicit authorization. A live payment check needs separate authorization and Razorpay test keys.
+**Current open items (after the completed staging window):**
+1. Keep `FLOW_V1_ACTIVATION=held` until all workers sharing the database run compatible code, or the legacy worker is retired. Render was resumed on its previous build, not redeployed.
+2. Resolve the Supabase free-plan egress quota warning: the dashboard reports 13.285/5 GB and possible restrictions from 24 November. Billing was not changed.
+3. Complete provider setup and authorized live acceptance (§7–8). WhatsApp/SMS are outbox, AI is off, and delivery reports are off.
+4. Render's dashboard confirms Live after resume, but scripted public health checks time out; endpoint health is not independently confirmed.
 
-## 2. Release manifest
+Deployment access, the release commit, the maintenance pause, verified backup, migration, AWS rollout and held acceptance are completed (§10).
+
+## 2. Pre-window release manifest (historical snapshot)
 
 | Item | Value |
 | --- | --- |
@@ -86,7 +85,7 @@ Today 11 of 11 checks pass against task definition 18. After phase 4, add `--exp
 Each phase lists its command, its expected result and what to do if that result isn't met. `<cluster>`, `<service>` and `<family>` come from the staging stack outputs. Record every result in the deployment ticket.
 
 **Phase 0: prerequisites (before the window).**
-- The working tree is committed, reviewed, and built into an image by CI. Note the digest.
+- The working tree is committed and passes CI; build the image from that exact commit and record its immutable digest.
 - The deploy identity can call `ecs:*` on the staging service. Render access is available.
 - Freeze merges to Render's tracked branch during the window. Auto-deploy would otherwise start old or new code unannounced.
 - The maintenance notice is out.
@@ -277,3 +276,18 @@ Launch limitations addressed:
 - Incoming webhook field types are explained.
 - The AI cost guards are configurable.
 - Reorder buttons and the legacy builder are kept.
+
+## 10. Executed AWS staging release — 23 November 2026
+
+- Source: `codex/flow-v1-release-20261123`, commit `1b8560f64efdef807ffe6b7bad7fcb447ae40302`. [Final CI run](https://github.com/bhanukiran12/schedora/actions/runs/45191164513): success. No main-branch merge or production DNS change.
+- AWS image: `sha256:64fff4614c8f3709716bac87a497a38ad8069f46a5cb7e3c08f910b07dfb5670`; built locally from that committed source and pushed to ECR. CloudFormation stack `schedora-web-staging` is `UPDATE_COMPLETE`; ECS `schedora-web:21` is `COMPLETED`, 1 running, 0 pending. The task differs from task 18 only in its image and `FLOW_V1_ACTIVATION=held`; secret references, email, video and EFS settings are preserved.
+- Both AWS staging and the legacy Render worker were paused. Two read-only inspections over three minutes confirmed unchanged row counts, no queued email or undispatched events, and no new worker writes.
+- Final paused backup: `schedora-2026-11-23T14-16-54-059Z.dump`, 299,270 bytes, SHA-256 `8ff01c697516a0db7d5c06aaff3bdc9174d8322e8d8d99e1acb50a182199ba08`. Restored into a disposable PostgreSQL container: all 82 tables and 327 rows matched exactly. The dump is retained outside Git in protected local storage. Supabase's Free plan has no scheduled backups; an additional hosted recovery point was unavailable, so recovery relies on this verified logical backup.
+- All ten upgrades v24–v33 applied. Existing-table row counts stayed unchanged; migration registry gained ten rows and 23 new tables were created. Both existing classic workflows remain paused. Final inspection: v33, no pending upgrades, no pending email and no undispatched events.
+- Staging preflight: **12/12**. Synthetic held acceptance: **9/9** (form publish/submission, draft/publish, explicit activation refusal, simulation with no usage and cross-tenant access refusal). Both synthetic accounts and workspaces were deleted. No message or payment was requested. Signed-in Chrome loaded the deployed Flow overview.
+- Render was resumed, retaining deployed commit `989cda5`; dashboard status is **Live**. Public scripted health requests timed out, so its endpoint health is not confirmed. The activation hold stays in place while that old worker shares the database.
+- CI verification: syntax 303 files; unit 556 total, **548 passed / 0 failed / 8 skipped**; regular PostgreSQL **209 passed / 0 failed / 1 skipped**; Flow/product PostgreSQL **67/67**; faithful v23 migration/rollback **84/84**; full release rehearsal **160/160**; expanded Sheets/product browser gate passed; Flow builder **12 journeys**; full browser regression **1,200 layout checks**, no runtime errors, overflow or failed journeys.
+- CI exposed stale rehearsal assumptions after committing the release: the rollback dispatcher used `HEAD`, the upgrade count was fixed at five, and development cookies did not authenticate a browser on `127.0.0.1`. The harness now pins the actual legacy dispatcher, compares migration registries, uses test-mode host-only cookies and resets browser sessions between server revisions. No production authentication behavior was changed.
+- Supabase dashboard warning: **13.285 GB egress / 5 GB included (266%)**, grace period ends **24 November 2026**; the dashboard says project requests may receive 402 after restrictions. Database size is within quota. Billing was not changed.
+
+Machine-readable record: [AWS staging release evidence](evidence/flow-v1-aws-staging-release-2026-11-23.json). Provider readiness and post-hold live acceptance remain separate; this release does not establish live WhatsApp, AI, Slack, Google Sheets sync, payment or email-delivery-report verification.

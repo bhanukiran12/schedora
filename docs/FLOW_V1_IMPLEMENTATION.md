@@ -2,7 +2,7 @@
 
 Authorized on 23 November 2026, lifting the earlier hold on Flow development. Direction: "From enquiry to appointment to follow-up." Flow is the glue between Forms, Meet and Sheets. It is built as reliable native multi-step workflows with plain language, job templates, one counted run per execution and evidence of what happened, not as a Zapier clone.
 
-Everything below is implemented locally and tested with fake providers and sandbox fixtures. No live message, charge, external account change, commit, push or deployment was made.
+The implementation was committed and deployed to AWS staging on 23 November, with the shared database upgraded to v33 and Flow activation held. See [the executed release record](FLOW_V1_STAGING_RELEASE.md#10-executed-aws-staging-release--23-november-2026). Development verification below uses fake providers and sandbox fixtures; live provider delivery remains unverified.
 
 ## Starting point (verified in code, 23 November)
 
