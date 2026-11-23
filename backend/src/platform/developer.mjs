@@ -71,7 +71,9 @@ export function eventPayload(app, event) {
       event_type: { id: booking.event_type_id, title: booking.event_title, slug: booking.event_slug }, hosts
     } };
   }
-  const response = app.db.get('SELECT r.id, r.form_id, r.form_version, r.answers, r.created_at, v.definition FROM responses r JOIN form_versions v ON v.form_id = r.form_id AND v.version = r.form_version WHERE r.id = ?', event.subject_id);
+  const response = app.db.get(`SELECT r.id, r.form_id, r.form_version, COALESCE(e.original_answers, r.answers) AS answers, r.created_at, v.definition
+    FROM responses r JOIN form_versions v ON v.form_id = r.form_id AND v.version = r.form_version
+    LEFT JOIN form_response_edits e ON e.response_id = r.id WHERE r.id = ?`, event.subject_id);
   if (!response) return { ...base, data: null };
   const definition = JSON.parse(response.definition);
   const answers = JSON.parse(response.answers);

@@ -31,12 +31,16 @@ jobs:
         run: npm ci
       - name: Syntax check (backend and frontend)
         run: npm run check
-      - name: Shared forms logic is in sync
+      - name: Shared modules match their sources and the Sheets engine type-checks
         run: npm run sync-shared -- --check
       - name: Vendored LiveKit browser SDK matches the pinned version
         run: npm run vendor-livekit -- --check
       - name: Unit, API and integration tests
         run: npm test
+      - name: Sheets editor browser journeys
+        run: npm run sheets-check
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
       - name: Browser journeys and responsive layout
         run: npm run browser-check
         env:

@@ -62,6 +62,7 @@ export function unreachableFields(definition, visibleFields, limit = MAX_COMBINA
   if (conditions.some(condition => condition.op === 'contains' && controlling.some(field => field.id === condition.field && !field.type.endsWith('_choice')))) {
     return { unreachable: [], complete: false, reason: 'text_contains' };
   }
+  if (controlling.some(field => ['file_upload', 'single_grid', 'multiple_grid'].includes(field.type))) return { unreachable: [], complete: false, reason: 'structured_answers' };
   const candidates = controlling.map(field => {
     if (field.type === 'single_choice') return [undefined, ...field.options.map(option => option.id)];
     if (field.type === 'multiple_choice') return [[], ...field.options.map(option => [option.id]), field.options.map(option => option.id)];

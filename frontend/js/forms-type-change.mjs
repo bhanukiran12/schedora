@@ -1,17 +1,17 @@
 // Changing a question's type in the builder (docs/FORMS.md, "Changing a question's type"). Pure: the
 // builder passes in the draft questions, the saved routing and the keys published versions used,
 // and gets back what would happen, so nothing changes until the creator confirms.
-import { answerRuleLimit, FIELD_TYPES, publishedTypeChangeAllowed } from '../shared/forms-logic.mjs';
+import { answerRuleLimit, FIELD_TYPES, isGrid, publishedTypeChangeAllowed } from '../shared/forms-logic.mjs';
 import { conditionSentence } from './forms-readiness.mjs';
 
-const TEXT_TYPES = ['short_text', 'long_text', 'email', 'phone', 'date'];
+const TEXT_TYPES = ['short_text', 'long_text', 'email', 'phone', 'date', 'time', 'number', 'scale'];
 const CHOICE_TYPES = ['single_choice', 'multiple_choice'];
 const family = type => CHOICE_TYPES.includes(type) ? 'choice' : 'text';
 const typeName = type => FIELD_TYPES[type].toLowerCase();
 const VALUE_OPS = ['equals', 'not_equals', 'contains'];
 
 // Every question type a question can be switched to; page breaks are not questions.
-export const typeChoices = field => field.type === 'page_break' ? [] : [...TEXT_TYPES, ...CHOICE_TYPES];
+export const typeChoices = field => field.type === 'page_break' ? [] : isGrid(field) || field.type === 'file_upload' ? [field.type] : [...TEXT_TYPES, ...CHOICE_TYPES];
 
 /** Display rules and saved routing rules that read this question's answer. */
 export function dependentRules(fieldId, fields, routing, choiceRules = null) {
@@ -59,7 +59,7 @@ export function planTypeChange({ field, to, fields, routing = null, choiceRules 
   const after = fields.map(item => item === field ? next : item);
   const effects = [];
   let confirm = false;
-  if (next.answer_rule && (!answerRuleLimit(to) || (from === 'multiple_choice') !== (to === 'multiple_choice')
+  if (next.answer_rule && (from === 'date' || !answerRuleLimit(to) || (from === 'multiple_choice') !== (to === 'multiple_choice')
       || Math.max(next.answer_rule.min || 0, next.answer_rule.max || 0) > answerRuleLimit(to))) {
     delete next.answer_rule;
     confirm = true;

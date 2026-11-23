@@ -172,14 +172,24 @@ test('PostgreSQL: video admissions, credit reservations and the ledger stay cons
   let env;
   try {
     env = await setup({ db });
-    env.app.config.video = { ...env.app.config.video, allowances: { evaluation: 50 }, guestPolicy: 'open', maxParticipants: 20 };
+    const { UNITS_PER_CREDIT } = await import('../src/video/config.mjs');
+    const expectedAdmissions = 5;
+    const blockSeconds = 600;
+    // Fund exactly five reservation blocks; do not assume the old credit conversion.
+    const allowanceCredits = expectedAdmissions * blockSeconds / UNITS_PER_CREDIT;
+    assert.ok(Number.isInteger(allowanceCredits));
+    env.app.config.video = { ...env.app.config.video, blockSeconds, allowances: { evaluation: allowanceCredits }, guestPolicy: 'open', maxParticipants: 20 };
     const owner = env.client();
     const { ws } = await signUp(owner, 'PgVideo');
     const room = (await owner.post(`/api/workspaces/${ws.id}/meet-video/rooms`, {})).body;
     const link = await owner.post(`/api/meet-video/rooms/${room.public_id}/invites`, { seats: 15 });
     const token = link.body.url.split('/meet/join/')[1];
     const results = await Promise.all(Array.from({ length: 10 }, (_, index) => env.client().post('/api/public/meet-video/join/' + token, { display_name: 'G' + index })));
-    assert.equal(results.filter(result => result.status === 200).length, 5);
+    assert.equal(results.filter(result => result.status === 200).length, expectedAdmissions);
+    assert.equal(results.filter(result => result.status === 402).length, results.length - expectedAdmissions);
+    const account = db.get('SELECT available_units, reserved_units FROM credit_accounts WHERE workspace_id = ?', ws.id);
+    assert.equal(account.available_units, 0);
+    assert.equal(account.reserved_units, expectedAdmissions * blockSeconds);
     assert.deepEqual(reconcileWallet(env.app, ws.id), []);
     assert.throws(() => db.run('UPDATE credit_ledger SET units = 0'), /credit_ledger_immutable/);
   } finally {

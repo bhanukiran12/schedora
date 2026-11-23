@@ -6,7 +6,7 @@ import { loadConfig } from '../src/config.mjs';
 export const START = Date.UTC(2026, 9, 24, 6, 0); // Saturday 24 October 2026, 06:00 UTC
 
 // Boots the real HTTP server on an in-memory database with a controllable clock and fake providers.
-export async function setup({ config = {}, db } = {}) {
+export async function setup({ config = {}, db, formUploadScan } = {}) {
   const testSchema = !db && process.env.RUN_POSTGRES_TESTS === 'true' ? 'schedora_test_' + randomUUID().replaceAll('-', '') : null;
   if (testSchema) {
     const settings = loadConfig();
@@ -26,7 +26,7 @@ export async function setup({ config = {}, db } = {}) {
   };
   const feeds = new Map();
   const app = createApp({
-    ...(db ? { db } : {}),
+    ...(db ? { db } : {}), formUploadScan,
     databasePath: ':memory:', now: () => clock.now, emailProvider, log: () => {},
     fetchCalendar: async url => { const feed = feeds.get(url); if (feed instanceof Error) throw feed; if (!feed) throw new Error('unknown feed'); return feed; },
     configOverrides: { billingMode: 'open', billingProvider: 'test', billingWebhookSecret: 'whsec_test', baseUrl: 'http://localhost:3000', ...config }

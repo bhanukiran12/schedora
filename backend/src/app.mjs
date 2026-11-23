@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { createWhatsappProvider } from './platform/twilio.mjs';
+import { createUploadStorage } from './forms/upload-storage.mjs';
 import { openDatabase } from './db.mjs';
 import { openPostgres } from './postgres.mjs';
 import { loadConfig, releaseWarnings } from './config.mjs';
@@ -31,6 +33,7 @@ export function createApp(options = {}) {
     now: options.now || (() => Date.now()),
     emailProvider: options.emailProvider || createEmailProvider(config),
     smsProvider: options.smsProvider || createSmsProvider(config),
+    whatsappProvider: options.whatsappProvider || createWhatsappProvider(config),
     fetchWebhook: options.fetchWebhook || ((url, init) => fetch(url, init)),
     assertPublicHost: options.assertPublicHost || (url => assertPublicHost(url)),
     fetchProvider: options.fetchProvider || ((url, init) => fetch(url, init)),
@@ -42,6 +45,7 @@ export function createApp(options = {}) {
       process.stdout.write(JSON.stringify({ time: new Date().toISOString(), level, message, ...fields }) + '\n');
     })
   };
+  app.formUploads = createUploadStorage(config, { scan: options.formUploadScan });
   app.alertEmailProvider = options.alertEmailProvider || createAlertEmailProvider(config, app.emailProvider, (url, init) => app.fetchProvider(url, init));
   app.meetingCsp = meetingCsp(config, BASE_CSP);
   // Video providers by deployment id; tests inject fakes with options.videoProviders.

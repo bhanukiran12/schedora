@@ -1,15 +1,16 @@
 // Run before submitting anything to a staging frontend. It finds out where that frontend really sends its
-// API requests, using only GET requests, and refuses unless the answer is the isolated staging backend.
+// API requests, using only GET requests, and refuses unless it reaches the intended staging backend.
 // A Vercel preview of this repository forwards /api to the production backend, so looks are not enough.
 //
 // Usage: npm run staging-preflight -- --frontend https://<staging frontend> --backend https://<staging backend>
-// Exit 0 only when every check passes. It cannot see the database: confirm that in the Render dashboard.
+// Exit 0 only when every check passes. Database isolation must be verified separately.
 const argument = name => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : null; };
 const frontend = (argument('--frontend') || '').replace(/\/$/, '');
 const backend = (argument('--backend') || '').replace(/\/$/, '');
 if (!frontend || !backend) { console.error('Give --frontend <url> and --backend <url>.'); process.exit(2); }
 
-const PRODUCTION_HOST = /(^|\.)schedora\.in$|^schedora-api\.onrender\.com$/;
+const PRODUCTION_HOST = /(^|\.)schedora\.in\.?$|^schedora-api\.onrender\.com\.?$/i;
+const AWS_STAGING_HOST = /^(?:(?:meet|forms|flow)\.)?staging\.schedora\.in$/;
 const results = [];
 const check = (name, ok, detail = '') => { results.push(Boolean(ok)); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ' :: ' + detail}`); };
 const read = async url => {
@@ -22,7 +23,12 @@ const read = async url => {
   } catch (error) { return { status: 0, body: null, text: '', error: error.message }; }
 };
 
-for (const [name, url] of [['frontend', frontend], ['backend', backend]]) check(`${name} is not a production address`, !PRODUCTION_HOST.test(new URL(url).hostname), url);
+const usesAwsStaging = [frontend, backend].some(url => AWS_STAGING_HOST.test(new URL(url).hostname));
+for (const [name, address] of [['frontend', frontend], ['backend', backend]]) {
+  const url = new URL(address);
+  const awsStaging = url.protocol === 'https:' && !url.port && AWS_STAGING_HOST.test(url.hostname);
+  check(`${name} is not a production address`, !url.username && !url.password && (usesAwsStaging ? awsStaging : !PRODUCTION_HOST.test(url.hostname)), url.origin);
+}
 
 const viaFrontend = await read(`${frontend}/api/config`);
 const direct = await read(`${backend}/api/config`);
@@ -33,6 +39,7 @@ check('the backend says it is staging', direct.body?.deployment === 'staging', `
 check('the frontend\'s API and the backend report the same configuration', viaFrontend.text && viaFrontend.text === direct.text, 'they differ, so the frontend may be forwarding somewhere else');
 
 check('the backend does not use the production domain', viaFrontend.body?.productDomain && viaFrontend.body.productDomain !== 'schedora.in', 'set PRODUCT_DOMAIN=staging.invalid, or links lead to production');
+if (usesAwsStaging) check('AWS staging reports the staging product domain', direct.body?.productDomain === 'staging.schedora.in', `productDomain=${direct.body?.productDomain || 'unknown'}`);
 
 const health = await read(`${frontend}/api/health`);
 check('health is ok through the frontend', health.body?.status === 'ok', health.text.slice(0, 120));
@@ -44,7 +51,10 @@ function observeFrontend(file) {
   console.log(`NOTE  frontend logic: ${file.text.includes('CLIENT_EVALUATOR') ? 'release build' : 'previous or rollback build'}`);
   console.log(`NOTE  authoring: ${viaFrontend.body?.formsAuthoringFrozen ? 'frozen' : 'open'}`);
 }
-console.log('MANUAL  Confirm in the Render dashboard that DATABASE_URL on this service is the disposable database.');
+// Shared-database release: Flow v1 activation must stay held until every server runs the release (FLOW_V1_STAGING_RELEASE.md §4).
+console.log(`NOTE  Flow v1 activation: ${viaFrontend.body?.flowActivationHeld ? 'held' : 'on'}`);
+if (process.argv.includes('--expect-flow-held')) check('Flow v1 activation is held on this server', viaFrontend.body?.flowActivationHeld === true, 'set FLOW_V1_ACTIVATION=held in this task definition');
+console.log('MANUAL  Confirm that the staging database may be used for this test.');
 
 const failed = results.filter(ok => !ok).length;
 console.log(`\n${results.length} checks, ${failed} failed.`);

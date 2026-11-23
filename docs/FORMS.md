@@ -39,6 +39,40 @@ The inbox, response detail and CSV show each answer with the labels of the versi
 4. A timeout (20 s), network error or `5xx` is reported as *not confirmed*. The answers stay on the page, and *Submit again* reuses the same id. A `4xx` from the submission endpoint means nothing was stored for that id, and the message says so. The exception is `429 rate_limited`, which happens before the request is processed, so the page does not claim anything about an earlier attempt.
 5. Preview runs only in the browser. It never calls the server and creates no response, event or usage.
 
+### Grid questions and response editing
+
+Multiple-choice grids collect one choice per row. Checkbox grids allow multiple choices per row. A required grid needs an answer in every row. CSV and the linked Form Responses sheet place each grid row in its own column. Choice text comes from the version the respondent answered.
+
+In Settings, enable **Allow respondents to edit their answers** and publish. A directly opened public form can show a private edit link on the receipt. This link works while editing is enabled on the published form. Quizzes, forms that declare URL parameters, embedded forms, meeting offers and forms that require sign-in are outside this first implementation.
+
+An edit updates the original response and linked Sheets row. It keeps the receipt and submission time. Flow and webhooks for the original submission use the original answers, and edits do not create another submission or use another response allowance.
+
+### Respondent file uploads
+
+Add a **File upload** question from Written answers. Each question accepts up to two PDF, JPEG, PNG or WebP files, each at most 2 MB. Required questions need at least one completed upload. Question illustrations continue to use their existing media controls.
+
+Files upload before the respondent submits, with upload status, retry and remove controls. The submit button waits for uploads to finish. Files and grant secrets stay in page memory. A reload requires selecting unfinished files again. A response stores private attachment references, and the linked Sheets row and CSV show filenames. Workspace members with responses.read can download attachments from response details.
+
+Configure FORM_UPLOAD_DIRECTORY as an absolute path on a private persistent volume, outside the frontend directory. FORM_UPLOAD_SCANNER must be the absolute path to ClamAV clamscan with current signatures. Production also requires PERSISTENT_STORAGE_CONFIRMED=true. Defaults are 10 MB per workspace and 100 MB across the service, configurable through FORM_UPLOAD_WORKSPACE_MB and FORM_UPLOAD_STORAGE_MB. All backend instances must share the same private volume. Startup checks the path, executable and budgets, while each upload checks the scan result.
+
+Five-minute upload grants bind a file to its workspace, question, version and submission. Reservations count toward storage budgets until physical deletion succeeds. Unsubmitted uploads expire after 24 hours. Deleting a response, form or workspace immediately removes download access and schedules physical deletion. The worker retries failed deletion and retains its quota reservation.
+
+Eligible public file forms support private response edit links. Existing attachments are shown without re-uploading; respondents can retain, remove or replace them. Saving updates the same response and Sheets row with optimistic revision checks. Removed attachments lose download access immediately and enter the worker cleanup queue. File downloads require a current workspace session and permission. Scanner errors or stale signatures prevent accepting a file. The local HTTP/browser suite injects scanner results; the separate container scanner check uses real ClamAV and its signed database.
+
+### Private files from respondents
+
+Add **File upload** under Written answers. The first implementation accepts at most two PDF, JPEG, PNG or WebP files per question, each up to 2 MB. Respondents can retry or remove uploads. Files upload and pass the scanner before the response is accepted. Required questions need at least one completed file. Eligible public forms can enable private edit links for retaining, removing and replacing attachments on the same response.
+
+Files live on an explicitly configured private filesystem volume outside the frontend directory. The database stores metadata and bindings, and downloads require current responses.read permission. Grant secrets and selected File objects stay in memory on the respondent page. The response inbox offers private downloads. CSV and Sheets contain filenames.
+
+Set FORM_UPLOAD_DIRECTORY to an absolute path on a persistent private volume and FORM_UPLOAD_SCANNER to the absolute ClamAV clamscan executable. Production also uses PERSISTENT_STORAGE_CONFIRMED=true. FORM_UPLOAD_WORKSPACE_MB and FORM_UPLOAD_STORAGE_MB default to 10 and 100. These are initial application limits. The upload code does not provision infrastructure.
+
+The server verifies the scanner executable at startup, bounds streamed uploads, checks actual image/PDF content, and refuses infected, failed, timed-out or outdated scans. Keep the scanner signature database updated. See the [ClamAV scanning documentation](https://docs.clamav.net/manual/Usage/Scanning.html) and [ClamAV command options](https://github.com/Cisco-Talos/clamav/blob/main/docs/man/clamscan.1.in).
+
+Unattached files expire after a day. Grants expire after five minutes. The worker deletes the physical files before releasing the reservation. The metadata ledger survives removal of its response, form or workspace until physical cleanup succeeds. Response attachment downloads become unavailable immediately after response deletion.
+
+Local HTTP and Chrome tests exercise private files with an injected scanner. `backend/scripts/check-upload-scanner.mjs` separately verifies the real scanner inside the shipping image: a clean PDF is accepted and a PDF containing the standard harmless antivirus fixture is rejected. AWS staging now mounts the encrypted private EFS volume from `infra/aws/schedora-uploads-staging.yaml`; the Docker image bundles ClamAV and a signed signature database, with FreshClam refreshing it in the background. The scanner refuses databases older than seven days. See the 18 November staging checkpoint for live acceptance and restart evidence.
+
 ### Quota
 
 The existing approved quota (`QUOTAS.responses`, enforced only in `billingMode=enforced`) is consumed in the submission transaction. SQLite takes `BEGIN IMMEDIATE`; PostgreSQL holds the global transaction advisory lock, so concurrent submissions cannot overspend. A replay consumes nothing. Deleting a response or a form does not restore usage. When the allowance is used up, `GET /api/public/forms/{slug}` reports `availability: capacity_reached` and the page says so before anyone starts. A submission that loses the race gets `429 quota_exceeded`, and the page says the response was not saved. No new prices, plans or entitlements were added.
@@ -556,7 +590,7 @@ Working-tree note: every tracked file in this checkout, including files this wor
 
 Supersedes "Media: scoped, not implemented" above. Not committed, pushed or deployed.
 
-**Works locally (automated evidence):** images attached to questions, pictures on choice options and click-to-load YouTube/Vimeo videos. **Not built:** respondent file uploads; see "Respondent uploads: blocked" below.
+**Works locally (automated evidence):** images attached to questions, pictures on choice options and click-to-load YouTube/Vimeo videos. The 18 November private-volume respondent upload implementation is described under "Private files from respondents" above. The 18 November staging release adds the private persistent volume and real scanner; see the staging checkpoint for verified live evidence.
 
 ### Patterns adopted (official Typeform help, checked 30 October)
 
@@ -611,7 +645,9 @@ Picture choices keep a text label for every choice, because that text is what re
 - Picture choices keep native radio and checkbox inputs inside the label, in a responsive grid with a 4:3 picture frame. Focus ring and checked state apply to the whole card. If the picture fails, the label remains.
 - Builder: **Add image** (a keyboard-reachable file control) and **Add video** (address field with inline errors). An image shows a thumbnail, alt text and a *Decorative* checkbox, plus *Replace* and *Remove*. Each option gets *Picture* / *Remove picture*. Removal is announced together with the fact that the live form keeps the media until publish. Save refuses a non-decorative image with no description.
 
-### Respondent uploads: blocked (not built)
+### Respondent uploads: historical design checkpoint
+
+18 November update. The local private-volume implementation is described under **Private files from respondents** above. The following notes retain the earlier deployment constraints; live storage and scanner activation still require verification.
 
 3 November feasibility follow-up: [respondent attachment contract](FORM_UPLOADS_CONTRACT.md) records a read-only Supabase inventory (zero buckets/objects), the public Free object-storage allowance and the remaining authorisation/quota/scanning/lifecycle gates. A private object-storage candidate exists, but it has not been configured and does not make uploads available. The database-only constraint below describes the existing implementation, not an assertion that no suitable object store can be provisioned.
 
@@ -964,3 +1000,83 @@ This release adds two things to form definitions: `answer_rule` on a question (m
 **Validation on rollback.** An older backend ignores `answer_rule`, so limits stop being enforced while it runs. Responses stay valid and nothing is lost. Responses accepted during that time may break the limits.
 
 Forms that never used quiz mode or response validation are unaffected.
+
+## Undo, redo and shortcuts (13 November 2026)
+
+The builder keeps an undo history of the draft (`frontend/js/forms-history.mjs`, tests in `backend/test/forms-history.test.mjs` and the "Forms builder: undo, redo and shortcuts" browser journey).
+
+| Keys (Windows/Linux · Mac) | Action | Inside a text box |
+|---|---|---|
+| Ctrl+Z · ⌘Z | Undo the last change to the form | The box's own typing undo; the form is not undone |
+| Ctrl+Shift+Z or Ctrl+Y · ⌘⇧Z | Redo | The box's own redo |
+| Ctrl+D · ⌘D | Duplicate the selected question or page | Works (no text meaning); the browser's bookmark shortcut is prevented |
+| Ctrl+Enter · ⌘Enter | Add a question after the selected one, of the same type (short answer after a page or ending) | Works |
+| ? | Show the shortcut list | Typed as a character |
+
+- **What a step is.** Each change to the draft is one step: questions, pages, options, logic, endings, settings stored in the draft, and the theme. A step restores the whole draft, so undoing a question removal also restores the jump rules that pointed to it. Typing in one control within a second is one step.
+- **Saving.** There is no autosave; Save draft is still the only way to save. Undo history survives a save. When undo or redo returns the draft to exactly what was last saved, the status shows it as saved again.
+- **Not part of history.** Changes saved straight to the server: who can respond (access), Meet routing, and publishing itself.
+- **Publishing and conflicts.** Publishing, and loading someone else's newer version after a conflict, clear the history. A published version locks question keys and narrows allowed type changes, so earlier steps could produce a draft the server refuses.
+- **Where they work.** Undo, redo and `?` work anywhere in the builder. Duplicate and add work in Questions while editing; elsewhere they say where they work. Nothing fires while a dialog is open or during IME composition. On Mac, Control keeps its text-editing meanings (Control+D deletes forward).
+- **Buttons.** Undo and redo are also toolbar buttons with `aria-keyshortcuts`; they stay focusable and use `aria-disabled` when there is nothing to undo, so focus never drops. "Keyboard shortcuts" is in More actions.
+- **Limits.** History holds 100 steps, lives in the page only, and is lost on reload.
+
+## Number, linear scale, time, dropdown, quiz feedback, response limits and Summary (16 November 2026)
+
+Shared rules are in `backend/src/shared/forms-logic.mjs`; tests are in `backend/test/forms-question-types.test.mjs`.
+
+| Addition | Definition | What the server checks |
+|---|---|---|
+| Number | `type: 'number'`, optional `number: { min, max, integer, message }` | A plain number (commas allowed and removed), within the limits; stored as normalized text (`"3.5"`) |
+| Linear scale | `type: 'scale'`, `scale: { min: 0 or 1, max: 2–10, min_label, max_label }` (default 1–5) | A whole number in range |
+| Time | `type: 'time'` | `HH:MM`, 24-hour |
+| Dropdown | `display: 'dropdown'` on a single choice | Same as single choice. Options with pictures are always shown as a list. |
+| Quiz feedback | `feedback: { correct, incorrect }` on a choice question in a knowledge quiz | Not sent to respondents with the form. After submitting, the reply has `quiz_results`: per graded question, whether it was right, plus the feedback. The correct options are never sent. |
+| Response schedule and limits | `responses: { limit, open_at, close_at, closed_message }` on the definition | Published with the version. Loading and submitting before the opening time, after the closing time, or once the limit is reached returns 410 `form_closed`, with a reason and the author's message if configured. Retries of accepted responses still get their receipt. |
+
+- **Type changes.** A number, scale or time can widen to short or long text without a new key, like date. Settings belonging to the old type are dropped.
+- **Summary.** Responses → **Summary** (`?view=summary`, `GET /forms/:id/responses/summary`) counts every response across versions: bars per option or scale point, average and range for numbers and scales, the latest five answers for text, and the score spread for quizzes. Search and filters don't apply to it.
+- **Builder.** The add menu has **Numbers and ratings** (Number, Linear scale) and Time. Question settings have number limits, scale range and labels, earliest and latest dates, **Show as a dropdown**, and **Quiz feedback** in knowledge-quiz mode. **Settings → Collecting responses** sets a response limit, an opening and closing time in the author's local time, and a closed message.
+- **Look.** The builder canvas is now a question sheet on a dotted workbench: a strip naming the type and whether it is required, Q-numbering, radio and checkbox glyphs for choices, and the form's own Next or submit label instead of "OK". The outline uses neutral chips with a coloured edge. Behaviour, IDs and keyboard paths are unchanged.
+- **Rollback.** An older backend drops `number`, `scale`, `display`, `feedback` and `responses` when a draft is saved, and rejects the new types as unsupported. Forms published with the new types would fail to load on an older frontend. Unpublish them before rolling back.
+
+## Payments, WhatsApp receipts and Google Sheets sync (21 November 2026, local only)
+
+Implemented and tested with fake providers and sandbox fixtures. No live payment, message or Google account was used. Nothing here is committed or deployed.
+
+### Payments
+
+- **Authoring.** Settings → Payment: a fixed INR amount (₹1 to ₹5,00,000), an optional description shown at checkout, and a payment window of 1–72 hours (default 24). The settings are part of the draft (`definition.payment`), validated by the shared `paymentProblems`, exported and imported with the definition, and frozen in each published version. A paid form cannot allow response editing.
+- **Provider.** The workspace's Razorpay connection (Meet settings). Publishing a paid form is refused when the workspace has only Stripe, or (in production) no Razorpay. Outside production, or with `ALLOW_TEST_PAYMENTS=true`, a workspace without Razorpay gets a clearly labelled simulated checkout at `/forms/pay/<token>`; it is disabled as soon as Razorpay is connected.
+- **Submission.** Answers are validated and saved immediately with `payment_status = 'pending'`. The receipt shows the amount, the deadline, a **Pay** button and a private status link (`/f/<slug>?payment=<token>`). The token is an HMAC of the response ID; only its hash is stored, and a retried submission returns the same link.
+- **Checkout.** `POST /api/public/form-payments/<token>/checkout` creates (or reuses) a Razorpay Payment Link with `reference_id = fp_<attempt>`, `accept_partial: false`, the exact amount, no Razorpay notifications and the status link as `callback_url`. Concurrent requests share one link; an interrupted creation is recovered by `reference_id`. Razorpay links need 15 minutes of validity, so a late attempt can outlive the window slightly. At most ten attempts per response.
+- **Proof of payment.** Never the browser redirect. The status page, the signature-verified webhook (`/api/payments/razorpay/<workspace>`: `payment_link.*`, `refund.*`, `payment.failed`) and the reconciliation worker all re-read the payment link or payment from the Razorpay API before changing anything. A link counts as paid only if its reference, INR currency, amount and `amount_paid` match the published version the respondent answered. Webhook deliveries are recorded by `X-Razorpay-Event-Id` (or a body hash), so redeliveries return `duplicate`. Another workspace's webhook endpoint cannot settle the payment.
+- **When a response is complete.** Exactly when the server first records it as `paid`. In the same transaction Schedora then, once: links or creates the contact, emits `forms.response.created` (Flow runs and developer webhooks), decides the routed next step (for example the booking offer) and queues the WhatsApp receipt. Until then none of these run, and the respondent sees no next step.
+- **States.** `pending` (awaiting payment); `failed` (still pending, last attempt declined, retry allowed); `paid`; `expired` (window ended with no open checkout, never completed); `refunded` / `partially_refunded` (from Razorpay's `amount_refunded`; downstream actions that already ran are not undone); `review` (amount, currency or reference mismatch, or Razorpay disconnected before confirmation; the respondent is told not to pay again). A payment confirmed after the window still completes the response, because a form has no scarce slot to lose.
+- **Limits and retention.** Response limits count pending and paid responses but not expired ones. Deleting a response (manually or by retention) deletes Schedora's payment record; Razorpay keeps its own ledger. Razorpay credentials cannot be replaced or disconnected while a form payment is pending.
+- **Reconciliation.** The worker re-reads open attempts every five minutes (at most ten per pass) and closes pending payments whose window has ended. Responses → **Check payment** re-reads one payment, including refunds.
+- **Where it shows.** Responses (badge, amount, refunds, review reason, detail panel); CSV (`Payment status`, `Payment amount (INR)`, `Amount paid (INR)`, `Amount refunded (INR)`, `Paid at (UTC)`, `Razorpay payment ID`, only for forms that took payments); and the linked Sheets tab (`Payment status`, `Amount paid (INR)`, `Payment ID`). Payment changes refresh the linked sheet.
+- **Meet payments** are unchanged: booking links keep their own references and handling in `meet/razorpay.mjs`; only `fp_` references go to Forms.
+
+### WhatsApp receipts
+
+- **Authoring.** Settings → WhatsApp receipt, choosing a phone question (`definition.receipts.whatsapp.phone_field`). Unavailable (and unpublishable) unless the server has `WHATSAPP_PROVIDER=twilio` and a separate approved receipt template `TWILIO_WHATSAPP_RECEIPT_CONTENT_SID` (variables: 1 name, 2 form title, 3 receipt code, 4 private stop link). The booking reminder template is not reused.
+- **Consent.** The respondent sees an unchecked box with fixed wording (`WHATSAPP_RECEIPT_CONSENT`). Only a ticked box creates a consent record (wording, time, normalised number). Numbers must include a country code (`e164Phone`); otherwise the receipt is recorded as not sent.
+- **Sending.** One message per response (`form-receipt:whatsapp:<response>`), after payment for paid forms. It is suppressed when the same number received a receipt for the same form in the previous two minutes, and never sent to a withdrawn number.
+- **Withdrawal.** Variable 4 links to `/messages/stop/<token>`, which stops future WhatsApp messages from that workspace to the number and cancels queued ones. A signed inbound reply (`TWILIO_INBOUND_URL`, `/api/messaging/twilio/inbound`) of STOP, UNSUBSCRIBE, CANCEL, END or QUIT withdraws the number for every workspace. Every WhatsApp delivery, Meet reminders included, checks the withdrawal list first.
+- **Evidence.** Responses show *Queued*, *Accepted by WhatsApp provider* (Twilio returned a message SID), *Delivered*, *Delivered and read* (signed Twilio status reports) or *Failed*, plus the reasons a receipt was not sent.
+
+### Google Sheets sync (one-way)
+
+- **Connection.** Responses → Google Sheets sync → Connect. This is a separate OAuth connection (`google_sheets`) owned by the member: scope `openid email drive.file` only, with `include_granted_scopes=false`, so calendar permissions are neither reused nor widened. The callback refuses a consent that left out `drive.file` or offline access. Off unless `GOOGLE_SHEETS_SYNC=enabled` with a client (`GOOGLE_SHEETS_CLIENT_ID/SECRET`, or the Google client once `drive.file` is on its consent screen).
+- **Destination.** A new spreadsheet, or a new tab in a spreadsheet this connection can open (with `drive.file`, only spreadsheets Schedora created or the person chose). Schedora never writes to an existing tab. One destination per form.
+- **Mapping.** Column A is `Schedora response ID`; the rest follows the linked-sheet layout (answers, score, next step, attribution, lead and payment columns). Each pass reads column A, updates changed rows in place, appends missing responses and blanks deleted ones. An append whose result was lost is found by ID on the next pass, so it is updated rather than duplicated. Sorting the tab in Google does not break the mapping.
+- **Formula injection.** Values are written with `valueInputOption=RAW`, so text such as `=IMPORTXML(...)` stays literal text in Google Sheets.
+- **Updates and limits.** Edited responses and payment changes update their row within about a minute. Unchanged forms cost no Google calls. Each pass makes at most 500 row writes, and the worker runs at most three syncs per pass. HTTP 429 and 5xx responses back off exponentially and honour `Retry-After`; after eight failed attempts the sync stops with the reason. The first 4,999 responses per form are synced (the linked-sheet row limit).
+- **Expiry and access.** A refused token refresh or HTTP 401 marks the sync *Reconnect needed*; reconnecting resumes it. A deleted or inaccessible spreadsheet stops it with an explanation. If the member who set it up leaves the workspace or disconnects, it stops; Disconnect also asks Google to revoke the token. Only the owner or a workspace admin can stop a sync; other members see its status. Requests from another workspace get 404.
+- **Edits, deletions and retention.** Schedora is the source of truth. Edits made in Google are not read back and are overwritten when that response next changes. A response deleted in Schedora (by a person, by retention or for a data request) has its row blanked to its ID and `Deleted in Schedora` on the next pass. Schedora cannot remove copies made outside it: Google's version history, downloads, copies and forwarded files keep earlier values, so the destination spreadsheet's owner must also handle data-deletion requests there. Stopping a sync leaves existing rows in Google.
+- **Not offered.** Two-way sync, writing to existing tabs, and the Google Picker for choosing files Schedora did not create.
+
+### Verification
+
+`test/forms-payments.test.mjs`, `test/forms-receipts.test.mjs` and `test/google-sheets-sync.test.mjs`, plus the browser journeys in `scripts/product-tools-check.mjs`. Results are recorded in `docs/PRODUCT_RESEARCH_IMPLEMENTATION_2026-11-21.md`.

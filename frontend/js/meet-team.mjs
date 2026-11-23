@@ -1,6 +1,7 @@
 import { $, $$, api, ask, badge, boot, browserZone, copy, dateKey, errorBlock, fmtDateTime, fmtFull, handleSubmit, html, isAdmin, loading, minutesToTime, mount, notice, raw, session, timeToMinutes, toast, workspace, wsPath, zoneOptions } from './core.mjs';
 import { setTitle } from './pages.mjs';
 import { icon } from './design-system.mjs';
+import { mountFollowups } from './meet-followups.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // Polls
@@ -174,7 +175,7 @@ export async function workflowsTab(ctx, panel) {
   mount(panel, html`<div class="meet-section-intro"><p class="muted">Set reminders and follow-up messages once. Meet sends them automatically for new bookings.</p><button class="btn btn-primary" id="new-workflow">Add a reminder or follow-up</button></div>
     <div id="workflow-form"></div>
     ${workflows.length ? html`<ul class="list section-gap">${workflows.map(workflow => html`<li class="row-between"><div><div class="list-title">${workflow.name}</div>
-      <div class="meta"><span>${TRIGGER_LABELS[workflow.trigger_type]}${workflow.offset_min ? ` (${workflow.offset_min >= 60 ? workflow.offset_min / 60 + ' h' : workflow.offset_min + ' min'})` : ''}</span><span>${workflow.channel === 'sms' ? 'Text message' : 'Email'} to ${workflow.recipient === 'invitee' ? 'invitee' : 'host'}</span>
+      <div class="meta"><span>${TRIGGER_LABELS[workflow.trigger_type]}${workflow.offset_min ? ` (${workflow.offset_min >= 60 ? workflow.offset_min / 60 + ' h' : workflow.offset_min + ' min'})` : ''}</span><span>${workflow.channel === 'whatsapp' ? 'WhatsApp' : workflow.channel === 'sms' ? 'Text message' : 'Email'} to ${workflow.recipient === 'invitee' ? 'invitee' : 'host'}</span>
         <span>${workflow.event_title || 'All event types'}</span>${workflow.condition ? html`<span>Only if ${workflow.condition.question} ${workflow.condition.op.replace('_', ' ')} ${workflow.condition.value ?? ''}</span>` : ''}</div></div>
       <div class="row">${badge(workflow.active ? 'active' : 'paused', workflow.active ? 'On' : 'Off')}<button class="btn btn-small" data-toggle="${workflow.id}" data-active="${workflow.active}">${workflow.active ? 'Turn off' : 'Turn on'}</button><button class="btn btn-small btn-danger" data-delete="${workflow.id}">Delete</button></div></li>`)}</ul>`
       : html`<div class="empty section-gap">No reminders or follow-ups yet. Add one to keep guests informed automatically.</div>`}`);
@@ -187,12 +188,12 @@ export async function workflowsTab(ctx, panel) {
         <div><label for="wf-event">Event type</label><select id="wf-event" name="event_type_id">${admin ? html`<option value="">All event types</option>` : ''}${types.filter(type => !type.managed_template).map(type => html`<option value="${type.id}">${type.title}</option>`)}</select></div>
         <div><label for="wf-trigger">When</label><select id="wf-trigger" name="trigger_type">${Object.entries(TRIGGER_LABELS).map(([key, label]) => html`<option value="${key}">${label}</option>`)}</select></div>
         <div><label for="wf-offset">How long before or after?</label><input id="wf-offset" name="offset_min" type="number" min="0" max="43200" value="60"></div>
-        <div><label for="wf-channel">Send</label><select id="wf-channel" name="channel"><option value="email">Email</option><option value="sms">Text message (SMS)</option></select></div>
+        <div><label for="wf-channel">Send</label><select id="wf-channel" name="channel"><option value="email">Email</option><option value="sms">Text message (SMS)</option><option value="whatsapp">WhatsApp (approved reminder template)</option></select></div>
         <div><label for="wf-to">To</label><select id="wf-to" name="recipient"><option value="invitee">Invitee</option><option value="host">Host(s)</option></select></div>
       </div>
       <label for="wf-subject">Email subject</label><input id="wf-subject" name="subject" maxlength="200" value="Reminder: {{event.title}}">
       <label for="wf-body">Message</label><textarea id="wf-body" name="body" required maxlength="5000">Hi {{invitee.name}}, see you {{booking.start}}. Join or change: {{manage_url}}</textarea>
-      <p class="hint">Schedora fills these from the booking, event and invitee: ${options.placeholders.map(item => html`<code>{{${item}}}</code> `)} and <code>{{answer.question_key}}</code>. Text messages go to the phone number the invitee gives.</p>
+      <p class="hint">Schedora fills these from the booking, event and invitee: ${options.placeholders.map(item => html`<code>{{${item}}}</code> `)} and <code>{{answer.question_key}}</code>. SMS goes to the phone number provided. WhatsApp sends the approved reminder template with invitee name, event, start time and change link; the message text above is not used. Only invitees who opt in receive it.</p>
       <details><summary>Only send when an answer matches (optional)</summary><div class="inline-fields"><div><label for="wf-q">Question key</label><input id="wf-q" name="cq" placeholder="budget"></div>
         <div><label for="wf-op">Rule</label><select id="wf-op" name="cop"><option value="equals">is</option><option value="not_equals">is not</option><option value="contains">includes</option><option value="answered">is answered</option></select></div>
         <div><label for="wf-v">Value (option key)</label><input id="wf-v" name="cv"></div></div></details>
@@ -200,7 +201,7 @@ export async function workflowsTab(ctx, panel) {
     handleSubmit($('#wf'), async data => {
       await api('POST', wsPath('/workflows'), {
         name: data.name, event_type_id: data.event_type_id || null, trigger_type: data.trigger_type, offset_min: data.offset_min ?? 0, channel: data.channel, recipient: data.recipient,
-        subject: data.channel === 'sms' ? '' : data.subject, body: data.body, condition: data.cq ? { question: data.cq, op: data.cop, value: data.cv || undefined } : null
+        subject: data.channel !== 'email' ? '' : data.subject, body: data.body, condition: data.cq ? { question: data.cq, op: data.cop, value: data.cv || undefined } : null
       });
       toast('Workflow created. It applies to meetings booked from now on.');
       ctx.render();
@@ -423,7 +424,9 @@ async function openTranscript(ctx, id) {
       <div class="actions"><button class="btn btn-small" data-share="${recap.id}">${recap.shared ? 'Create a new share link' : 'Share recap'}</button>${recap.shared ? html`<button class="btn btn-small" data-unshare="${recap.id}">Stop sharing</button>` : ''}</div>` : ''}
     <div class="actions">${boot.integrations?.ai ? html`<button class="btn btn-small btn-primary" data-recap>${recap ? 'Regenerate recap' : 'Generate recap'}</button>` : ''}
       <a class="btn btn-small" href="${wsPath(`/transcripts/${id}/download`)}" download>Download transcript</a><button class="btn btn-small btn-danger" data-delete-t>Delete</button></div>
+    <div data-followups></div>
     <details><summary>Full transcript</summary><pre class="preview">${transcript.content}</pre></details></div>`);
+  mountFollowups(target.querySelector('[data-followups]'), id, { aiAvailable: Boolean(boot.integrations?.ai) });
   target.querySelector('[data-copy-email]')?.addEventListener('click', () => copy(`${recap.follow_up.subject}\n\n${recap.follow_up.body}`, 'Email'));
   target.querySelector('[data-recap]')?.addEventListener('click', async event => {
     event.target.setAttribute('aria-disabled', 'true');

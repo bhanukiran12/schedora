@@ -10,12 +10,12 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const APP_ROUTES = {
   meet: new RegExp(`^/meet(?:/event-types/(?:new|${UUID})|/contacts/${UUID})?$`),
   forms: new RegExp(`^/(?:forms(?:/${UUID}(?:/responses)?)?|sheets/${UUID})$`),
-  flow: new RegExp(`^/flow(?:/(?:runs|tasks|new|${UUID}))?$`)
+  flow: new RegExp(`^/flow(?:/(?:runs|tasks|new|approvals|${UUID}|build/${UUID}|runs/${UUID}))?$`)
 };
 // Shared signed-in pages: they take the context of the host (Suite on the apex domain).
 const SHARED_APP = /^\/(account|login|signup|billing|enquiries|overview|setup(?:\/(meet|forms|flow))?)$/;
 // Pages anyone may open from a link. They keep their own identity and are never redirected.
-const PUBLIC = [/^\/meet\/(manage|pay|room|join|poll)\//, /^\/(?:embed\/)?meet\/[a-z0-9-]{2,60}\/[a-z0-9-]{2,60}$/, /^\/meet\/[a-z0-9-]{2,60}$/, /^\/recap\//, /^\/f\//];
+const PUBLIC = [/^\/meet\/(manage|pay|room|join|poll)\//, /^\/(?:embed\/)?meet\/[a-z0-9-]{2,60}\/[a-z0-9-]{2,60}$/, /^\/meet\/[a-z0-9-]{2,60}$/, /^\/recap\//, /^\/f\//, /^\/forms\/pay\//, /^\/messages\/stop\//];
 
 export const DASHBOARDS = { suite: '/', meet: '/meet', forms: '/forms', flow: '/flow' };
 
@@ -30,7 +30,7 @@ export function routeProduct(path) {
   const landing = /^\/products\/(meet|forms|flow)$/.exec(path)?.[1];
   if (landing) return landing;
   if (path.startsWith('/meet') || path.startsWith('/embed/meet') || path.startsWith('/recap')) return 'meet';
-  if (path.startsWith('/forms') || path.startsWith('/f/') || path.startsWith('/sheets/')) return 'forms';
+  if (path.startsWith('/forms') || path.startsWith('/f/') || path === '/sheets' || path.startsWith('/sheets/')) return 'forms';
   if (path.startsWith('/flow')) return 'flow';
   const demo = /^\/(?:demo|start|setup)\/(meet|forms|flow)(?:\/|$)/.exec(path)?.[1];
   return demo || 'suite';

@@ -20,6 +20,15 @@ export const PROVIDERS = {
     authorize: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize', token: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     scope: 'offline_access openid email User.Read Calendars.ReadWrite', extra: { prompt: 'select_account' }
   },
+  // Google Sheets sync (forms/google-sheets.mjs) is a separate connection with its own consent. It asks
+  // only for drive.file (files this app creates or the person opens with it), never merges previously
+  // granted calendar scopes into the token, and is started only from a form's Responses page.
+  google_sheets: {
+    label: 'Google Sheets', calendar: false, config: 'googleSheets', separate: true,
+    authorize: 'https://accounts.google.com/o/oauth2/v2/auth', token: 'https://oauth2.googleapis.com/token',
+    scope: 'openid email https://www.googleapis.com/auth/drive.file', requiredScope: 'https://www.googleapis.com/auth/drive.file',
+    extra: { access_type: 'offline', prompt: 'consent', include_granted_scopes: 'false' }
+  },
   zoom: {
     label: 'Zoom', calendar: false,
     authorize: 'https://zoom.us/oauth/authorize', token: 'https://zoom.us/oauth/token', scope: '', extra: {}, basicAuth: true
@@ -43,16 +52,17 @@ function readState(app, state) {
 }
 
 function credentialsFor(app, provider) {
-  const settings = app.config[provider];
+  const info = PROVIDERS[provider];
+  const settings = info.config === 'googleSheets' ? (app.config.googleSheets?.enabled ? app.config.googleSheets : null) : app.config[info.config || provider];
   if (!settings?.clientId) fail(501, 'integration_not_configured', `${PROVIDERS[provider].label} is not set up on this server yet.`);
   return settings;
 }
 
-export function startOAuth(app, workspaceId, userId, provider) {
+export function startOAuth(app, workspaceId, userId, provider, { returnTo = null } = {}) {
   if (!PROVIDERS[provider]) fail(404, 'not_found', 'Unknown integration.');
   const { clientId } = credentialsFor(app, provider);
   const info = PROVIDERS[provider];
-  const state = signState(app, { ws: workspaceId, user: userId, provider, nonce: randomBytes(8).toString('hex'), exp: app.now() + 10 * 60000 });
+  const state = signState(app, { ws: workspaceId, user: userId, provider, nonce: randomBytes(8).toString('hex'), exp: app.now() + 10 * 60000, ...(returnTo ? { ret: returnTo } : {}) });
   const params = new URLSearchParams({ client_id: clientId, redirect_uri: callbackUrl(app, provider), response_type: 'code', state, ...info.extra });
   if (info.scope) params.set('scope', info.scope);
   return { url: `${info.authorize}?${params}` };
@@ -71,7 +81,7 @@ async function tokenRequest(app, provider, form) {
 }
 
 async function accountEmail(app, provider, accessToken) {
-  const url = { google: 'https://openidconnect.googleapis.com/v1/userinfo', microsoft: 'https://graph.microsoft.com/v1.0/me', zoom: 'https://api.zoom.us/v2/users/me' }[provider];
+  const url = { google: 'https://openidconnect.googleapis.com/v1/userinfo', google_sheets: 'https://openidconnect.googleapis.com/v1/userinfo', microsoft: 'https://graph.microsoft.com/v1.0/me', zoom: 'https://api.zoom.us/v2/users/me' }[provider];
   const response = await app.fetchProvider(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10000) });
   const data = await response.json().catch(() => ({}));
   return data.email || data.mail || data.userPrincipalName || '';
@@ -86,6 +96,10 @@ export async function finishOAuth(app, provider, query, sessionUser) {
   if (!sessionUser || sessionUser.id !== state.user) fail(403, 'forbidden', 'Sign in as the person who started this connection.');
   if (!app.db.get('SELECT 1 FROM memberships WHERE workspace_id = ? AND user_id = ?', state.ws, state.user)) fail(404, 'not_found', 'Workspace not found.');
   const tokens = await tokenRequest(app, provider, { grant_type: 'authorization_code', code: query.get('code') || '', redirect_uri: callbackUrl(app, provider) });
+  // A person can untick a permission on the consent screen: connect only what was actually granted.
+  const required = PROVIDERS[provider].requiredScope;
+  if (required && !String(tokens.scope || '').split(/\s+/).includes(required)) return { ok: false, provider, return: state.ret, message: 'Google did not grant access to Sheets files, so nothing was connected.' };
+  if (required && !tokens.refresh_token) return { ok: false, provider, return: state.ret, message: 'Google did not allow offline access, so syncing could not continue later. Nothing was connected.' };
   const account = await accountEmail(app, provider, tokens.access_token);
   const credentials = encryptJson(app.config, { access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_at: app.now() + (tokens.expires_in || 3600) * 1000 });
   const now = app.now();
@@ -101,8 +115,11 @@ export async function finishOAuth(app, provider, query, sessionUser) {
       app.db.run("UPDATE calendar_connections SET status = 'pending', label = ?, last_synced_at = NULL, last_success_at = NULL WHERE integration_id = ?", account || PROVIDERS[provider].label, id);
     }
   });
+  // Reconnecting resumes syncs that stopped for want of access (forms/google-sheets.mjs).
+  if (provider === 'google_sheets') app.db.run("UPDATE form_google_syncs SET status = 'active', attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE workspace_id = ? AND created_by = ? AND status IN ('reconnect_required', 'disconnected')", now, now, state.ws, state.user);
+  if (provider === 'google_sheets') app.db.run('UPDATE form_google_syncs SET integration_id = (SELECT id FROM integrations WHERE workspace_id = ? AND user_id = ? AND provider = ?) WHERE workspace_id = ? AND created_by = ?', state.ws, state.user, provider, state.ws, state.user);
   app.nudge?.();
-  return { ok: true, provider, account };
+  return { ok: true, provider, account, return: state.ret };
 }
 
 export function disconnectIntegration(app, workspaceId, userId, provider) {

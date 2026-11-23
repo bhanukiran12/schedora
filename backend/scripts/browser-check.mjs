@@ -4,12 +4,13 @@
 // and dark themes, then runs the core journeys: sign up, publish an event type, book, manage,
 // build/publish/submit a form (both presentations, save conflicts, lost replies, Meet handoff),
 // create a flow, and billing.
-// Usage: CHROME_PATH=<browser executable> npm run browser-check [-- --screenshots <dir>]
+// Usage: CHROME_PATH=<browser executable> npm run browser-check [-- --screenshots <dir> | --bookings-only]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../src/app.mjs';
+import { loadConfig } from '../src/config.mjs';
 import { createRateLimiter } from '../src/http.mjs';
 
 const candidates = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean);
@@ -17,10 +18,13 @@ const browserPath = candidates.find(path => existsSync(path));
 if (!browserPath) { console.error('No Chrome/Edge found. Set CHROME_PATH.'); process.exit(2); }
 const shotsIndex = process.argv.indexOf('--screenshots');
 const shotsDir = shotsIndex > 0 ? process.argv[shotsIndex + 1] : null;
+const bookingsOnly = process.argv.includes('--bookings-only');
 if (shotsDir) mkdirSync(shotsDir, { recursive: true });
 
 const workDir = mkdtempSync(join(tmpdir(), 'schedora-browser-'));
-const app = createApp({ databasePath: join(workDir, 'test.db'), configOverrides: { port: 0, cookieDomain: '', workerIntervalMs: 500, rateLimitPerMinute: 100000 }, log: () => {} });
+const app = createApp({ databasePath: join(workDir, 'test.db'),
+  config: loadConfig({ NODE_ENV: 'test' }, { port: 0, workerIntervalMs: 500, rateLimitPerMinute: 100000 }),
+  log: () => {} });
 await app.start();
 await new Promise(resolve => app.server.close(resolve));
 await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -211,6 +215,8 @@ try {
     manageHref = await evaluate("[...document.querySelectorAll('a')].find(a => a.textContent.includes('Reschedule')).getAttribute('href')");
   });
   await step('manage booking and reschedule', async () => {
+    const previous = app.db.get("SELECT id, starts_at FROM bookings WHERE invitee_email = 'ravi@example.com' AND status = 'confirmed'");
+    if (!previous) throw new Error('The original booking was not saved.');
     await open(manageHref, "document.querySelector('#reschedule')");
     await layoutCheck('manage booking');
     await click('#reschedule');
@@ -218,94 +224,59 @@ try {
     await evaluate("[...document.querySelectorAll('#new-picker .day[data-available]')].pop().click()");
     await click('#new-picker .slot');
     await click('#confirm-new');
-    await waitFor("location.search.includes('done=rescheduled')", 'rescheduled');
+    try { await waitFor("location.search.includes('done=rescheduled')", 'rescheduled'); }
+    catch (error) {
+      const feedback = await evaluate("document.querySelector('#new-confirm')?.innerText || ''");
+      throw new Error([error.message, feedback].filter(Boolean).join(' — '));
+    }
+    const saved = app.db.get('SELECT old.status AS previous_status, next.status AS new_status, next.starts_at FROM bookings old JOIN bookings next ON old.rescheduled_to = next.id WHERE old.id = ?', previous.id);
+    if (saved?.previous_status !== 'canceled' || saved.new_status !== 'confirmed' || saved.starts_at === previous.starts_at) throw new Error('Rescheduling did not replace the original booking with a confirmed new time.');
   });
+  if (!bookingsOnly) {
   await step('host sees booking and email delivery', async () => {
     await open('/meet?tab=meetings', "document.querySelector('#tab-panel .list, #tab-panel .empty')");
     if (!(await text()).includes('Ravi Invitee')) throw new Error('booking not listed');
     await open('/meet?tab=emails', "document.querySelector('table')");
     // Local outbox, provider acceptance and mail-server delivery are named separately; nothing claims an inbox.
+    if (!(await text()).includes('Email sending is not connected on this server.')) throw new Error('outbox notice missing');
+    await click('.email-delivery-help summary');
     if (!(await text()).includes('This server uses the local outbox: messages are recorded here and never sent.')) throw new Error('delivery levels not explained');
     if (!(await evaluate("document.querySelector('table').innerText.includes('Recorded in the local outbox; not delivered to an inbox.')"))) throw new Error('sent outbox email shown without its transport');
     if (await evaluate("/Delivered to the recipient|Accepted by the email provider/.test(document.querySelector('table').innerText)")) throw new Error('outbox email described as provider-accepted or delivered');
     await layoutCheck('email delivery');
   });
-  await step('Meet readiness: saved-state summary, unsaved edits, fix links; preview and copy change nothing', async () => {
+  await step('Meet editor: saved visibility, copy, and private draft preview', async () => {
     const typeId = app.db.get("SELECT id FROM event_types WHERE slug = 'intro-call'").id;
-    const hostApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.status === 204 ? null : r.json(); })()`);
+    const path = '/meet/event-types/' + typeId;
+    const ready = "document.querySelector('.event-share-strip') && document.querySelector('#event-form')";
     const sideEffects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM meetings) AS meetings, (SELECT published FROM event_types WHERE id = ?) AS published', typeId));
-    const areaText = key => evaluate(`document.querySelector('#ready-${key}').closest('details').textContent.replace(/\\s+/g, ' ')`);
-    const ready = "document.querySelector('#readiness .readiness-areas')";
-
-    await open('/meet/event-types/' + typeId, ready);
-    const titles = await evaluate("[...document.querySelectorAll('.readiness-area > summary')].map(h => h.textContent.replace(/\\s+/g, ' ').trim())");
-    if (titles.length !== 4 || !['Event details', 'Availability', 'Calendar and conflicts', 'Sharing'].every((title, index) => titles[index].includes(title))) throw new Error('unexpected areas: ' + titles.join('|'));
-    const summary = await evaluate("document.querySelector('#readiness').innerText");
-    if (/\d\s*%/.test(summary)) throw new Error('readiness shows a percentage');
-    if (!(await areaText('availability')).includes('open start time')) throw new Error('slot check missing');
-    if (!(await areaText('calendar')).includes('Needs attention · Optional') || await evaluate("document.querySelector('#ready-calendar').closest('details').dataset.blocking") !== 'false') throw new Error('an optional calendar is not shown as optional');
-    if (!(await areaText('details')).includes('Needs attention · Optional: No location is set')) throw new Error('missing location not flagged');
-    await layoutCheck('meet readiness (published)');
-    // Real Tab key presses: every stop in the card shows the focus indicator.
-    await evaluate("document.querySelector('#main a[href=\"/meet\"]').focus()");
-    const stops = [];
-    for (let index = 0; index < 30; index++) {
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
-      const stop = await evaluate("(() => { const el = document.activeElement; const style = getComputedStyle(el); const rect = el.getBoundingClientRect(); return { inCard: Boolean(el.closest('#readiness')), shown: el.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2 && rect.bottom > 0 && rect.top < innerHeight, name: el.textContent.trim().slice(0, 30) || el.id }; })()");
-      if (!stop.inCard) { if (stops.length) break; continue; }
-      stops.push(stop);
-    }
-    if (stops.length < 3 || stops.some(stop => !stop.shown)) throw new Error('keyboard focus not visible in the readiness card: ' + JSON.stringify(stops));
-
-    // Unsaved edits are named, and the summary keeps describing the saved title.
-    await fill('#title', 'Intro call (edited, not saved)');
-    await waitFor("document.querySelector('#readiness-unsaved .notice')", 'unsaved notice');
-    if ((await areaText('details')).includes('edited, not saved')) throw new Error('summary shows unsaved values');
-    // A fix link moves focus to the matching editor section.
-    await evaluate("document.querySelector('#readiness [data-goto=\"details\"]').click()");
-    if (!(await evaluate("document.activeElement === document.querySelector('#section-details h2')"))) throw new Error('fix link did not focus the Details section');
+    const setPublished = published => evaluate(`(async () => {
+      const me = await (await fetch('/api/me')).json();
+      const response = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify('/event-types/' + typeId)}, { method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+        body: JSON.stringify({ published: ${published} }) });
+      if (!response.ok) throw new Error('Change visibility failed: ' + response.status);
+    })()`);
+    await open(path, ready);
+    await fill('#title', 'Unsaved editor title');
+    if (!(await evaluate("document.body.dataset.dirty && document.querySelector('#main h1').textContent === 'Intro call'"))) throw new Error('unsaved title changed saved sharing details');
     await evaluate("delete document.body.dataset.dirty");
-
-    // A draft: required blocker pointing to Visibility, no Copy, Preview separate and harmless.
-    await hostApi('PATCH', `/event-types/${typeId}`, { published: false });
-    await open('/meet/event-types/' + typeId, ready);
-    const sharing = await areaText('sharing');
-    if (!sharing.includes('Needs attention · Required: Not published')) throw new Error('draft not flagged as a required blocker: ' + sharing);
-    if (await evaluate("Boolean(document.querySelector('#copy-share'))")) throw new Error('copy offered for an unpublished link');
-    await evaluate("document.querySelector('#readiness [data-goto=\"visibility\"]').click()");
-    if (!(await evaluate("document.activeElement === document.querySelector('#section-visibility h2') && !document.querySelector('[name=published]').checked"))) throw new Error('Visibility fix link wrong or publish pre-ticked');
-    const before = sideEffects();
-    const preview = await evaluate("(() => { const a = [...document.querySelectorAll('#readiness .share-row a')].find(link => link.textContent.includes('Preview')); return [a.getAttribute('href'), a.target, a.rel]; })()");
-    if (!preview[0].endsWith(`/meet/${workspaceSlug}/intro-call`) || preview[1] !== '_blank' || !preview[2].includes('noopener')) throw new Error('preview link wrong: ' + preview);
-    const previewPage = await fetch(base + `/api/public/meet/${workspaceSlug}/intro-call`);
-    if (previewPage.status !== 404) throw new Error('an anonymous visitor can see the draft');
-    if (sideEffects() !== before) throw new Error('preview changed data');
-    await layoutCheck('meet readiness (draft)');
-
-    // Published again: Copy reports its outcome and changes nothing.
-    await hostApi('PATCH', `/event-types/${typeId}`, { published: true });
-    await open('/meet/event-types/' + typeId, ready);
-    try { await send('Browser.grantPermissions', { permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'], origin: base }); } catch { /* the failure message is checked instead */ }
+    await evaluate("Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => { window.__copiedBookingLink = text; } })");
     const published = sideEffects();
-    await click('#copy-share');
-    await waitFor("document.querySelector('#copy-status').textContent.length > 0", 'copy feedback');
-    const copied = await evaluate("document.querySelector('#copy-status').textContent");
-    if (!/^(Link copied\. This does not test booking, email or video\.|Copy failed\. The link is selected)/.test(copied)) throw new Error('unexpected copy feedback: ' + copied);
-    await click('#readiness-heading + [data-recheck]');
-    await waitFor("document.querySelector('#readiness-status').textContent.length > 0 && document.querySelector('#readiness .readiness-areas')", 'recheck announcement');
-    if (sideEffects() !== published) throw new Error('copy or recheck changed data');
-
-    // Native video selected while the server's feature gate is off is a required blocker.
-    const video = await hostApi('POST', '/event-types', { title: 'Video consult', timezone: 'Asia/Kolkata', published: true, min_notice_min: 0, locations: [{ type: 'schedora_meet' }] });
-    app.config.video.enabled = false;
+    await click('#copy-event-link');
+    await waitFor("document.querySelector('#toasts').textContent.includes('Booking link copied.')", 'copy feedback');
+    const copied = await evaluate("window.__copiedBookingLink");
+    if (!copied.endsWith('/meet/' + workspaceSlug + '/intro-call') || sideEffects() !== published) throw new Error('copy has the wrong link or changed bookings');
+    await setPublished(false);
     try {
-      await open('/meet/event-types/' + video.id, ready);
-      if (!(await areaText('details')).includes('Needs attention · Required: Schedora Meet built-in video is selected, but built-in video is turned off on this server')) throw new Error('video gate not reported');
-    } finally { app.config.video.enabled = true; }
-    await open('/meet/event-types/' + video.id, ready);
-    if (!(await areaText('details')).includes('Not verified · Unknown: Schedora Meet built-in video is selected and switched on')) throw new Error('enabled video shown as more than selected');
-    await hostApi('DELETE', `/event-types/${video.id}`);
+      await open(path, ready);
+      const draft = sideEffects();
+      const preview = await evaluate("(() => { const link = document.querySelector('.event-share-strip__actions a'); return [link.href, link.target, link.rel, Boolean(document.querySelector('#copy-event-link'))]; })()");
+      if (!preview[0].endsWith('/meet/' + workspaceSlug + '/intro-call') || preview[1] !== '_blank' || !preview[2].includes('noopener') || preview[3]) throw new Error('draft offers the wrong preview or a public copy button');
+      const publicReply = await fetch(base + '/api/public/meet/' + workspaceSlug + '/intro-call');
+      if (publicReply.status !== 404 || sideEffects() !== draft) throw new Error('anonymous draft preview became available or changed data');
+      await layoutCheck('meet editor draft share strip');
+    } finally { await setPublished(true); }
   });
   let formSlug;
   let formId;
@@ -334,6 +305,7 @@ try {
     await layoutCheck('form builder');
     if (!(await evaluate("document.querySelector('#builder-status').dataset.save === 'saved'"))) throw new Error('initial save state missing');
     await fill('#f-title', 'Project intake');
+    if ((await evaluate('document.title')) !== 'Project intake · Forms by Schedora') throw new Error('browser tab title did not follow the form title');
     if (!(await text()).includes('Unsaved edits')) throw new Error('unsaved state missing');
     if (await evaluate("Boolean(document.querySelector('#share-link, #share-future, #share-panel input'))")) throw new Error('a draft offers a respondent link');
     await click('#publish');
@@ -385,10 +357,21 @@ try {
   await step('form builder: one panel at a time on mobile', async () => {
     await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
     const shown = () => evaluate("[getComputedStyle(document.querySelector('.builder-edit')).display, getComputedStyle(document.querySelector('.builder-preview')).display].join()");
+    const visible = selector => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)})?.getClientRects().length)`);
+    const selection = () => evaluate("document.querySelector('#fields .question-canvas').getAttribute('data-index')");
     if ((await shown()) !== 'block,none') throw new Error('edit panel only expected, got ' + await shown());
+    const selected = await selection();
+    await click('#outline-toggle');
+    if (!(await visible('#outline-panel')) || await visible('#fields .question-canvas')) throw new Error('opening the phone outline did not hide the editor');
+    await click('#outline-toggle');
+    await click('#question-inspector');
+    if (!(await visible('#fields .question-settings')) || await visible('#fields .question-canvas')) throw new Error('phone question options must have their own surface');
+    await click('#question-inspector');
+    if (!(await visible('#fields .question-canvas')) || await visible('#fields .question-settings') || (await selection()) !== selected) throw new Error('returning from options changed the question or showed both panes');
     await click('[data-builder-view="preview"]');
     if ((await shown()) !== 'none,block') throw new Error('preview panel only expected, got ' + await shown());
     await click('[data-builder-view="edit"]');
+    if (!(await focused('#toolbar-preview')) || (await selection()) !== selected) throw new Error('closing preview lost its opener or selection');
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   });
   await step('form builder: a conflicting save is not silent', async () => {
@@ -420,14 +403,17 @@ try {
     // Typing on the canvas updates the sidebar and the live preview together.
     await fill(`[data-index="${i}"] [data-prop="label"]`, 'Canvas wording');
     if (!(await evaluate(`document.querySelector('[data-question-row="${i}"]').innerText.includes('Canvas wording') && document.querySelector('#preview').textContent.includes('Canvas wording')`))) throw new Error('canvas edit did not reach the sidebar and preview');
-    // The live preview is one switch away at every width, and the outline collapses to icons on narrower desktops with its names intact.
+    // The preview is one switch away, and narrower desktops keep the labeled outline beside one editing pane.
     await click('[data-builder-view="preview"]');
     if (!(await evaluate("getComputedStyle(document.querySelector('.builder-preview')).display !== 'none' && getComputedStyle(document.querySelector('.builder-edit')).display === 'none'"))) throw new Error('preview not shown by the switch');
     await click('[data-builder-view="edit"]');
     await send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
-    const collapsed = await evaluate("(() => { const rail = document.querySelector('.question-sidebar').getBoundingClientRect(); const label = document.querySelector('.question-row-label'); return { rail: rail.width, clipped: label.getBoundingClientRect().width <= 1, name: label.closest('button').textContent }; })()");
+    const shown = () => evaluate("['.question-row-label', '#fields .question-canvas', '#fields .question-settings'].map(selector => document.querySelector(selector).getBoundingClientRect().width > 1).join()");
+    if ((await shown()) !== 'true,true,false') throw new Error('medium widths must keep the labeled outline beside the editor');
+    await click('#question-inspector');
+    if ((await shown()) !== 'true,false,true') throw new Error('medium question options must keep the labeled outline visible');
+    await click('#question-inspector');
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
-    if (collapsed.rail > 92 || !collapsed.clipped || !collapsed.name.trim()) throw new Error('outline did not collapse with accessible names: ' + JSON.stringify(collapsed));
     await layoutCheck('form builder three panes', '#questions');
     await evaluate('delete document.body.dataset.dirty');
   });
@@ -2216,23 +2202,80 @@ try {
     if (seen.length !== total || new Set(seen).size !== total) throw new Error('tied response history missing or duplicated');
     if (await evaluate("Boolean(document.querySelector('#more'))")) throw new Error('extra history page incorrectly offered');
   });
+  await step('Flow v1: job templates, step builder, publish, run timeline and phone approvals across layouts', async () => {
+    const flowApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }${body === undefined ? '' : ', body: ' + JSON.stringify(JSON.stringify(body))} }); return { status: r.status, body: await r.json().catch(() => null) }; })()`);
+    const submit = name => fetch(`${base}/api/public/forms/${formSlug}/responses`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: { name, email: `${name.toLowerCase()}@example.com`, topic: 'support' }, submission_id: `flow-v1-${name.toLowerCase()}-0000001` }) });
+    await open(`/flow?form=${formId}`, "document.querySelector('[data-template=speed_to_lead]') && document.querySelector('#flow-blank')");
+    if (!(await text()).includes('Runs this month')) throw new Error('usage meter missing');
+    await layoutCheck('Flow home with job templates');
+    await click('#flow-blank');
+    await waitFor("/^\\/flow\\/build\\/[0-9a-f-]{36}$/.test(location.pathname) && document.querySelector('[data-add=root]')", 'step builder');
+    const flowId = await evaluate("location.pathname.split('/')[3]");
+    if (app.db.get('SELECT status, published_version FROM flows WHERE id = ?', flowId).status !== 'draft') throw new Error('a new workflow is not a draft');
+    await evaluate("(() => { const s = document.querySelector('[data-add=root]'); s.value = 'action:create_task'; s.dispatchEvent(new Event('change', { bubbles: true })); })()");
+    await waitFor("document.querySelector('[data-editor] [data-text=title]')", 'task editor opened');
+    await evaluate("(() => { const t = document.querySelector('[data-editor] [data-text=title]'); t.value = 'Follow up '; t.dispatchEvent(new Event('change', { bubbles: true })); })()");
+    await evaluate("(() => { const s = document.querySelector('[data-editor] [data-insert]'); s.value = 'Contact name'; s.dispatchEvent(new Event('change', { bubbles: true })); })()");
+    await waitFor("document.querySelector('#flow-sentence').textContent.includes('Follow up [Contact name]')", 'live sentence with a field chip');
+    // Builder-generated text (sentence, step titles, field values) shows fields as [names]. Sample values are
+    // respondents' own data and may legitimately contain braces, so they are not checked here.
+    if (await evaluate("[document.querySelector('#flow-sentence').textContent, ...[...document.querySelectorAll('.flow-step-title, .flow-step .visually-hidden')].map(el => el.textContent), ...[...document.querySelectorAll('[data-text]')].map(el => el.value)].some(value => value.includes('{{'))")) throw new Error('raw tokens shown in the builder');
+    await layoutCheck('Flow step builder');
+    await click('#flow-save');
+    await waitFor(`${JSON.stringify(app.db.get('SELECT 1 AS x').x)} && document.querySelector('#flow-state') && !document.querySelector('#flow-state').textContent.includes('Not saved')`, 'draft saved');
+    const stored = JSON.parse(app.db.get('SELECT definition FROM flows WHERE id = ?', flowId).definition);
+    if (stored.steps[0].config.title !== 'Follow up {{contact.name}}') throw new Error('field chip not stored as a reference: ' + stored.steps[0].config.title);
+    await click('#flow-publish');
+    await waitFor("document.querySelector('dialog[open]')", 'publish confirmation');
+    await click('dialog[open] button[value=ok]');
+    await waitFor("document.querySelector('[data-status=enabled]')", 'published');
+    await click('[data-status=enabled]');
+    await waitFor("document.querySelector('#flow-state').textContent.includes('On')", 'workflow on');
+    if ((await submit('Rae')).status !== 201) throw new Error('response not accepted');
+    await app.worker.tick();
+    const run = app.db.get('SELECT id, status FROM flow_runs WHERE flow_id = ?', flowId);
+    if (run?.status !== 'succeeded') throw new Error('workflow run did not succeed: ' + JSON.stringify(run));
+    await open(`/flow/runs/${run.id}`, "document.querySelector('.flow-timeline')");
+    if (!(await text()).includes('Follow up Rae') && !(await text()).includes('Create a task')) throw new Error('timeline missing the step');
+    if (await evaluate("[...document.querySelectorAll('.flow-timeline-step strong')].some(el => el.textContent.includes('{{'))")) throw new Error('raw tokens shown in the run timeline');
+    await layoutCheck('Flow run timeline');
+    // An approval waits for a person; the approvals page works on a phone.
+    const approvalFlow = await flowApi('POST', '/flow/workflows', { name: 'Approve follow-up', definition: { trigger: { type: 'forms.response.created', source: formId }, steps: [{ id: 'ok', type: 'approval', approver: 'admins', expires_hours: 24, title: 'Follow up this enquiry' }, { id: 'done', type: 'action', action: 'create_task', config: { title: 'Approved follow-up {{contact.name}}' } }] } });
+    await flowApi('POST', `/flow/workflows/${approvalFlow.body.id}/publish`, { revision: approvalFlow.body.draft_revision });
+    await flowApi('POST', `/flow/workflows/${approvalFlow.body.id}/status`, { status: 'enabled' });
+    await flowApi('POST', `/flow/workflows/${flowId}/status`, { status: 'draft' });
+    if ((await submit('Sol')).status !== 201) throw new Error('response not accepted');
+    await app.worker.tick();
+    await open('/flow/approvals', "document.querySelector('[data-decide=approve]')");
+    await layoutCheck('Flow approvals');
+    await send('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true });
+    await click('[data-decide=approve]');
+    await waitFor("document.querySelector('#approval-list .empty')", 'approved on a phone');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await app.worker.tick();
+    if (!app.db.get("SELECT 1 FROM tasks WHERE title = 'Approved follow-up Sol'")) throw new Error('approved run did not continue');
+    await flowApi('POST', `/flow/workflows/${approvalFlow.body.id}/status`, { status: 'draft' });
+    await open('/flow?tab=connections', "document.querySelector('.flow-integrations')");
+    if (!(await text()).includes('Not configured') && !(await text()).includes('Local outbox')) throw new Error('integrations are not honestly labelled');
+    await layoutCheck('Flow integrations');
+  });
   await step('billing test checkout', async () => {
     await open('/billing', "document.querySelector('[data-action=checkout]')");
     await layoutCheck('billing');
     await click('[data-action="checkout"][data-plan="suite"]');
-    await waitFor("document.body.innerText.includes('Suite plan')", 'subscription listed');
+    await waitFor("document.querySelector('.billing-subscription--suite .billing-subscription__status')?.innerText.includes('active')", 'active Suite subscription');
   });
   await step('proposed pricing prototype: labelled, not purchasable, exact annual totals, honest limits', async () => {
     await open('/pricing/proposal', "document.querySelector('.proposal-plans .proposal-plan')");
     const order = await evaluate("[document.querySelector('.proposal-label')?.textContent, document.querySelector('.proposal-banner').compareDocumentPosition(document.querySelector('#main h1')) & Node.DOCUMENT_POSITION_FOLLOWING]");
-    if (order[0] !== 'Proposed pricing — not available for purchase' || !order[1]) throw new Error('proposal label missing or not shown first');
+    if (order[0] !== 'Pricing research prototype — not available for purchase' || !order[1]) throw new Error('proposal label missing or not shown first');
     if (!(await evaluate("document.head.querySelector('meta[name=robots][content=noindex]') !== null"))) throw new Error('proposal page is indexable');
     if (await evaluate("Boolean(document.querySelector('#main [data-action=checkout], #main form[action], #main a[href*=checkout]')) || [...document.querySelectorAll('#main button')].some(b => /buy|subscribe|checkout|upgrade/i.test(b.textContent))")) throw new Error('prototype offers a purchase control');
     const prices = await evaluate("[...document.querySelectorAll('.proposal-plan')].map(card => card.querySelector('h2').textContent + ' ' + card.querySelector('.proposal-price').textContent.replace(/\\s+/g, ' ').trim())");
     if (prices.join('|') !== 'Meet ₹399 per workspace, per month|Forms ₹499 per workspace, per month|Flow ₹699 per workspace, per month|Suite ₹1,199 per workspace, per month') throw new Error('unexpected monthly prices: ' + prices.join('|'));
     await evaluate("const r = document.querySelector('[name=billing][value=annual]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true }))");
     const annual = await evaluate("document.querySelector('.proposal-plan.meet').innerText");
-    if (!annual.includes('₹3,990') || !annual.includes('paid once a year') || !annual.includes('₹332.50 a month')) throw new Error('annual view hides the full payment: ' + annual);
+    if (!annual.includes('₹4,213.44') || !annual.includes('paid once a year') || !annual.includes('₹351.12 a month')) throw new Error('annual view hides the full payment: ' + annual);
     await fill('#est-responses', '-5');
     await click('#estimate-form [type=submit]');
     await waitFor("document.querySelector('#est-responses[aria-invalid=true]') && document.querySelector('#estimate-form .field-error')", 'invalid estimate rejected');
@@ -2240,12 +2283,12 @@ try {
     await click('#estimate-form [type=submit]');
     await waitFor("document.querySelector('#estimate-result').innerText.includes('200 would be refused')", 'estimate result');
     const estimateText = await evaluate("document.querySelector('#estimate-result').innerText");
-    if (!estimateText.includes('₹4,990') || !/refused, not charged/.test(estimateText)) throw new Error('estimate does not explain cost and limit outcome: ' + estimateText);
+    if (!estimateText.includes('₹5,269.44') || !/refused, not charged/.test(estimateText)) throw new Error('estimate does not explain cost and limit outcome: ' + estimateText);
     if (await evaluate("performance.getEntriesByType('resource').some(entry => /\\/api\\/(billing|workspaces\\/[^/]+\\/billing)/.test(entry.name))")) throw new Error('prototype called the billing API');
     await layoutCheck('proposed pricing');
     await open('/billing', "document.querySelector('#main h1')");
     if (await evaluate("Boolean(document.head.querySelector('meta[data-page-meta]'))")) throw new Error('noindex leaked to the next page');
-    if ((await text()).includes('₹399')) throw new Error('proposed prices appear on the live Plans page');
+    if (await evaluate("document.querySelector('.proposal-label, .proposal-plans, #estimate-form')")) throw new Error('prototype controls appear on the live Plans page');
   });
   await step('account page and settings', async () => {
     await open('/account', "document.querySelector('#members .list') && document.querySelector('#brand-form')");
@@ -2262,7 +2305,7 @@ try {
     if ((await evaluate('document.documentElement.scrollWidth - innerWidth')) > 0) throw new Error('mobile navigation overflows');
     await click('#side-open');
     const menu = await evaluate("[...document.querySelectorAll('.side-nav a')].map(a => new URL(a.href).searchParams.get('tab')).join()");
-    if (menu !== 'types,meetings,video,polls,contacts,workflows,analytics,insights,integrations,emails') throw new Error('drawer sections missing: ' + menu);
+    if (menu !== 'overview,meetings,availability,types,video,polls,contacts,workflows,analytics,insights,integrations,emails') throw new Error('drawer sections missing: ' + menu);
     if (!(await evaluate("document.querySelector('#main').inert && document.activeElement.id === 'side-close'"))) throw new Error('drawer focus/inert missing');
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -2379,6 +2422,8 @@ try {
     await click('#instant [type="submit"]');
     await waitFor("location.pathname.startsWith('/meet/room/') && document.querySelector('#join-form')", 'prejoin');
     roomPath = await evaluate('location.pathname');
+    // Hosts see the credit, time and participant guidance before joining (docs/MEET_VIDEO.md, section 11).
+    await waitFor("document.querySelector('.video-guidance')?.textContent.includes('credit per person per minute') && document.querySelector('.video-guidance').textContent.includes('does not create a replacement meeting link')", 'host video guidance');
     await waitFor("document.querySelector('#preview')?.srcObject?.getVideoTracks().length === 1", 'camera preview', 10000);
     const headers = await evaluate("fetch(location.href).then(r => [r.headers.get('permissions-policy'), r.headers.get('referrer-policy'), r.headers.get('content-security-policy')].join(' | '))");
     if (!/camera=\(self\)/.test(headers) || !/no-referrer/.test(headers) || !/media-src/.test(headers)) throw new Error('meeting headers missing: ' + headers);
@@ -2471,7 +2516,7 @@ try {
       await shot('room');
       await viewport(375);
       await click('#mic');
-      await waitFor("document.querySelector('#mic').textContent === 'Unmute microphone' && document.querySelector('#room-media-state').textContent.includes('Microphone muted')", 'muted in room');
+      await waitFor("document.querySelector('#mic').getAttribute('aria-label') === 'Unmute microphone' && document.querySelector('#room-media-state').textContent.includes('Microphone muted')", 'muted in room');
       // Device menu: switching keeps the muted microphone muted; Escape returns focus.
       await click('#devices-toggle');
       await waitFor("!document.querySelector('#devices-panel').hidden && document.querySelector('#devices-panel').contains(document.activeElement)", 'devices panel focused');
@@ -2480,7 +2525,7 @@ try {
       await waitFor("document.querySelector('#device-message').innerText.includes('Switched microphone')", 'switched');
       const switched = await evaluate('window.__fakeSwitches.at(-1)');
       if (switched[0] !== 'audioinput' || switched[2] !== false || switched[3] !== true) throw new Error('switch did not preserve state: ' + JSON.stringify(switched));
-      if ((await evaluate("document.querySelector('#mic').textContent")) !== 'Unmute microphone') throw new Error('mute state lost after switching');
+      if ((await evaluate("document.querySelector('#mic').getAttribute('aria-label')")) !== 'Unmute microphone') throw new Error('mute state lost after switching');
       if (!(await evaluate("Boolean(document.querySelector('#dev-audiooutput') || document.querySelector('#no-output'))"))) throw new Error('speaker choice or explanation missing');
       await evaluate("{ const s = document.querySelector('#dev-videoinput'); s.add(new Option('Broken camera', 'fail')); s.value = 'fail'; s.dispatchEvent(new Event('change', { bubbles: true })) }");
       await waitFor("document.querySelector('#device-message').innerText.includes('could not start')", 'switch failure explained');
@@ -2498,7 +2543,7 @@ try {
       await waitFor("document.querySelector('#room-alerts').innerText.includes('If you chose Cancel')", 'cancelled picker guidance');
       await evaluate('window.__fakeShareError = null');
       await click('#share');
-      await waitFor("document.querySelector('#share').textContent === 'Stop sharing'", 'sharing');
+      await waitFor("document.querySelector('#share').getAttribute('aria-label') === 'Stop sharing'", 'sharing');
       await waitFor("document.querySelectorAll('.video-tile').length === 3 && document.querySelector('#grid').dataset.sharing === 'true'", 'screen tile alongside two cameras');
       for (const [width, height] of [[375, 667], [375, 800], [768, 800], [1440, 900]]) {
         await viewport(width, height);
@@ -2642,6 +2687,7 @@ try {
         await open(new URL(room.host_url).pathname, "document.querySelector('#join-form')");
         await waitFor("document.querySelector('#device-status').innerText.includes('blocking the camera') && document.querySelector('#device-status').innerText.includes('blocking the microphone')", 'denial guidance');
         if ((await evaluate("[document.querySelector('#toggle-camera').textContent, document.querySelector('#toggle-mic').textContent].join()")) !== 'Turn camera on,Unmute microphone') throw new Error('toggles do not show media off');
+        await fill('#display-name', 'Permission denied guest');
         await shot('permission-denied');
         await enterRoom();
         if ((await evaluate("document.querySelector('#room-media-state').textContent")) !== 'Camera off · Microphone muted') throw new Error('joined with unexpected media state');
@@ -2669,8 +2715,7 @@ try {
   await step('video: credits, calculator and simulated recharge', async () => {
     await open('/billing', "document.querySelector('#credits-title')");
     await fill('#calc-people', '3'); await fill('#calc-minutes', '45');
-    await click('#calculator [type="submit"]');
-    await waitFor("document.querySelector('#calc-result').innerText.includes('135 participant-minutes')", 'calculator result');
+    await waitFor("document.querySelector('#calc-result').innerText.includes('135 participant-minutes') && document.querySelector('#calc-result').innerText.includes('27 credits')", 'live calculator result');
     await click('[data-buy="small"]');
     await waitFor("document.querySelector('[data-test-pay]')", 'pending purchase');
     await click('[data-test-pay]');
@@ -2764,7 +2809,9 @@ try {
       await fill('#live-ics-url', 'https://calendar.example.com/setup.ics');
       await fill('#live-ics-label', 'Setup calendar');
       await click('#live-calendar-form [type=submit]');
-      await waitFor("document.querySelector('#live-calendar-form') && document.querySelector('#live-setup')?.textContent.includes('successful check not verified') || document.querySelector('#live-calendar-form') && document.body.textContent.includes('successful check not verified')", 'failed sync remains unverified');
+      await waitFor("document.querySelector('#live-calendar-form') && document.body.textContent.includes('its busy-time check failed')", 'failed sync remains unverified');
+      const failed = app.db.get("SELECT status, last_success_at FROM calendar_connections WHERE label = 'Setup calendar'");
+      if (failed?.status !== 'error' || failed.last_success_at != null) throw new Error('Failed calendar sync was marked successful');
       if (await evaluate("Boolean(document.querySelector('#live-meet-form'))")) throw new Error('failed sync advanced onboarding');
       await layoutCheck('calendar first sync failed');
       fail = false;
@@ -2787,8 +2834,8 @@ try {
     await layoutCheck('live onboarding products');
     await click('#select-all-live-products');
     await click('#live-product-selection button[type=submit]');
-    await waitFor("document.querySelector('#skip-live-calendar')", 'live calendar step');
-    await click('#skip-live-calendar');
+    await waitFor("document.querySelector('#continue-from-calendar')?.textContent === 'Continue without a calendar'", 'live calendar step');
+    await click('#continue-from-calendar');
     await waitFor("document.querySelector('#live-meet-form')", 'live availability step');
     await fill('#live-event-title', 'Live Onboarding Call');
     await click('#live-meet-form button[type=submit]');
@@ -2812,7 +2859,8 @@ try {
     await click('#live-flow-form button[type=submit]');
     await waitFor("document.querySelector('#live-ready-meet') && document.querySelector('#live-ready-forms') && document.querySelector('#live-ready-flow')", 'live readiness review');
     const reviewText = await text();
-    if (!reviewText.includes('Optional calendar step skipped (not verified)') || !reviewText.includes('Draft (not published)') || !reviewText.includes('draft (not enabled)')) {
+    const skipped = await evaluate("fetch('/api/me').then(r => r.json()).then(me => fetch('/api/workspaces/' + me.workspaces[0].id + '/onboarding')).then(r => r.json()).then(data => data.meet_calendar_skipped === true && !data.records.meet.connections.length)");
+    if (!skipped || !reviewText.includes('Draft (not published)') || !reviewText.includes('draft (not enabled)')) {
       throw new Error('live onboarding readiness did not report draft/skipped states honestly: ' + reviewText.slice(0, 300));
     }
     await click('#live-simulate-flow');
@@ -2868,7 +2916,7 @@ try {
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   });
 
-  await step('Team host setup: private summaries, keyboard disclosure, role changes and failed refresh', async () => {
+  await step('Team host setup: private summaries and role changes', async () => {
     const me = await evaluate("fetch('/api/me').then(r=>r.json())");
     const ws = me.workspaces[0].id;
     const host = me.user.id;
@@ -2883,40 +2931,122 @@ try {
     app.db.run('INSERT INTO calendar_connections (id, workspace_id, user_id, provider, feed_url, label, status, last_error, last_synced_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', crypto.randomUUID(), ws, peer, 'ics', 'https://example.com/' + sentinel, sentinel, 'error', sentinel, app.now(), app.now());
     const effects = () => JSON.stringify(app.db.get('SELECT (SELECT COUNT(*) FROM bookings) AS bookings, (SELECT COUNT(*) FROM emails) AS emails, (SELECT COUNT(*) FROM busy_blocks) AS blocks, (SELECT COUNT(*) FROM outbox) AS outbox'));
     const before = effects();
-    const ready = "document.querySelector('[data-host-readiness]')";
-    await open('/meet/event-types/' + type.id, ready);
-    if (await evaluate("document.querySelector('[data-host-readiness]').open")) throw new Error('host breakdown should start collapsed');
-    await evaluate("document.querySelector('[data-host-readiness] summary').focus()");
-    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
-    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 });
-    if (!(await evaluate("document.querySelector('[data-host-readiness]').open && document.activeElement.matches('[data-host-readiness] summary') && getComputedStyle(document.activeElement).outlineStyle !== 'none'"))) throw new Error('keyboard disclosure/focus failed');
-    const text = await evaluate("document.querySelector('[data-host-readiness]').innerText");
-    if (!text.includes('latest calendar check failed') || !text.includes('Needs setup: not connected') || !text.includes('event schedule as a fallback') || text.includes(sentinel)) throw new Error('wrong or private host evidence: ' + text);
-    await evaluate("document.querySelector('[data-host-readiness]').scrollIntoView({block:'start'})");
-    await layoutCheck('team host setup owner', '[data-host-readiness]');
-    // A stale client role must not defeat the server's fresh scope decision.
+    const path = '/event-types/' + type.id + '/host-readiness';
+    const full = await request('GET', path);
+    if (full.scope !== 'all_hosts' || full.hosts?.find(row => row.user_id === peer)?.calendar?.state !== 'failed' || JSON.stringify(full).includes(sentinel)) throw new Error('owner evidence missing or leaked a private calendar value');
     app.db.run("UPDATE memberships SET role = 'member' WHERE workspace_id = ? AND user_id = ?", ws, host);
     try {
-      await click('[data-recheck]');
-      await waitFor("document.querySelector('[data-host-readiness]')?.textContent.includes('only this host and workspace admins')", 'restricted cohost evidence');
-      await click('[data-host-readiness] summary');
-      const restricted = await evaluate("document.querySelector('[data-host-readiness]').innerText");
-      if (restricted.includes('latest calendar check failed') || restricted.includes(sentinel)) throw new Error('another host setup leaked after role change');
-      await evaluate("document.querySelector('[data-host-readiness]').scrollIntoView({block:'start'})");
-      await layoutCheck('team host setup cohost', '[data-host-readiness]');
+      const restricted = await request('GET', path);
+      const other = restricted.hosts?.find(row => row.user_id === peer);
+      if (restricted.scope !== 'self_only' || other?.visibility !== 'restricted' || other.calendar !== null || other.meeting_links !== null || JSON.stringify(restricted).includes(sentinel)) throw new Error('another host setup leaked after role change');
     } finally { app.db.run("UPDATE memberships SET role = 'owner' WHERE workspace_id = ? AND user_id = ?", ws, host); }
-    await evaluate("window.originalReadinessFetch=window.fetch;window.fetch=(url,...args)=>String(url).endsWith('/host-readiness')?Promise.resolve(new Response(JSON.stringify({error:{code:'unavailable',message:'Private provider error'}}),{status:503,headers:{'Content-Type':'application/json'}})):window.originalReadinessFetch(url,...args)");
-    try {
-      await click('[data-recheck]');
-      await waitFor("document.querySelector('[data-host-evidence-error]')", 'host evidence failure');
-      if (await evaluate("Boolean(document.querySelector('[data-host-readiness]')) || document.querySelector('[data-host-evidence-error]').innerText.includes('Private provider error')")) throw new Error('failed refresh retained success or leaked raw error');
-    } finally { await evaluate("window.fetch=window.originalReadinessFetch;delete window.originalReadinessFetch"); }
     if (effects() !== before) throw new Error('readiness reads changed bookings, email, busy times or outbox');
   });
 
 
   }
-  await step('public pages: readable demos, consistent navigation and safe signup handoff', async () => {
+  }
+  if (!bookingsOnly && !process.argv.includes('--public-only')) await step('Forms builder: undo, redo and shortcuts with saving, branching, text fields and publishing', async () => {
+    const CTRL = 2, SHIFT = 8;
+    const chord = async (key, code, vk, modifiers = 0, text) => {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers, text });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers });
+    };
+    const undo = () => chord('z', 'KeyZ', 90, CTRL);
+    const redo = () => chord('Z', 'KeyZ', 90, CTRL | SHIFT);
+    const rows = () => evaluate("document.querySelectorAll('#question-list [data-question-row]').length");
+    const saveState = () => evaluate("document.querySelector('#builder-status').dataset.save");
+    const jumps = () => evaluate("document.querySelector('#workflow-summary').textContent.trim().split('.')[0]");
+    const live = text => waitFor(`document.querySelector('#builder-live').textContent.includes(${JSON.stringify(text)})`, `announcement "${text}"`);
+    const focusButton = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+    const formApi = (method, path, body) => evaluate(`(async () => { const me = await (await fetch('/api/me')).json(); const r = await fetch('/api/workspaces/' + me.workspaces[0].id + ${JSON.stringify(path)}, { method: ${JSON.stringify(method)}, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token }, body: ${JSON.stringify(JSON.stringify(body))} }); return r.json(); })()`);
+    const created = await formApi('POST', '/forms', { definition: { title: 'Undo journey', description: '', presentation: 'classic', submit_label: 'Send', fields: [
+      { id: 'kind', type: 'single_choice', label: 'Who is this for?', required: true, options: [{ id: 'home', label: 'Home' }, { id: 'office', label: 'Office' }] },
+      { id: 'size', type: 'short_text', label: 'Team size?', required: false },
+      { id: 'notes', type: 'long_text', label: 'Notes', required: false }
+    ], logic: [{ field: 'kind', rules: [{ when: { field: 'kind', op: 'equals', value: 'home' }, to: { type: 'field', id: 'notes' } }] }] } });
+    if (!created.id) throw new Error('undo fixture not created: ' + JSON.stringify(created));
+    await open(`/forms/${created.id}`, "document.querySelector('#undo-change') && document.querySelector('#question-list [data-question-row]')");
+    await evaluate("window.__keyPrevented = []; window.addEventListener('keydown', event => window.__keyPrevented.push(event.key + ':' + event.defaultPrevented))");
+    if ((await evaluate("document.querySelector('#undo-change').getAttribute('aria-disabled')")) !== 'true' || (await saveState()) !== 'saved') throw new Error('a freshly opened form should have nothing to undo');
+
+    // Branching: removing the jump's target prunes the rule; undo brings both back and the draft is saved again.
+    await click('[data-question-index="2"]');
+    await click('.canvas-tools[data-index="2"] [data-remove]');
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 2", 'question removed');
+    if ((await jumps()) !== '0 jump rules' || (await saveState()) !== 'dirty') throw new Error('removing the target should prune the jump and mark the draft unsaved');
+    await focusButton('#undo-change');
+    await undo();
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 3", 'undo restores the question');
+    if ((await jumps()) !== '1 jump rule') throw new Error('undo did not restore the jump rule: ' + await jumps());
+    if ((await saveState()) !== 'saved') throw new Error('undoing back to the saved draft should show it as saved');
+    await live('Undone.');
+    await redo();
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 2", 'redo removes it again');
+    if ((await jumps()) !== '0 jump rules' || (await saveState()) !== 'dirty') throw new Error('redo did not reapply the removal');
+    await undo();
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 3", 'second undo');
+
+    // Ctrl+Enter adds after the selected question with its type; focus lands in the new question.
+    await click('[data-question-index="1"]');
+    await chord('Enter', 'Enter', 13, CTRL);
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 4", 'Ctrl+Enter adds a question');
+    if ((await evaluate("document.querySelector('[data-question-row=\"2\"]').dataset.questionType")) !== 'short_text') throw new Error('the added question should repeat the selected type after it');
+    // In a text field, Ctrl+Z and ? belong to the field: the form is not undone and no dialog opens.
+    await evaluate("(() => { const label = document.querySelector('#fields [data-index=\"2\"] [data-prop=\"label\"]'); label.focus(); label.setSelectionRange(label.value.length, label.value.length); })()");
+    await send('Input.insertText', { text: ' about' });
+    await undo();
+    await chord('?', 'Slash', 191, SHIFT, '?');
+    if ((await rows()) !== 4) throw new Error('Ctrl+Z in a text field undid the form instead of the typing');
+    if (await evaluate("Boolean(document.querySelector('dialog.shortcuts-dialog'))")) throw new Error('typing ? in a text field opened the shortcuts');
+    if (!(await evaluate("document.activeElement.value.endsWith('?')"))) throw new Error('? was not typed into the field');
+    // Ctrl+D duplicates even from a text field (it has no text meaning) and the browser's bookmark is prevented.
+    await chord('d', 'KeyD', 68, CTRL);
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 5", 'Ctrl+D duplicates');
+    if (!(await evaluate("window.__keyPrevented.includes('d:true')"))) throw new Error('Ctrl+D reached the browser');
+    await focusButton('#undo-change');
+    await undo();
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 4", 'undo the duplicate');
+
+    // ? outside a text field lists the shortcuts; Escape returns focus where it was.
+    await focusButton('#undo-change');
+    await chord('?', 'Slash', 191, SHIFT, '?');
+    await waitFor("document.querySelector('dialog.shortcuts-dialog[open]') && document.activeElement.id === 'shortcuts-title'", 'shortcuts dialog');
+    if ((await evaluate("document.querySelectorAll('.shortcut-list > div').length")) !== 5) throw new Error('shortcut list incomplete');
+    await layoutCheck('Forms keyboard shortcuts', 'dialog.shortcuts-dialog');
+    await chord('Escape', 'Escape', 27);
+    await waitFor("!document.querySelector('dialog.shortcuts-dialog') && document.activeElement.id === 'undo-change'", 'shortcuts closed, focus restored');
+
+    // Saving keeps history; undoing back to what was saved shows the draft as saved.
+    await click('#save');
+    await waitFor("document.querySelector('#builder-status').dataset.save === 'saved'", 'saved');
+    await focusButton('#undo-change');
+    await chord('Enter', 'Enter', 13, CTRL);
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 5", 'added after saving');
+    if ((await saveState()) !== 'dirty') throw new Error('an edit after saving should be unsaved');
+    await focusButton('#undo-change');
+    await undo();
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 4 && document.querySelector('#builder-status').dataset.save === 'saved'", 'undo to the saved draft');
+    await layoutCheck('Forms builder with undo and redo');
+
+    // Publishing locks keys and types, so history starts again; shortcuts that need the canvas say where they work.
+    await focusButton('#undo-change');
+    await chord('Enter', 'Enter', 13, CTRL);
+    await waitFor("document.querySelectorAll('#question-list [data-question-row]').length === 5", 'added before publishing');
+    await click('#publish');
+    await waitFor("document.querySelector('#share-link') && document.querySelector('#builder-status').dataset.liveVersion === '1'", 'published');
+    if ((await evaluate("document.querySelector('#undo-change').getAttribute('aria-disabled')")) !== 'true') throw new Error('history should restart after publishing');
+    await focusButton('#undo-change');
+    await undo();
+    await live('Nothing to undo.');
+    if ((await rows()) !== 5) throw new Error('undo crossed the publish');
+    await chord('d', 'KeyD', 68, CTRL);
+    await live('works in Questions');
+    if ((await rows()) !== 5) throw new Error('Ctrl+D acted outside Questions');
+    if (app.db.get('SELECT published_version FROM forms WHERE id = ?', created.id).published_version !== 1) throw new Error('publish not recorded');
+  });
+
+  if (!bookingsOnly) await step('public pages: readable demos, consistent navigation and safe signup handoff', async () => {
     // A fresh anonymous browser context at a separate loopback host; no production service involved.
     const origin = `http://localhost:${app.server.address().port}`;
     app.config.allowedOrigins.add(origin);

@@ -1,12 +1,20 @@
+import { draftAiColumn } from './forms/sheets-ai.mjs';
+import { createQualifyStarter } from './forms/qualify-starter.mjs';
+import { resumeDraft, resumeMetrics } from './forms/resume.mjs';
+import { recordTwilioStatus } from './platform/twilio.mjs';
 import { createRouter, fail, parseCookies, readBody, readJson, sendJson, send, clientAddress } from './http.mjs';
+import { draftFormWithAi, formAiUsage, summarizeFormResponses } from './forms/ai.mjs';
+import { bookingRowAction, bookingSheetGrid, bookingSheetLinks, setBookingSheetLink } from './forms/booking-sheets.mjs';
 import { clearSessionCookies, cookieName, createSession, deleteAccount, loadSession, signIn, signOut, signUp } from './platform/auth.mjs';
-import { addMember, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
+import { addMember, can, changeMember, createWorkspace, deleteWorkspace, listMembers, listWorkspaces, removeMember, requireMember, updateWorkspace } from './platform/workspaces.mjs';
+import { createUploadGrant, receiveUpload, discardUpload, downloadUpload, uploadStatus, uploadToken } from './forms/uploads.mjs';
 import { publicAsset, uploadAsset, workspaceAsset } from './forms/assets.mjs';
 import { createTheme, deleteTheme, listThemes, updateTheme } from './forms/themes.mjs';
 import { parseResponseFilter } from './forms/response-filter.mjs';
 import { exportDefinition, exportFilename, IMPORT_MAX_BYTES, importForm, inspectDefinition } from './forms/definition-io.mjs';
-import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, publishedForm, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
-import { getWorkbook, saveWorkbook } from './forms/workbooks.mjs';
+import { availability, publicDefinition, checkFormPublish, saveRouting, createForm, deleteForm, deleteResponse, editResponse, exportCsv, formVersions, getForm, handoffDetails, listForms, listResponses, nextStepSummary, publishedForm, responseSummary, publishForm, saveDraft, submitResponse, unpublishForm } from './forms/service.mjs';
+import { workbookComments, addCellComment, applyWorkbookChanges, cellComments, getStandaloneWorkbook, getWorkbook, linkedWorkbookResponses, responseGrid, restoreWorkbook, saveWorkbook, setWorkbookLink, syncWorkbook, workbookHistory, workbookLinks } from './forms/workbooks.mjs';
+import {listWorkbookTrash,setWorkbookTrash, renameStandaloneWorkbook, createStandaloneWorkbook, listStandaloneWorkbooks, setWorkbookAccess, standaloneWorkbook, workbookAccessList } from './forms/workbook-access.mjs';
 import { createFlow, deleteFlow, getFlow, listFlows, listRuns, listTasks, retryRun, simulateFlow, updateFlow, updateTask } from './flow/service.mjs';
 import { entitlementsFor, usageFor } from './billing/entitlements.mjs';
 import { PLANS, QUOTAS, GRACE_DAYS } from './billing/plans.mjs';
@@ -15,6 +23,7 @@ import { subscriptionCatalog, subscriptionCheckout, subscriptionWebhook, refresh
 import { isAllowedOrigin, publicConfig, releaseWarnings } from './config.mjs';
 import { registerMeetRoutes } from './api-meet.mjs';
 import { registerVideoRoutes } from './api-video.mjs';
+import { registerFlowRoutes } from './flow/routes.mjs';
 import { videoHealth } from './video/rooms.mjs';
 import { alertChannels, firingAlerts } from './platform/monitoring.mjs';
 import { recordEmailEvent, verifySignature } from './platform/email-events.mjs';
@@ -24,6 +33,11 @@ import { disconnectIntegration, finishOAuth, PROVIDERS, startOAuth } from './pla
 import { finishRespondentSso, finishSso, getSsoConfig, isRespondentCallback, saveSsoConfig, ssoWorkspaceFor, startRespondentSso, startSso } from './platform/sso.mjs';
 import { createRespondentSession, endRespondentSession, safeReturnSearch, setFormAccess } from './forms/respondents.mjs';
 import { handleMcp } from './platform/mcp.mjs';
+import { checkoutFormPayment, formPaymentProvider, publicPaymentStatus, refreshFormPayment, testFormPayment, verifyFormPayment } from './forms/payments.mjs';
+import { handleInboundReply, messageConsentStatus, whatsappReceiptsAvailable, withdrawMessageConsent } from './forms/receipts.mjs';
+import { verifyTwilioInbound } from './platform/twilio.mjs';
+import { createFollowup, discardFollowup, listFollowups, sendFollowup, updateFollowup } from './ai/followups.mjs';
+import { controlSheetsSync, createSheetsSync, disconnectSheets, sheetsDestinations, sheetsReturn, sheetsSyncStatus, startSheetsConnection, stopSheetsSync } from './forms/google-sheets.mjs';
 import { chat, createRecap, createTranscript, deleteTranscript, getTranscript, handleInboundEmail, listTranscripts, meetingPrep, publicRecap, shareRecap, unshareRecap } from './ai/service.mjs';
 import { timingSafeEqual } from 'node:crypto';
 import { clearGoogleLoginCookie, finishGoogleLogin, googleLoginEnabled, googleLoginRedirect, safeGoogleNext, startGoogleLogin } from './platform/google-signin.mjs';
@@ -149,11 +163,14 @@ export function createApi(app) {
 
   registerMeetRoutes(app, router, { member, limit });
   registerVideoRoutes(app, router, { member, limit });
+  registerFlowRoutes(app, router, { member, limit });
 
   // ---- OAuth integrations (calendars, video) ----
   get('/api/workspaces/:ws/integrations/:provider/start', ctx => {
     const actor = member(ctx, 'meet.manage_own');
     if (ctx.apiKey) fail(403, 'forbidden', 'Connect integrations from the web app.');
+    // Google Sheets is connected from a form's Responses page only (forms/google-sheets.mjs).
+    if (PROVIDERS[ctx.params.provider]?.separate) fail(404, 'not_found', 'Unknown integration.');
     return startOAuth(app, actor.workspace.id, actor.userId, ctx.params.provider);
   });
   del('/api/workspaces/:ws/integrations/:provider', ctx => {
@@ -166,8 +183,11 @@ export function createApi(app) {
     if (!PROVIDERS[ctx.params.provider]) fail(404, 'not_found', 'Unknown integration.');
     try {
       const result = await finishOAuth(app, ctx.params.provider, ctx.query, ctx.user);
+      const back = sheetsReturn(result.return);
+      if (back) return { redirect: `${back}?sheets=${result.ok ? 'connected' : 'not_connected'}${result.message ? '&message=' + encodeURIComponent(result.message) : ''}` };
       return { redirect: `/meet?tab=calendar&${result.ok ? 'connected=' + ctx.params.provider : 'error=denied'}` };
     } catch (error) {
+      if (ctx.params.provider === 'google_sheets') return { redirect: `/forms?sheets=not_connected&message=${encodeURIComponent(error.message.slice(0, 120))}` };
       return { redirect: `/meet?tab=calendar&error=${encodeURIComponent(error.message.slice(0, 120))}` };
     }
   }, { public: true });
@@ -190,6 +210,20 @@ export function createApi(app) {
   });
   del('/api/workspaces/:ws/transcripts/:id', ctx => { deleteTranscript(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id); return { status: 204 }; });
   post('/api/workspaces/:ws/transcripts/:id/recap', async ctx => { const actor = member(ctx, 'meet.manage_own'); limit(ctx, 'ai', 20); return { status: 201, body: await createRecap(app, actor.workspace.id, ctx.params.id) }; });
+  // Reviewed AI follow-ups (ai/followups.mjs): drafted from a transcript, sent only after explicit review.
+  get('/api/workspaces/:ws/transcripts/:id/followups', ctx => listFollowups(app, member(ctx, 'meet.manage_own'), ctx.params.id));
+  post('/api/workspaces/:ws/transcripts/:id/followups', async ctx => {
+    if (ctx.apiKey) fail(403, 'forbidden', 'Draft follow-ups from the Schedora web app.');
+    const actor = member(ctx, 'meet.manage_own');
+    limit(ctx, 'ai', 20);
+    return { status: 201, body: await createFollowup(app, actor, ctx.params.id, await ctx.json(4096)) };
+  });
+  patch('/api/workspaces/:ws/followups/:id', async ctx => updateFollowup(app, member(ctx, 'meet.manage_own'), ctx.params.id, await ctx.json(64 * 1024)));
+  post('/api/workspaces/:ws/followups/:id/send', async ctx => {
+    if (ctx.apiKey) fail(403, 'forbidden', 'Review and send follow-ups from the Schedora web app.');
+    return sendFollowup(app, member(ctx, 'meet.manage_own'), ctx.params.id, await ctx.json(4096));
+  });
+  del('/api/workspaces/:ws/followups/:id', ctx => { discardFollowup(app, member(ctx, 'meet.manage_own'), ctx.params.id); return { status: 204 }; });
   post('/api/workspaces/:ws/recaps/:id/share', async ctx => shareRecap(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/recaps/:id/share', ctx => { unshareRecap(app, member(ctx, 'meet.manage_own').workspace.id, ctx.params.id); return { status: 204 }; });
   get('/api/public/recaps/:token', async ctx => { limit(ctx, 'login', 20); return publicRecap(app, ctx.params.token, ctx.request.headers['x-recap-passcode']); }, { public: true });
@@ -214,6 +248,20 @@ export function createApi(app) {
       throw error;
     }
     return { result };
+  }, { public: true, csrfExempt: true });
+  post('/api/messaging/twilio/status', async ctx => {
+    if (!String(ctx.request.headers['content-type'] || '').startsWith('application/x-www-form-urlencoded')) fail(415, 'content_type', 'Expected form-encoded status report.');
+    const result = recordTwilioStatus(app, ctx.request.headers, (await ctx.raw(65536)).toString('utf8'));
+    if (result.error) fail(result.error, 'invalid_callback', 'Status report not accepted.');
+    return result;
+  }, { public: true, csrfExempt: true });
+  // Signed inbound WhatsApp replies: STOP-style words withdraw the number from all WhatsApp messages.
+  post('/api/messaging/twilio/inbound', async ctx => {
+    if (!String(ctx.request.headers['content-type'] || '').startsWith('application/x-www-form-urlencoded')) fail(415, 'content_type', 'Expected a form-encoded message.');
+    const verified = verifyTwilioInbound(app, ctx.request.headers, (await ctx.raw(65536)).toString('utf8'));
+    if (verified.error) fail(verified.error, 'invalid_callback', 'Message not accepted.');
+    handleInboundReply(app, verified.body);
+    return { raw: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>', type: 'text/xml; charset=utf-8' };
   }, { public: true, csrfExempt: true });
   // Inbound email webhook (from the email provider's inbound parsing), authenticated by a shared secret.
   post('/api/assist/inbound', async ctx => {
@@ -305,6 +353,13 @@ export function createApi(app) {
     const form = getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id);
     return { raw: JSON.stringify(exportDefinition(form, app.now()), null, 2) + '\n', type: 'application/json; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${exportFilename(form)}"`, 'Cache-Control': 'no-store' } };
   });
+  post('/api/workspaces/:ws/forms/qualify-starter', async ctx => {
+    const actor=member(ctx,'forms.manage');limit(ctx,'qualify-starter',10);
+    return {status:201,body:createQualifyStarter(app,actor,await ctx.json(4096))};
+  });
+  get('/api/workspaces/:ws/forms/ai-usage', ctx => formAiUsage(app, member(ctx, 'forms.manage').workspace.id));
+  post('/api/workspaces/:ws/forms/ai-draft', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'forms-ai', 20); return { status: 201, body: await draftFormWithAi(app, actor, await ctx.json(3 * 1024 * 1024)) }; });
+  post('/api/workspaces/:ws/forms/:id/ai-summary', async ctx => { const actor = member(ctx, 'responses.read'); limit(ctx, 'forms-ai-summary', 20); return summarizeFormResponses(app, actor, ctx.params.id, await ctx.json(4096)); });
   get('/api/workspaces/:ws/forms/:id', ctx => getForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   patch('/api/workspaces/:ws/forms/:id', async ctx => saveDraft(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json()));
   del('/api/workspaces/:ws/forms/:id', ctx => { deleteForm(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id); return { status: 204 }; });
@@ -320,14 +375,108 @@ export function createApi(app) {
     const page = listResponses(app, workspace.id, form.id, { before: ctx.query.get('before'), limit: ctx.query.get('limit'), filter: parseResponseFilter(ctx.query) });
     return { form, versions: formVersions(app, form.id), ...page, followups: followupsForItems(app, actor, page.responses) };
   });
+  get('/api/workspaces/:ws/forms/:id/responses/summary', ctx => responseSummary(app, member(ctx, 'responses.read').workspace.id, ctx.params.id));
   get('/api/workspaces/:ws/forms/:id/responses.csv', ctx => {
     const { workspace } = member(ctx, 'responses.read');
     const { filename, body, count } = exportCsv(app, workspace.id, ctx.params.id, parseResponseFilter(ctx.query));
     return { raw: body, type: 'text/csv; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${filename.replace(/[^a-z0-9.-]/gi, '_')}"`, 'Cache-Control': 'no-store', 'X-Response-Count': String(count) } };
   });
-  get('/api/workspaces/:ws/forms/:id/workbook', ctx => getWorkbook(app, member(ctx, 'responses.read').workspace.id, ctx.params.id));
-  put('/api/workspaces/:ws/forms/:id/workbook', async ctx => saveWorkbook(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json(1100 * 1024)));
+  // Schedora Sheets (forms/workbooks.mjs). Reading needs responses.read, because the linked tab shows
+  // answers and verified identities; editing analysis sheets also needs forms.manage.
+  get('/api/workspaces/:ws/forms/:id/workbook', ctx => {
+    const actor = member(ctx, 'responses.read');
+    return getWorkbook(app, actor.workspace.id, ctx.params.id, { canEdit: can(actor.role, 'forms.manage') });
+  });
+  get('/api/workspaces/:ws/forms/:id/workbook/responses', ctx => responseGrid(app, member(ctx, 'responses.read').workspace.id, ctx.params.id, { nextStepSummary }));
+  post('/api/workspaces/:ws/forms/:id/workbook/sync', async ctx => { const actor = member(ctx, 'responses.read'); return syncWorkbook(app, actor.workspace.id, ctx.params.id, ctx.user, await ctx.json(4096)); });
+  post('/api/workspaces/:ws/forms/:id/workbook/changes', async ctx => {
+    member(ctx, 'responses.read');
+    const actor = member(ctx, 'forms.manage');
+    limit(ctx, 'workbook-changes:' + ctx.user.id, 600);
+    return applyWorkbookChanges(app, actor.workspace.id, ctx.params.id, await ctx.json(2300 * 1024), ctx.user.id);
+  });
+  put('/api/workspaces/:ws/forms/:id/workbook', async ctx => saveWorkbook(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json(1100 * 1024), ctx.user.id));
+  get('/api/workspaces/:ws/forms/:id/workbook/history', ctx => workbookHistory(app, member(ctx, 'responses.read').workspace.id, ctx.params.id));
+  get('/api/workspaces/:ws/forms/:id/workbook/comments/all',ctx=>{const actor=member(ctx,'responses.read');return workbookComments(app,actor.workspace.id,ctx.params.id)});
+  get('/api/workspaces/:ws/forms/:id/workbook/comments', ctx => cellComments(app, member(ctx, 'responses.read').workspace.id, ctx.params.id, ctx.query.get('sheet'), ctx.query.get('cell')));
+  post('/api/workspaces/:ws/forms/:id/workbook/comments', async ctx => {
+    member(ctx, 'responses.read');
+    const actor = member(ctx, 'forms.manage');
+    return { status: 201, body: addCellComment(app, actor.workspace.id, ctx.params.id, await ctx.json(16384), ctx.user.id) };
+  });
+  get('/api/workspaces/:ws/forms/:id/workbook/links', ctx => {
+    member(ctx, 'responses.read');
+    const actor = member(ctx, 'forms.manage');
+    const destinations = listStandaloneWorkbooks(app, actor).workbooks.filter(item => item.role !== 'viewer');
+    return workbookLinks(app, actor.workspace.id, ctx.params.id, destinations);
+  });
+  get('/api/workspaces/:ws/forms/:id/workbook/links/:source', ctx => linkedWorkbookResponses(app, member(ctx, 'responses.read').workspace.id, ctx.params.id, ctx.params.source, { nextStepSummary }));
+  post('/api/workspaces/:ws/forms/:id/workbook/links', async ctx => {
+    const input = await ctx.json(1024);
+    member(ctx, 'responses.read');
+    const actor = member(ctx, 'forms.manage');
+    if (input?.standalone === true) standaloneWorkbook(app, actor, input.target ?? '', 'edit');
+    if (input?.standalone !== undefined && typeof input.standalone !== 'boolean') fail(400, 'validation_failed', 'Invalid workbook type.');
+    return setWorkbookLink(app, actor.workspace.id, ctx.params.id, input ?? {}, { nextStepSummary });
+  });
+  post('/api/workspaces/:ws/forms/:id/workbook/restore', async ctx => {
+    member(ctx, 'responses.read');
+    return restoreWorkbook(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id, await ctx.json(1024), ctx.user.id);
+  });
   del('/api/workspaces/:ws/forms/:id/responses/:rid', ctx => { deleteResponse(app, member(ctx, 'responses.delete').workspace.id, ctx.params.id, ctx.params.rid); return { status: 204 }; });
+
+  const withWorkbook = (ctx, permission, fn) => {
+    const actor = member(ctx, 'responses.read');
+    return fn(actor, standaloneWorkbook(app, actor, ctx.params.id, permission));
+  };
+  get('/api/workspaces/:ws/workbooks', ctx => listStandaloneWorkbooks(app, member(ctx, 'responses.read')));
+  post('/api/workspaces/:ws/workbooks', async ctx => {
+    const input = await ctx.json(2048);
+    return { status: 201, body: createStandaloneWorkbook(app, member(ctx, 'forms.manage'), input) };
+  });
+  get('/api/workspaces/:ws/workbooks/trash',ctx=>listWorkbookTrash(app,member(ctx,'responses.read')));
+  put('/api/workspaces/:ws/workbooks/:id/trash',async ctx=>{const input=await ctx.json(1024);return setWorkbookTrash(app,member(ctx,'responses.read'),ctx.params.id,input)});
+  get('/api/workspaces/:ws/workbooks/:id', ctx => withWorkbook(ctx, 'read', (actor, item) => getStandaloneWorkbook(app, actor.workspace.id, item)));
+  put('/api/workspaces/:ws/workbooks/:id/title',async ctx=>{const input=await ctx.json(1024);return renameStandaloneWorkbook(app,member(ctx,'responses.read'),ctx.params.id,input)});
+  post('/api/workspaces/:ws/workbooks/:id/sync', async ctx => {
+    const input = await ctx.json(4096);
+    return withWorkbook(ctx, 'read', (actor, item) => ({ ...syncWorkbook(app, actor.workspace.id, item.id, ctx.user, input, true), can_edit: item.role !== 'viewer' }));
+  });
+  post('/api/workspaces/:ws/workbooks/:id/changes', async ctx => {
+    const input = await ctx.json(2300 * 1024);
+    limit(ctx, 'workbook-changes:' + ctx.user.id, 600);
+    return withWorkbook(ctx, 'edit', (actor, item) => applyWorkbookChanges(app, actor.workspace.id, item.id, input, actor.userId, true));
+  });
+  get('/api/workspaces/:ws/workbooks/:id/history', ctx => withWorkbook(ctx, 'read', (actor, item) => workbookHistory(app, actor.workspace.id, item.id, true)));
+  post('/api/workspaces/:ws/workbooks/:id/restore', async ctx => {
+    const input = await ctx.json(1024);
+    return withWorkbook(ctx, 'edit', (actor, item) => restoreWorkbook(app, actor.workspace.id, item.id, input, actor.userId, true));
+  });
+  get('/api/workspaces/:ws/workbooks/:id/comments/all',ctx=>withWorkbook(ctx,'read',(actor,item)=>workbookComments(app,actor.workspace.id,item.id,true)));
+  get('/api/workspaces/:ws/workbooks/:id/comments', ctx => withWorkbook(ctx, 'read', (actor, item) => cellComments(app, actor.workspace.id, item.id, ctx.query.get('sheet'), ctx.query.get('cell'), true)));
+  post('/api/workspaces/:ws/workbooks/:id/comments', async ctx => {
+    const input = await ctx.json(16384);
+    return withWorkbook(ctx, 'edit', (actor, item) => ({ status: 201, body: addCellComment(app, actor.workspace.id, item.id, input, actor.userId, true) }));
+  });
+  get('/api/workspaces/:ws/workbooks/:id/links/:source', ctx => withWorkbook(ctx, 'read', (actor, item) =>
+    linkedWorkbookResponses(app, actor.workspace.id, item.id, ctx.params.source, { nextStepSummary }, true)));
+  post('/api/workspaces/:ws/workbooks/:id/booking-links/:source/actions', async ctx => {
+    const actor=member(ctx,'responses.read');limit(ctx,'booking-row-actions',20);
+    return bookingRowAction(app,actor,ctx.params.id,ctx.params.source,await ctx.json(2048));
+  });
+  post('/api/workspaces/:ws/workbooks/:id/ai-column', async ctx => {
+    const actor=member(ctx,'responses.read');limit(ctx,'sheets-ai',20);
+    return draftAiColumn(app,actor,ctx.params.id,await ctx.json(4096));
+  });
+  get('/api/workspaces/:ws/workbooks/:id/booking-links', ctx => bookingSheetLinks(app, member(ctx, 'responses.read'), ctx.params.id));
+  get('/api/workspaces/:ws/workbooks/:id/booking-links/:source', ctx => bookingSheetGrid(app, member(ctx, 'responses.read'), ctx.params.id, ctx.params.source));
+  post('/api/workspaces/:ws/workbooks/:id/booking-links', async ctx => { const actor=member(ctx,'responses.read'); const body=await ctx.json(2048); return setBookingSheetLink(app,actor,ctx.params.id,body.source); });
+  del('/api/workspaces/:ws/workbooks/:id/booking-links/:source', ctx => setBookingSheetLink(app,member(ctx,'responses.read'),ctx.params.id,ctx.params.source,true));
+  get('/api/workspaces/:ws/workbooks/:id/access', ctx => workbookAccessList(app, member(ctx, 'responses.read'), ctx.params.id));
+  put('/api/workspaces/:ws/workbooks/:id/access', async ctx => {
+    const input = await ctx.json(2048);
+    return setWorkbookAccess(app, member(ctx, 'responses.read'), ctx.params.id, input);
+  });
 
   // Reusable form themes. Forms hold their own copy, so changing one here restyles nothing (forms/themes.mjs).
   get('/api/workspaces/:ws/form-themes', ctx => listThemes(app, member(ctx, 'forms.manage').workspace.id));
@@ -340,6 +489,13 @@ export function createApi(app) {
   post('/api/workspaces/:ws/form-assets', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'assets', 30); return { status: 201, body: uploadAsset(app, actor.workspace.id, ctx.user.id, await ctx.json(3 * 1024 * 1024)) }; });
   get('/api/workspaces/:ws/form-assets/:id', ctx => workspaceAsset(app, member(ctx, 'forms.manage').workspace.id, ctx.params.id));
   get('/api/public/form-assets/:id', ctx => { limit(ctx, 'manage', 600); return publicAsset(app, ctx.params.id); }, { public: true });
+  post('/api/public/forms/:slug/resume', async ctx => {
+    limit(ctx,'form-resume',20);
+    const form=publishedForm(app,ctx.params.slug,ctx.request),input=await ctx.json(20000);
+    if(!['read','save','delete'].includes(input.action)) fail(400,'validation_failed','Choose a draft action.');
+    return resumeDraft(app,form,input,input.action);
+  }, {public:true});
+  get('/api/workspaces/:ws/forms/:id/resume-metrics', ctx => resumeMetrics(app,member(ctx,'responses.read').workspace.id,ctx.params.id));
   get('/api/public/forms/:slug', ctx => {
     const form = publishedForm(app, ctx.params.slug, ctx.request);
     const state = availability(app, form.workspace_id);
@@ -363,6 +519,45 @@ export function createApi(app) {
     }
   }, { public: true });
   post('/api/public/forms/:slug/signout', ctx => { ctx.setCookie(endRespondentSession(app, ctx.request)); return { status: 204 }; }, { public: true });
+  // One-way Google Sheets sync (forms/google-sheets.mjs). Reading the status needs responses.read; setting
+  // it up or changing it needs forms.manage. The Google connection belongs to the member who makes it.
+  get('/api/workspaces/:ws/forms/:id/google-sheets', ctx => sheetsSyncStatus(app, member(ctx, 'responses.read'), ctx.params.id));
+  post('/api/workspaces/:ws/forms/:id/google-sheets/connect', ctx => {
+    if (ctx.apiKey) fail(403, 'forbidden', 'Connect Google Sheets from the web app.');
+    return startSheetsConnection(app, member(ctx, 'forms.manage'), ctx.params.id);
+  });
+  get('/api/workspaces/:ws/google-sheets/destinations', async ctx => { const actor = member(ctx, 'forms.manage'); limit(ctx, 'google-sheets', 30); return sheetsDestinations(app, actor); });
+  post('/api/workspaces/:ws/forms/:id/google-sheets', async ctx => {
+    if (ctx.apiKey) fail(403, 'forbidden', 'Set up Google Sheets sync from the web app.');
+    const actor = member(ctx, 'forms.manage');
+    limit(ctx, 'google-sheets', 30);
+    return { status: 201, body: await createSheetsSync(app, actor, ctx.params.id, await ctx.json(4096)) };
+  });
+  post('/api/workspaces/:ws/forms/:id/google-sheets/:action', ctx => {
+    if (!['pause', 'resume', 'retry'].includes(ctx.params.action)) fail(404, 'not_found', 'Not found.');
+    return controlSheetsSync(app, member(ctx, 'forms.manage'), ctx.params.id, ctx.params.action);
+  });
+  del('/api/workspaces/:ws/forms/:id/google-sheets', ctx => { stopSheetsSync(app, member(ctx, 'forms.manage'), ctx.params.id); return { status: 204 }; });
+  del('/api/workspaces/:ws/google-sheets/connection', async ctx => { await disconnectSheets(app, member(ctx, 'forms.manage')); return { status: 204 }; });
+  // Forms payments (forms/payments.mjs). The private token comes from the respondent's receipt; status
+  // only ever changes after the server reads the payment from the provider.
+  get('/api/workspaces/:ws/forms-payment-readiness', ctx => {
+    const actor = member(ctx, 'forms.manage');
+    const payments = formPaymentProvider(app, actor.workspace.id);
+    return { payments: { provider: payments.provider, mode: payments.mode ?? null, message: payments.message ?? null }, whatsapp_receipts: { available: whatsappReceiptsAvailable(app) } };
+  });
+  post('/api/workspaces/:ws/forms/:id/responses/:rid/payment/refresh', async ctx => {
+    const actor = member(ctx, 'responses.read');
+    limit(ctx, 'form-payment-refresh', 30);
+    return refreshFormPayment(app, actor.workspace.id, ctx.params.id, ctx.params.rid);
+  });
+  get('/api/public/form-payments/:token', ctx => { limit(ctx, 'manage', 60); return publicPaymentStatus(app, ctx.params.token); }, { public: true });
+  post('/api/public/form-payments/:token/checkout', async ctx => { limit(ctx, 'manage', 20); return checkoutFormPayment(app, ctx.params.token); }, { public: true });
+  post('/api/public/form-payments/:token/verify', async ctx => { limit(ctx, 'manage', 20); return verifyFormPayment(app, ctx.params.token); }, { public: true });
+  post('/api/public/form-payments/:token/test-pay', async ctx => { limit(ctx, 'manage', 20); return testFormPayment(app, ctx.params.token, (await ctx.json(1024)).action); }, { public: true });
+  // WhatsApp receipt withdrawal link (forms/receipts.mjs).
+  get('/api/public/message-consent/:token', ctx => { limit(ctx, 'manage', 30); return messageConsentStatus(app, ctx.params.token); }, { public: true });
+  post('/api/public/message-consent/:token/withdraw', ctx => { limit(ctx, 'manage', 20); return withdrawMessageConsent(app, ctx.params.token); }, { public: true });
   // Opaque booking handoff from an accepted response: returns only what the booking page may pre-fill.
   get('/api/public/form-handoffs/:token', ctx => { limit(ctx, 'manage', 60); return { status: 200, body: handoffDetails(app, ctx.params.token) }; }, { public: true });
   post('/api/public/forms/:slug/responses', async ctx => {
@@ -370,6 +565,36 @@ export function createApi(app) {
     const result = submitResponse(app, ctx.params.slug, await ctx.json(256 * 1024), ctx.request);
     return { status: result.replay ? 200 : 201, body: result };
   }, { public: true });
+
+  post('/api/public/forms/:slug/response-edit', async ctx => {
+    limit(ctx, 'response-edit', 30);
+    return editResponse(app, ctx.params.slug, await ctx.json(256 * 1024), ctx.request);
+  }, { public: true });
+  patch('/api/public/forms/:slug/response-edit', async ctx => {
+    limit(ctx, 'response-edit', 30);
+    return editResponse(app, ctx.params.slug, await ctx.json(256 * 1024), ctx.request, true);
+  }, { public: true });
+
+  post('/api/public/forms/:slug/uploads', async ctx => {
+    limit(ctx, 'upload-grant', 20);
+    return { status: 201, body: createUploadGrant(app, ctx.params.slug, await ctx.json(), ctx.request) };
+  }, { public: true });
+  put('/api/public/forms/:slug/uploads/:id', async ctx => {
+    limit(ctx, 'file-upload', 20);
+    return receiveUpload(app, ctx.params.slug, ctx.params.id, uploadToken(ctx.request), ctx.request);
+  }, { public: true });
+  post('/api/public/forms/:slug/uploads/:id/status', async ctx => {
+    limit(ctx, 'upload-status', 60);
+    return { status: 200, body: uploadStatus(app, ctx.params.slug, ctx.params.id, uploadToken(ctx.request), ctx.request) };
+  }, { public: true });
+  del('/api/public/forms/:slug/uploads/:id', ctx => {
+    limit(ctx, 'upload-remove', 30);
+    return discardUpload(app, ctx.params.slug, ctx.params.id, uploadToken(ctx.request), ctx.request);
+  }, { public: true });
+  get('/api/workspaces/:ws/forms/:id/responses/:rid/files/:file', async ctx => {
+    const actor = member(ctx, 'responses.read');
+    return downloadUpload(app, actor.workspace.id, ctx.params.id, ctx.params.rid, ctx.params.file);
+  });
 
   // ---- Flow ----
   get('/api/workspaces/:ws/flows', ctx => listFlows(app, member(ctx, 'flows.read').workspace.id));

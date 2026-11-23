@@ -232,12 +232,61 @@ export function roomView(app, room, { role = null, guestInvite = null, participa
     you: selfStatus(app, room, participantId, { guestInvite, userId })
   };
   if (role === 'host') {
+    view.guidance = videoGuidance(app, room, { userId });
     view.host_url = hostUrl(app, room);
     view.low_balance = Boolean(room.low_balance_at);
     view.end_reason = room.end_reason;
     view.participants = app.db.all(`SELECT id, identity, display_name, role, principal, status, joined_at, left_at, funding_state FROM video_participants WHERE room_id = ? AND status IN ('admitted', 'joined') ORDER BY admitted_at`, room.id);
   }
   return view;
+}
+
+/**
+ * What a host should know before starting (docs/MEET_VIDEO.md, "Before a call"): the participant and time
+ * limits the server enforces, an estimate of the credits the scheduled time needs against what the workspace
+ * can spend, what happens when credits run out, and how to recover. It reads the same settings and wallet the
+ * admission checks use and changes nothing. The exact balance is shown only to people who can read billing.
+ */
+export function videoGuidance(app, room, { userId = null } = {}) {
+  const video = app.config.video;
+  const now = app.now();
+  const member = userId && app.db.get('SELECT role FROM memberships WHERE workspace_id = ? AND user_id = ?', room.workspace_id, userId);
+  const scheduledMinutes = Math.max(1, Math.ceil((room.ends_at - Math.max(room.starts_at, room.kind === 'instant' ? room.starts_at : 0)) / MINUTE));
+  const seats = Number(app.db.get('SELECT COALESCE(SUM(seats), 0) AS seats FROM video_invites WHERE room_id = ? AND revoked_at IS NULL', room.id).seats);
+  const expected = Math.min(room.max_participants, Math.max(2, 1 + seats));
+  const minutes = room.kind === 'instant' ? Math.min(scheduledMinutes, 60) : scheduledMinutes;
+  const estimated = Math.ceil(expected * minutes * UNITS_PER_PARTICIPANT_MINUTE / UNITS_PER_CREDIT);
+  const firstJoin = Math.ceil(video.blockSeconds / UNITS_PER_CREDIT);
+  // Admission grants a due monthly allowance before funding; do the same (idempotent) so the estimate agrees.
+  grantAllowance(app, room.workspace_id);
+  const spendable = Math.floor(spendableUnits(app, room.workspace_id) / UNITS_PER_CREDIT);
+  const config = workspaceVideoConfig(app.config, room.workspace_id);
+  const available = config.enabled && video.killSwitch === 'off';
+  const status = !available ? 'video_unavailable' : spendable < firstJoin ? 'cannot_start' : spendable < estimated ? 'may_run_out' : 'enough';
+  const hostCanRecharge = Boolean(member && can(member.role, 'billing.manage'));
+  const recovery = [
+    hostCanRecharge ? 'Recharge Meet credits on the Plans page. People removed for credits can rejoin with the same link once credits are available.' : 'Ask a workspace owner to recharge Meet credits. People removed for credits can rejoin with the same link once credits are available.',
+    room.meeting_id ? 'If the call cannot go ahead, email your attendees from the appointment in Meetings, or reschedule or cancel it there. Their meeting link follows the booking.' : 'If the call cannot go ahead, tell the people you invited directly; instant meeting links stop working when the meeting ends.',
+    'If the appointment lists another way to meet (phone, in person or another video service), you can use that. Schedora does not create a replacement meeting link for you.'
+  ];
+  return {
+    status,
+    limits: {
+      max_participants: room.max_participants, invited_seats: seats, expected_participants: expected,
+      scheduled_minutes: room.kind === 'scheduled' ? scheduledMinutes : null, join_opens_at: room.join_opens_at, hard_end_at: room.max_ends_at,
+      overtime_minutes: room.kind === 'scheduled' ? video.overtimeMinutes : null, max_room_minutes: video.maxRoomMinutes
+    },
+    credits: {
+      per_participant_minute: 1 / (UNITS_PER_CREDIT / UNITS_PER_PARTICIPANT_MINUTE), estimated, estimate_basis: { participants: expected, minutes },
+      first_join: firstJoin, ...(member && can(member.role, 'billing.read') ? { available: spendable } : {}), can_recharge: hostCanRecharge,
+      low: Boolean(room.low_balance_at) || spendable < video.lowBalanceCredits
+    },
+    on_exhaustion: `Each person's time is paid for in advance, ${Math.round(video.blockSeconds / 60)} minutes at a time. When a block ends and the workspace has no credits left, that person is removed from the call. The room and its links stay valid until the room's end time, so they can rejoin after a recharge.`,
+    at_hard_end: 'The room closes at its end time for everyone, even with credits left. Start a new instant meeting if you need more time; it is charged separately.',
+    recovery,
+    ...(available ? {} : { unavailable: 'Schedora Meet video is not available right now. The appointment itself is unaffected; use the recovery steps to reach your attendees.' }),
+    checked_at: now
+  };
 }
 
 export function listRooms(app, actor, scope = 'current') {

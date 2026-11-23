@@ -1,6 +1,34 @@
 # Schedora project checkpoints
 
-Last updated: 2026-11-12
+Last updated: 2026-11-21
+
+## November 21: Multiline Sheets editing and Forms acceptance
+
+**Final review and resizing:** task definition **18** is deployed and stable. Row-number bottom edges and column-letter right edges show resize cursors and accept drags; undo/redo, cancel and reload persistence passed. Current final runs: 472 ordinary tests passed (seven database opt-ins skipped there), a separate verified-TLS PostgreSQL run passed 60/60 with no skips, all 41 Sheets journeys and all full product browser journeys passed, including 1,160 light/dark layout checks. Staging preflight passed 11/11 after deployment. The signed-in Chrome connection dropped during the last manual resize check; automated Chrome evidence passed. See [final validation, evidence and remaining scope](FINAL_VALIDATION_2026-11-21.md).
+
+**Latest follow-up:** task definition **17** is deployed and stable. Ctrl+Enter adds a newline in both editing areas; Ctrl/Command+Shift+Enter fills the selected range. Double-click now reliably opens the full editor across grid redraws. All **40** Sheets browser journeys, syntax and type checks passed, and live Chrome verified both shortcuts after saving/reloading. [Proof](evidence/sheets-double-click-ctrl-enter-2026-11-21.png).
+
+Fixed lost line breaks when reopening a multiline cell in the formula bar, preserved unfinished text/caret when transferring from the cell editor, and corrected the stale formula-bar value after Enter moves to the next cell. All 39 Sheets browser journeys passed, including the new reload/re-edit regression. The current Forms implementation passed the full browser suite (all journeys and 1,160 responsive/light/dark layout checks), with private uploads/edits covered by server and integration tests. Unit suite: 472 passed, seven optional PostgreSQL skips; syntax, Sheets type checking and shared-source checks passed.
+
+Staging task definition **16** is deployed: CloudFormation UPDATE_COMPLETE, ECS COMPLETED, one running, zero pending. Signed-in Chrome confirmed leaving/reopening the workbook, editing long multiline content, Alt+Enter, and correct next-cell formula-bar content. See [review evidence and feature limits](SHEETS_FORMS_REVIEW_2026-11-21.md). Flow changes are on hold for the user's next instructions. No commit/push or production cutover.
+
+## November 19: Screenshot-driven Sheets expansion
+
+Expanded native menus/icons, formatting, images/drawing, validation and cleanup, named functions, comments, bounded automations, explicit offline copies, and recoverable workbook trash are implemented. The address-field race found in live Chrome is fixed. Unit suite: 472 passed, seven optional PostgreSQL skips; targeted verified-TLS PostgreSQL: 33/33; all 38 Sheets browser journeys passed, including offline reopening/reconnection and private-cache removal on sign-out. Syntax checks, Sheets type checking and shared-source checks passed.
+
+Staging task definition **14** is deployed: CloudFormation UPDATE_COMPLETE, ECS COMPLETED, one running task, no pending tasks. Live Chrome verified arithmetic, a saved named function and formatting after reload; the private review workbook remains open. External service connectors, Google Marketplace and Apps Script compatibility are not connected. See [the complete feature matrix, limits and deployment evidence](SHEETS_EXPANSION_2026-11-19.md). Existing changes were preserved; there was no production cutover or Git commit/push.
+
+## November 18: Forms/Flow acceptance follow-up
+
+Forms/Flow acceptance and staging corrections are complete. Full suite: 463 passed, seven PostgreSQL skips; targeted PostgreSQL: 40/40 passed; Chrome: 1,160 layout checks and all journeys passed. The previous Meet credit concurrency failure is resolved by correcting its stale funding fixture, without changing runtime pricing. Live form → submission → private edit → same Sheets row → Flow task/run passed. Task definition 11 is deployed and stable. Inactive QA examples remain for review. See [acceptance evidence](RELEASE_ACCEPTANCE_2026-11-18.md).
+
+The user then supplied the Google Sheets menu/toolbar screenshots and requested matching content, icons and feature behavior in Schedora Sheets. That expansion was subsequently delivered in the November 19 checkpoint above.
+
+## November 18: Forms attachments and Sheets staging
+
+Staging deployment completed: web stack UPDATE_COMPLETE, ECS deployment COMPLETED with one healthy running task. Sheets cell-editor sizing, private respondent attachments, real antivirus scanning, and attachment retain/replace edits are live. All 12 live upload checks passed, including persistence through a task replacement; disposable QA workspaces were cleaned. Full local suite: 461 passed, seven skipped. The broader PostgreSQL run has one existing Meet credit-concurrency expectation failure (18/19 passed); do not describe that broader suite as fully green. Detailed configuration, checks and rollback considerations: [18 November staging checkpoint](STAGING_UPLOADS_2026-11-18.md).
+
+Earlier entries below are historical checkpoints.
 
 ## November 13 morning checklist
 

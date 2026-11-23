@@ -206,3 +206,28 @@ Changing environment variables alone does not complete a migration. Required wor
 7. **Monitoring and ownership:** node health, packet loss, TURN usage, webhook delivery, on-call ownership, upgrade policy, backups of configuration (LiveKit keeps no customer data at rest; Redis holds routing state only).
 8. **Application:** add the new deployment as `MEET_VIDEO_DEPLOYMENT` with `LIVEKIT_HOSTING=self_hosted`; move the Cloud deployment into `MEET_VIDEO_DRAINING_DEPLOYMENTS` so existing rooms finish there (rooms never move providers once provisioned); update the Vercel meeting CSP and `MEET_VIDEO_CONNECT_SRC` with the new origins; complete the revocation review (section 6) and set `MEET_VIDEO_SELF_HOSTED_REVIEWED=true`.
 9. **Rehearse:** staging with both deployments; verify removal/termination capability differences, webhook verification, reconciliation and settlement; rehearse rollback by swapping the deployment variables back (new rooms return to Cloud; AWS rooms drain).
+
+## 11. Before a call: credits, limits and recovery (21 November 2026, local only)
+
+Reviewed first: admission (`admitTx`) refuses with `insufficient_credits` when one reservation block (`MEET_VIDEO_RESERVATION_BLOCK_SECONDS`, default 600 s = 2 credits per person) cannot be funded. Connected people are renewed block by block and removed with `credits_exhausted` when a renewal fails; they may rejoin once credits exist. Rooms close at `max_ends_at` (scheduled end + overtime, capped by `MEET_VIDEO_MAX_ROOM_MINUTES`). The owner receives one low-balance email per room.
+
+Added: hosts' room view carries `guidance` (`videoGuidance` in `src/video/rooms.mjs`), shown as **Before you start** on the pre-join screen:
+
+- People: the room's participant limit and invited guest seats. Time: planned minutes, overtime and the hard end.
+- Cost: 0.2 credits per person per minute, an estimate for the expected people and minutes, the credits each person needs reserved to join, and — only for people who can read billing — the spendable balance. The same monthly allowance grant that admission performs is applied first, so the estimate and the join decision agree.
+- Status: *Enough*, *May run out* (shown open with what happens on exhaustion), *Cannot start* (joining will be refused) or *Video unavailable*.
+- Recovery: recharge (owners) or ask an owner; people removed for credits rejoin with the same link; email, reschedule or cancel from Meetings; use another location the appointment already lists. Schedora does not create replacement links, change providers or alter LiveKit settings.
+
+Guests never see the host's budget. Tests: `test/meet-video-guidance.test.mjs`.
+
+## 12. Reviewed AI follow-up (21 November 2026, local only)
+
+Built on transcripts and recaps (`src/ai/service.mjs`). The existing recap's copy-only follow-up email is unchanged.
+
+- **Draft.** Transcript → **Draft follow-up with AI** (`POST /transcripts/:id/followups`, `meet.manage_own`). Claude returns a subject, body, tasks and sources as structured JSON. Every source quote and every task's quote must appear word for word in the transcript (case and whitespace normalised); anything else is removed and the count is shown to the reviewer. Suggested recipients are the meeting's non-canceled invitees and guests.
+- **Usage and retries.** Request IDs make generation idempotent. Input and output tokens are stored per draft. Each workspace can make 20 drafts per UTC day (failed drafts count, since they reached the provider), in addition to the per-minute `ai` rate limit.
+- **Review.** The draft is editable text with revision checks (stale tabs get 409). Tasks may be reworded or removed but keep their transcript quote. Only the author or a workspace admin can edit, send or discard.
+- **Sending.** `POST /followups/:id/send` requires `confirm: true`, the revision the person reviewed, and an explicit choice to email the confirmed recipients and/or create the tasks. Emails use per-recipient idempotency keys; tasks use `source_run_id = followup:<id>:<n>` and include their source quote. A repeated send returns the first result. Nothing is sent or created automatically, and there is no Flow trigger.
+- **Retention.** Drafts are deleted with their transcript.
+
+Tests: `test/meeting-followups.test.mjs`.

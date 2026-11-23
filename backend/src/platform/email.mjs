@@ -51,12 +51,12 @@ export function createSmsProvider(config, fetchImpl = fetch) {
         const response = await fetchImpl(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.twilioAccountSid)}/Messages.json`, {
           method: 'POST',
           headers: { Authorization: 'Basic ' + Buffer.from(`${config.twilioAccountSid}:${config.twilioAuthToken}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ To: message.to, From: config.twilioFrom, Body: message.body.slice(0, 1500) }),
+          body: new URLSearchParams({ To: message.to, From: config.twilioFrom, Body: message.body.slice(0, 1500), ...(config.twilioStatusCallback ? { StatusCallback: config.twilioStatusCallback } : {}) }),
           signal: AbortSignal.timeout(10000)
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const error = new Error(`SMS provider returned ${response.status}${result.message ? ': ' + result.message : ''}`);
+          const error = new Error(`SMS provider returned ${response.status}${result.code ? ' (' + result.code + ')' : ''}`);
           error.permanent = response.status >= 400 && response.status < 500 && response.status !== 429;
           throw error;
         }
@@ -94,6 +94,11 @@ export async function deliverEmail(app, id) {
     WHERE id = ? AND status IN ('queued', 'scheduled') AND next_attempt_at <= ? AND (claimed_until IS NULL OR claimed_until < ?)`, now + 120000, id, now, now);
   if (!claim.changes) return app.db.get('SELECT status FROM emails WHERE id = ?', id)?.status;
   const message = app.db.get('SELECT * FROM emails WHERE id = ?', id);
+  // A number that withdrew from WhatsApp messages (forms/receipts.mjs) never receives another one.
+  if (message.channel === 'whatsapp' && app.db.get("SELECT 1 FROM messaging_opt_outs WHERE channel = 'whatsapp' AND phone = ? AND (workspace_id IS NULL OR workspace_id = ?)", message.to_address, message.workspace_id)) {
+    app.db.run("UPDATE emails SET status = 'canceled', last_error = 'Recipient withdrew from WhatsApp messages.', claimed_until = NULL WHERE id = ?", id);
+    return 'canceled';
+  }
   let body = message.body;
   const nativeVideo = body.includes(VIDEO_PLACEHOLDER) && isNativeVideo(app.db.get('SELECT location FROM bookings WHERE id = ?', message.related_id)?.location);
   if (nativeVideo) body = body.replaceAll(VIDEO_PLACEHOLDER, bookingJoinUrl(app, message.related_id) || 'Your host will share the video link before the meeting.');
@@ -107,7 +112,7 @@ export async function deliverEmail(app, id) {
     body = body.replaceAll(VIDEO_PLACEHOLDER, meeting?.video_url || 'Your host will share the video link before the meeting.');
   }
   try {
-    const provider = message.channel === 'sms' ? app.smsProvider : app.emailProvider;
+    const provider = message.channel === 'sms' ? app.smsProvider : message.channel === 'whatsapp' ? app.whatsappProvider : app.emailProvider;
     const result = await provider.send({ to: message.to_address, subject: message.subject, body, ics: message.ics, idempotencyKey: message.idempotency_key });
     app.db.run("UPDATE emails SET status = 'sent', sent_at = ?, provider_message_id = ?, accepted_transport = ?, last_error = NULL, claimed_until = NULL WHERE id = ?", app.now(), result?.id ?? null, provider.name || null, id);
     return 'sent';
@@ -124,8 +129,10 @@ export async function deliverDueEmails(app, limit = 25) {
   const due = app.db.all(`SELECT id FROM emails WHERE status IN ('queued', 'scheduled') AND next_attempt_at <= ?
     AND (claimed_until IS NULL OR claimed_until < ?) ORDER BY next_attempt_at LIMIT ?`, now, now, limit);
   for (const { id } of due) await deliverEmail(app, id);
-  // Release claims abandoned by a crashed attempt so they are retried.
-  app.db.run("UPDATE emails SET status = 'queued', claimed_until = NULL WHERE status = 'sending' AND claimed_until < ?", now);
+  // Release claims abandoned by a crashed attempt so they are retried. Flow v1 step messages (keys
+  // flow:<run>:<step>) are not: the provider may already have accepted them, so Flow marks the step
+  // uncertain and a person chooses to send again or treat it as done (engine.mjs retryFlowRun).
+  app.db.run("UPDATE emails SET status = 'queued', claimed_until = NULL WHERE status = 'sending' AND claimed_until < ? AND idempotency_key NOT LIKE 'flow:%'", now);
   return due.length;
 }
 

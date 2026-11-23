@@ -16,11 +16,11 @@ const MAX_PROBLEMS = 40;
 
 // Keys each part of a definition may hold. Anything else is refused by name.
 const ENVELOPE_KEYS = ['format', 'version', 'exported_at', 'definition'];
-const DEFINITION_KEYS = ['title', 'description', 'presentation', 'mode', 'submit_label', 'fields', 'logic', 'choice_rules', 'url_params', 'endings', 'theme'];
+const DEFINITION_KEYS = ['title', 'description', 'presentation', 'mode', 'submit_label', 'fields', 'logic', 'choice_rules', 'url_params', 'endings', 'theme', 'responses', 'lead_scoring', 'payment', 'receipts'];
 const FIELD_KEYS = ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder', 'show_if', 'media', 'answer_rule'];
-const CHOICE_FIELD_KEYS = [...FIELD_KEYS, 'options'];
+const CHOICE_FIELD_KEYS = [...FIELD_KEYS, 'options', 'feedback'];
 const PAGE_KEYS = ['id', 'type', 'label', 'help', 'grouped', 'show_if'];
-const OPTION_KEYS = ['id', 'label', 'image', 'correct', 'points'];
+const OPTION_KEYS = ['id', 'label', 'image', 'correct', 'points', 'lead_points'];
 const SHOW_IF_KEYS = ['field', 'op', 'value'];
 const CONDITION_KEYS = ['field', 'param', 'op', 'value'];
 const MEDIA_KEYS = { image: ['type', 'asset', 'alt', 'decorative'], video: ['type', 'provider', 'video', 'title'] };
@@ -93,6 +93,7 @@ function conditionKeyProblems(condition, where, keys = CONDITION_KEYS) {
 // Every key in the file must be supported, before any other check, so nothing is dropped unseen.
 function shapeProblems(definition) {
   const problems = keyProblems(definition, DEFINITION_KEYS, 'The form');
+  if (definition.responses != null && !isObject(definition.responses)) problems.push('The form contains “responses”. Form files never carry responses; use an object only for response collection settings.');
   if (!Array.isArray(definition.fields)) return [...problems, 'The form needs a "fields" list of questions and page breaks.'];
   const name = namer(definition.fields);
   definition.fields.forEach((field, index) => {
@@ -104,14 +105,26 @@ function shapeProblems(definition) {
     }
     const page = field.type === 'page_break';
     const choice = field.type.endsWith('_choice');
-    problems.push(...keyProblems(field, page ? PAGE_KEYS : choice ? CHOICE_FIELD_KEYS : FIELD_KEYS, name(index)).map(text => {
+    const allowed = page ? PAGE_KEYS : choice
+      ? [...CHOICE_FIELD_KEYS, ...(field.type === 'single_choice' ? ['display'] : [])]
+      : [...FIELD_KEYS, ...(field.type.endsWith('_grid') ? ['grid'] : []), ...(field.type === 'number' ? ['number'] : []), ...(field.type === 'scale' ? ['scale'] : [])];
+    problems.push(...keyProblems(field, allowed, name(index)).map(text => {
       if (text.includes(quote('options'))) return `${name(index)} is ${FIELD_TYPES[field.type].toLowerCase()}, so it cannot have options. Change its type to single or multiple choice, or remove the options.`;
       if (page && text.includes(quote('required'))) return `${name(index)} is a page break, which cannot be required. Remove ${quote('required')} from it.`;
       if (!page && text.includes(quote('grouped'))) return `${name(index)}: only a page break can set ${quote('grouped')}.`;
       return text;
     }));
+    if (isObject(field.grid)) {
+      problems.push(...keyProblems(field.grid, ['rows', 'columns'], `${name(index)} grid`));
+      for (const part of ['rows', 'columns']) if (Array.isArray(field.grid[part])) {
+        field.grid[part].filter(isObject).forEach(item => problems.push(...keyProblems(item, ['id', 'label'], `${name(index)} grid ${part}`)));
+      }
+    }
     if (field.show_if != null) problems.push(...conditionKeyProblems(field.show_if, `${name(index)}'s display rule`, SHOW_IF_KEYS));
     if (isObject(field.answer_rule)) problems.push(...keyProblems(field.answer_rule, ['min', 'max', 'message'], `${name(index)}'s response validation`));
+    for (const [key, keys] of [['number', ['min', 'max', 'integer', 'message']], ['scale', ['min', 'max', 'min_label', 'max_label']], ['feedback', ['correct', 'incorrect']]]) {
+      if (isObject(field[key])) problems.push(...keyProblems(field[key], keys, `${name(index)} ${key}`));
+    }
     if (isObject(field.media) && MEDIA_KEYS[field.media.type]) problems.push(...keyProblems(field.media, MEDIA_KEYS[field.media.type], `${name(index)}'s ${field.media.type}`));
     if (choice && Array.isArray(field.options)) field.options.forEach((option, position) => {
       if (!isObject(option)) return problems.push(`${name(index)}, choice ${position + 1} must be an object with an id and a label.`);
@@ -143,6 +156,10 @@ function shapeProblems(definition) {
   if (Array.isArray(definition.endings)) definition.endings.forEach((ending, index) => { if (isObject(ending)) problems.push(...keyProblems(ending, ['id', 'title', 'message'], `Ending ${index + 1}`)); });
   if (Array.isArray(definition.url_params)) definition.url_params.forEach((param, index) => { if (isObject(param)) problems.push(...keyProblems(param, ['key', 'record'], `URL parameter ${index + 1}`)); });
   if (isObject(definition.theme)) problems.push(...keyProblems(definition.theme, THEME_KEYS, 'The theme'));
+  if (isObject(definition.lead_scoring)) problems.push(...keyProblems(definition.lead_scoring, ['warm', 'hot'], 'Lead scoring'));
+  if (isObject(definition.payment)) problems.push(...keyProblems(definition.payment, ['amount_cents', 'currency', 'description', 'window_hours'], 'Payment settings'));
+  if (isObject(definition.receipts)) problems.push(...keyProblems(definition.receipts, ['whatsapp'], 'Receipt settings'));
+  if (isObject(definition.responses)) problems.push(...keyProblems(definition.responses, ['allow_edit', 'limit', 'open_at', 'close_at', 'closed_message'], 'Response collection settings'));
   if (typeof definition.submit_label === 'string' && definition.submit_label.trim().length > 40) problems.push(`The submit button label is ${definition.submit_label.trim().length} characters; keep it to 40 or fewer.`);
   return problems;
 }

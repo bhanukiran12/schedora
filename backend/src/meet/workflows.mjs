@@ -20,9 +20,9 @@ function normalize(app, workspaceId, body, current) {
   });
   set('trigger_type', v => oneOf(v, 'trigger_type', Object.keys(TRIGGERS)));
   set('offset_min', v => ['before_start', 'after_end'].includes(value.trigger_type) ? integer(v ?? 60, 'offset_min', 0, 43200) : 0);
-  set('channel', v => oneOf(v ?? 'email', 'channel', ['email', 'sms']));
+  set('channel', v => oneOf(v ?? 'email', 'channel', ['email', 'sms', 'whatsapp']));
   set('recipient', v => oneOf(v ?? 'invitee', 'recipient', ['invitee', 'host']));
-  set('subject', v => value.channel === 'sms' ? '' : text(v, 'subject', { min: 1, max: 200 }));
+  set('subject', v => value.channel !== 'email' ? '' : text(v, 'subject', { min: 1, max: 200 }));
   set('body', v => text(v, 'body', { min: 1, max: value.channel === 'sms' ? 600 : 5000, multiline: true }));
   set('condition', v => {
     if (!v) return null;
@@ -31,6 +31,11 @@ function normalize(app, workspaceId, body, current) {
   });
   if (body.active !== undefined) value.active = bool(body.active, 'active') ? 1 : 0;
   else value.active = current ? (value.active ? 1 : 0) : 1;
+  if (value.channel === 'whatsapp') {
+    if (value.recipient !== 'invitee') invalid('recipient', 'WhatsApp reminders currently go to consenting invitees only.');
+    if (app.config.whatsappProvider !== 'twilio') fail(409, 'whatsapp_unavailable', 'Connect a Twilio WhatsApp sender and approved reminder template first.');
+    if (!['booked','before_start'].includes(value.trigger_type)) invalid('trigger_type', 'The approved reminder template supports booking confirmations and before-meeting reminders.');
+  }
   return value;
 }
 
@@ -75,14 +80,16 @@ export function runWorkflows(app, { booking, eventType, hosts, trigger, values }
     if (workflow.condition && !conditionHolds({ field: workflow.condition.question, op: workflow.condition.op, value: workflow.condition.value }, answers)) continue;
     const sendAt = trigger === 'before_start' ? booking.starts_at - workflow.offset_min * 60000 : trigger === 'after_end' ? booking.ends_at + workflow.offset_min * 60000 : now;
     if (trigger === 'before_start' && sendAt <= now) continue;
+    if (workflow.channel === 'whatsapp' && !app.db.get('SELECT whatsapp FROM booking_message_consent WHERE booking_id=?',booking.id)?.whatsapp) continue;
+    const phoneChannel = ['sms','whatsapp'].includes(workflow.channel);
     const recipients = workflow.recipient === 'host'
-      ? hosts.map(host => workflow.channel === 'sms' ? null : host.email)
-      : [workflow.channel === 'sms' ? booking.invitee_phone : booking.invitee_email];
+      ? hosts.map(host => phoneChannel ? null : host.email)
+      : [phoneChannel ? booking.invitee_phone : booking.invitee_email];
     recipients.forEach((to, index) => {
       if (!to) return;
       queueEmail(app, {
         workspaceId: booking.workspace_id, key: `workflow:${workflow.id}:${booking.id}:${trigger}:${index}`, kind: 'workflow', relatedId: booking.id, channel: workflow.channel,
-        to, sendAt, subject: render(workflow.subject, values), body: render(workflow.body, { ...values, video_url: VIDEO_PLACEHOLDER })
+        to: workflow.channel === 'whatsapp' ? to.replace(/[ ().-]/g,'') : to, sendAt, subject: render(workflow.subject, values), body: workflow.channel === 'whatsapp' ? JSON.stringify(Object.fromEntries(Object.entries({'1':values['invitee.name'],'2':values['event.title'],'3':values['booking.start'],'4':values.manage_url}).map(([key,value])=>[key,String(value || 'Meeting').replace(/[\r\n]/g,' ').slice(0,1000)]))) : render(workflow.body, { ...values, video_url: VIDEO_PLACEHOLDER })
       });
     });
   }

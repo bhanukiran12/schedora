@@ -1,4 +1,5 @@
 import { fail } from './http.mjs';
+import { setBookingAttendance } from './meet/attendance.mjs';
 import { addDays, isValidDate, isValidTimeZone, localDate } from './time.mjs';
 import { invalid } from './validate.mjs';
 import { can } from './platform/workspaces.mjs';
@@ -12,6 +13,7 @@ import { closePoll, confirmPoll, createPoll, deletePoll, getPoll, listPolls, pub
 import { analytics } from './meet/analytics.mjs';
 import { connectStripe } from './meet/payments.mjs';
 import { connectRazorpay } from './meet/razorpay.mjs';
+import { hasPendingFormPayments } from './forms/payments.mjs';
 import { addFollowUp, addNote, createContact, deleteContact, deleteNote, getContact, listContacts, updateContact } from './platform/contacts.mjs';
 import { queueEmail, deliverEmail } from './platform/email.mjs';
 import { hostReadiness } from './meet/host-readiness.mjs';
@@ -60,6 +62,7 @@ export function registerMeetRoutes(app, router, { member, limit }) {
   });
 
   // ---- Bookings ----
+  post(ws('/bookings/:id/attendance'), async ctx => setBookingAttendance(app, member(ctx, 'meet.manage_own'), ctx.params.id, await ctx.json(2048)));
   get(ws('/bookings'), ctx => {
     const actor = member(ctx, 'meet.manage_own');
     return listBookings(app, actor.workspace.id, actor, ctx.query.get('scope') || 'upcoming', { eventTypeId: ctx.query.get('event_type'), hostId: ctx.query.get('host'), contactId: ctx.query.get('contact') });
@@ -187,6 +190,7 @@ export function registerMeetRoutes(app, router, { member, limit }) {
   del(ws('/integrations/razorpay'), ctx => {
     const actor = member(ctx, 'integrations.manage');
     if (app.db.get("SELECT 1 FROM bookings WHERE workspace_id = ? AND status = 'pending' AND payment_ref LIKE 'razorpay:%'", actor.workspace.id)) fail(409, 'payments_pending', 'Wait for pending payments before disconnecting Razorpay.');
+    if (hasPendingFormPayments(app, actor.workspace.id)) fail(409, 'payments_pending', 'Wait for pending form payments to be confirmed or expire before disconnecting Razorpay.');
     app.db.run("DELETE FROM integrations WHERE workspace_id = ? AND user_id IS NULL AND provider = 'razorpay'", actor.workspace.id);
     return { status: 204 };
   });
@@ -269,6 +273,15 @@ export function registerMeetRoutes(app, router, { member, limit }) {
     const ics = bookingIcs({ booking, eventType, hostName: eventType.host_name, method: booking.status === 'canceled' ? 'CANCEL' : 'PUBLISH', now: app.now() });
     return { raw: ics, type: 'text/calendar; charset=utf-8', headers: { 'Content-Disposition': `attachment; filename="${booking.reference}.ics"` } };
   }, { public: true });
+  post('/api/public/bookings/:token/whatsapp-optout', ctx => {
+    limit(ctx,'manage',20);
+    const {booking}=bookingByToken(app,ctx.params.token);
+    app.db.transaction(()=>{
+      app.db.run('UPDATE booking_message_consent SET whatsapp=0 WHERE booking_id=?',booking.id);
+      app.db.run("UPDATE emails SET status='canceled' WHERE related_id=? AND channel='whatsapp' AND status IN ('queued','scheduled')",booking.id);
+    });
+    return {status:'disabled'};
+  },{public:true});
   post('/api/public/bookings/:token/cancel', async ctx => { limit(ctx, 'manage', 20); return { booking: cancelByToken(app, ctx.params.token, await ctx.json()) }; }, { public: true });
   post('/api/public/bookings/:token/reschedule', async ctx => {
     limit(ctx, 'manage', 20);
@@ -298,7 +311,7 @@ export function registerMeetRoutes(app, router, { member, limit }) {
   }, { public: true, csrfExempt: true });
   post('/api/payments/razorpay/:wsId', async ctx => {
     const raw = (await ctx.raw(256 * 1024)).toString('utf8');
-    return { result: await app.payments.razorpay.webhook(ctx.params.wsId, raw, ctx.request.headers['x-razorpay-signature']) };
+    return { result: await app.payments.razorpay.webhook(ctx.params.wsId, raw, ctx.request.headers['x-razorpay-signature'], ctx.request.headers['x-razorpay-event-id']) };
   }, { public: true, csrfExempt: true });
   post('/api/public/bookings/:token/verify-payment', async ctx => {
     limit(ctx, 'manage', 20);

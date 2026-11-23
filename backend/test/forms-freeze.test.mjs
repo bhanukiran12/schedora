@@ -8,11 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig, publicConfig } from '../src/config.mjs';
 import { setup, signUp } from './helpers.mjs';
 
-const FROZEN = ['POST /forms', 'POST /forms/import', 'PUT /forms/:id/access', 'PATCH /forms/:id', 'DELETE /forms/:id', 'PUT /forms/:id/routing', 'POST /forms/:id/publish', 'POST /forms/:id/unpublish', 'POST /form-themes', 'PATCH /form-themes/:id', 'DELETE /form-themes/:id', 'POST /form-assets'];
+const FROZEN = ['POST /forms/qualify-starter', 'POST /forms/ai-draft', 'POST /forms', 'POST /forms/import', 'PUT /forms/:id/access', 'PATCH /forms/:id', 'DELETE /forms/:id', 'PUT /forms/:id/routing', 'POST /forms/:id/publish', 'POST /forms/:id/unpublish', 'POST /form-themes', 'PATCH /form-themes/:id', 'DELETE /form-themes/:id', 'POST /form-assets'];
 // Not authoring: checking changes nothing, respondents keep responding, and removing a response is a data request.
 // Sheets editing is independent analysis, not form structure or publishing (owner decision, 13 November 2026),
 // so a linked workbook stays editable during a freeze; its permissions are enforced by its own routes.
-const ALLOWED = ['POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses', 'POST /public/forms/:slug/signout', 'PUT /forms/:id/workbook'];
+const ALLOWED = ['POST /forms/:id/ai-summary', 'POST /public/forms/:slug/resume', 'POST /public/forms/:slug/uploads', 'PUT /public/forms/:slug/uploads/:id', 'POST /public/forms/:slug/uploads/:id/status', 'DELETE /public/forms/:slug/uploads/:id', 'POST /forms/:id/publish-check', 'POST /forms/import-check', 'DELETE /forms/:id/responses/:rid', 'POST /public/forms/:slug/responses', 'POST /public/forms/:slug/response-edit', 'PATCH /public/forms/:slug/response-edit', 'POST /public/forms/:slug/signout', 'PUT /forms/:id/workbook', 'POST /forms/:id/workbook/sync', 'POST /forms/:id/workbook/changes', 'POST /forms/:id/workbook/restore', 'POST /forms/:id/workbook/links', 'POST /forms/:id/workbook/comments',
+  // Reading a payment's state from the provider and exporting responses to Google Sheets change no form
+  // structure or published version (docs/FORMS.md, "Payments" and "Google Sheets sync").
+  'POST /forms/:id/responses/:rid/payment/refresh', 'POST /forms/:id/google-sheets/connect', 'POST /forms/:id/google-sheets', 'POST /forms/:id/google-sheets/:action', 'DELETE /forms/:id/google-sheets'];
 const definition = (title = 'Frozen') => ({ title, description: '', presentation: 'classic', submit_label: 'Send', fields: [{ id: 'q', type: 'short_text', label: 'Q', required: false }] });
 
 function writeRoutes() {
@@ -147,7 +150,16 @@ test('server: while frozen, a linked Sheets workbook stays editable and the form
     const sheets = [{ id: 'b'.repeat(32), name: 'Analysis', cells: { A1: '=2*3' } }];
     const saved = await owner.raw('PUT', form + '/workbook', { revision: 0, sheets });
     assert.equal(saved.status, 200, 'workbook edits are not authoring');
-    assert.deepEqual((await owner.get(form + '/workbook')).body, { revision: 1, sheets });
+    const stored = (await owner.get(form + '/workbook')).body;
+    assert.deepEqual([stored.revision, stored.sheets[0].name, stored.sheets[0].cells], [1, 'Analysis', sheets[0].cells]);
+    const change = await owner.post(form + '/workbook/changes', { ops: [{ op: 'cell', sheet: sheets[0].id, cell: 'A2', from: null, to: '=A1*2' }] });
+    assert.deepEqual([change.status, change.body.revision], [200, 2], 'cell edits are not authoring either');
+    const comments = form + '/workbook/comments';
+    assert.equal((await owner.post(comments, { sheet: sheets[0].id, cell: 'A2', body: 'Reviewed' })).status, 201);
+    assert.equal((await owner.get(comments + '?sheet=' + sheets[0].id + '&cell=A2')).body.comments[0].body, 'Reviewed');
+    const outsider = env.client();
+    await signUp(outsider, 'Outside Workspace');
+    assert.equal((await outsider.get(comments + '?sheet=' + sheets[0].id + '&cell=A2')).status, 404);
     const edit = await owner.raw('PATCH', form, { definition: definition('Renamed during freeze') });
     assert.equal(edit.status, 423, 'form structure stays frozen');
     assert.equal(edit.body.error.code, 'forms_authoring_frozen');

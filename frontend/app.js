@@ -41,10 +41,17 @@ const routes = [
   [/^\/forms$/, forms.dashboard],
   [new RegExp(`^/forms/${UUID}$`), forms.builder],
   [new RegExp(`^/forms/${UUID}/responses$`), forms.responses],
-  [new RegExp(`^/sheets/${UUID}$`), forms.responseWorkbook],
+  [new RegExp(`^/sheets/${UUID}$`), async ctx => (await import('./js/sheets.mjs')).sheetsPage(ctx)],
+  [/^\/sheets$/, async ctx => (await import('./js/workbooks.mjs')).workbookListPage(ctx)],
+  [new RegExp(`^/sheets/workbooks/${UUID}$`), async ctx => (await import('./js/sheets.mjs')).sheetsPage(ctx, { standalone: true })],
   [/^\/f\/([a-z0-9-]{3,60})$/, forms.publicForm],
+  [/^\/forms\/pay\/([A-Za-z0-9_-]{40,60})$/, async ctx => (await import('./js/forms-payments.mjs')).testCheckoutPage(ctx)],
+  [/^\/messages\/stop\/([A-Za-z0-9_-]{30,40})$/, async ctx => (await import('./js/forms-payments.mjs')).stopMessagesPage(ctx)],
   [/^\/flow$/, flow.dashboard],
   [/^\/flow\/(runs|tasks)$/, flow.dashboard],
+  [new RegExp(`^/flow/build/${UUID}$`), async ctx => (await import('./js/flow-builder.mjs')).builder(ctx)],
+  [new RegExp(`^/flow/runs/${UUID}$`), async ctx => (await import('./js/flow-runs.mjs')).runDetail(ctx)],
+  [/^\/flow\/approvals$/, async ctx => (await import('./js/flow-runs.mjs')).approvals(ctx)],
   [new RegExp(`^/flow/(new|${UUID.slice(1, -1)})$`), flow.editor],
   [/^\/(account|login|signup)$/, account.account],
   [/^\/billing$/, account.billing],
@@ -186,7 +193,7 @@ export async function render({ quiet = false } = {}) {
   if (currentPath === '/' && product !== 'suite' && session.user) return navigate(PRODUCT_INFO[product].dashboard, { replace: true });
   document.body.classList.toggle('auth-page', !session.user && /^\/(account|login|signup)$/.test(currentPath));
   clearShell();
-  document.body.classList.remove('form-editor');
+  document.body.classList.remove('form-editor', 'sheets-mode');
   const shell = Boolean(session.user && isAppRoute(currentPath));
   document.body.classList.toggle('app-shell', shell);
   if (shell) renderShell({ product, current: currentSection(product, currentPath, query), links: { dashboard: boot.links, home: { suite: boot.links.suite, ...boot.landings } }, onWorkspaceChange: render });

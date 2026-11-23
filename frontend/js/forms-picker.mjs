@@ -7,7 +7,12 @@ import { formIcon } from './forms-icons.mjs';
 import { openImportDialog } from './forms-import.mjs';
 
 export const BLANK_TEMPLATE = { id: 'blank', name: 'Simple contact form', purpose: 'Start with name, email, what they need, and a follow-up question. Change or remove any question.',
-  definition: { presentation: 'classic', fields: [{ label: 'What is your name?' }, { label: 'Email address' }, { label: 'What can we help with?' }, { label: 'Tell us a little more' }] } };
+  definition: { title: 'Simple contact form', presentation: 'classic', fields: [
+    { id: 'name', type: 'short_text', label: 'What is your name?', required: true },
+    { id: 'email', type: 'email', label: 'Email address', required: true },
+    { id: 'subject', type: 'short_text', label: 'What can we help with?', required: true },
+    { id: 'details', type: 'long_text', label: 'Tell us a little more' }
+  ] } };
 const presentationName = definition => definition.presentation === 'conversational' ? 'one question at a time' : 'classic layout';
 
 /** What the builder's "Draft created …" notice says for a `?created=` source. */

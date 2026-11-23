@@ -8,7 +8,7 @@ import { MEETING_PAGE, MEETING_PERMISSIONS } from './video/config.mjs';
 // deployment Vercel serves frontend/ with the same rules (frontend/vercel.json) and this is off.
 
 const TYPES = { '.webmanifest': 'application/manifest+json', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml; charset=utf-8' };
-const STATIC = /^\/(app\.js|app\.css|design\.css|product-minimal\.css|product-shell\.css|suite-theme\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/[a-z-]+\.mjs|vendor\/livekit-client\.esm\.mjs)$/;
+const STATIC = /^\/(app\.js|app\.css|design\.css|product-minimal\.css|product-shell\.css|suite-theme\.css|sheets\.css|embed\.js|sw\.js|manifest\.webmanifest|favicon\.svg|social-preview\.svg|logo-[a-z]+\.png|icon-[0-9]+\.png|robots\.txt|sitemap\.xml|js\/[a-z-]+\.mjs|shared\/(?:sheets-engine\/)?[a-z-]+\.mjs|vendor\/livekit-client\.esm\.mjs)$/;
 const DESIGN_ASSET = /^\/(?:assets\/figma\/[A-Za-z0-9_-]+\.(?:png|svg|woff2|txt)|images\/(?:meet|forms|flow)-workspace\.webp)$/;
 const LEGACY = { '/book': '/meet', '/form': '/forms' };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
@@ -16,9 +16,10 @@ const PAGES = [
   /^\/$/, /^\/overview$/, /^\/meet$/, /^\/forms$/, /^\/flow$/, /^\/privacy$/, /^\/terms$/, /^\/(?:account|login|signup)$/, /^\/billing$/,
   /^\/setup(?:\/(?:meet|forms|flow))?$/, /^\/products\/(?:meet|forms|flow)$/, /^\/pricing\/proposal$/, /^\/enquiries$/, /^\/demo(?:\/[a-z0-9-]+)*$/, /^\/start(?:\/[a-z0-9-]+)*$/,
   new RegExp(`^/meet/event-types/(new|${UUID})$`), /^\/meet\/manage\/[A-Za-z0-9_-]{20,100}$/,
-  new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|${UUID})$`),
-  new RegExp(`^/sheets/${UUID}$`),
-  /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/room\/[A-Za-z0-9_-]{20,30}$/, /^\/meet\/join\/[A-Za-z0-9_-]{40,60}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/
+  new RegExp(`^/forms/${UUID}(/responses)?$`), new RegExp(`^/flow/(runs|tasks|new|approvals|${UUID}|build/${UUID}|runs/${UUID})$`),
+  /^\/sheets$/, new RegExp(`^/sheets/(?:workbooks/)?${UUID}$`),
+  /^\/meet\/(pay|manage)\/[A-Za-z0-9_-]{20,100}$/, /^\/meet\/room\/[A-Za-z0-9_-]{20,30}$/, /^\/meet\/join\/[A-Za-z0-9_-]{40,60}$/, /^\/meet\/poll\/[a-z0-9-]{3,60}$/, new RegExp(`^/meet/contacts/${UUID}$`), /^\/recap\/[A-Za-z0-9_-]{20,100}$/,
+  /^\/forms\/pay\/[A-Za-z0-9_-]{40,60}$/, /^\/messages\/stop\/[A-Za-z0-9_-]{30,40}$/
 ];
 
 function resolvePage(app, path) {

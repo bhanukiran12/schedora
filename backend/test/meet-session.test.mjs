@@ -152,7 +152,7 @@ test('session offer: host attaches a published form; attendees and late joiners 
 
     // Tampering: another seat, another offer or a forged signature is refused and writes nothing.
     const [offer, seat, expiry, signature] = ticket.split('.');
-    const forged = [[offer, early.seat, expiry, signature], [offer, seat, String(Number(expiry) + 1), signature], [offer, seat, expiry, signature.slice(0, -2) + 'AA'], ['nonsense']];
+    const forged = [[offer, early.seat, expiry, signature], [offer, seat, String(Number(expiry) + 1), signature], [offer, seat, expiry, (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1)], ['nonsense']];
     for (const parts of forged) assert.equal((await submit(early.http, brief.slug, parts.join('.'), 'forged-attempt-' + parts.length + parts[0].slice(0, 4))).body.error.code, 'session_invalid');
     const otherForm = await form('Different form');
     assert.equal((await submit(early.http, otherForm.slug, (await early.session()).body.offer.ticket, 'wrong-form-attempt-1')).body.error.code, 'session_invalid', 'a ticket names one form');

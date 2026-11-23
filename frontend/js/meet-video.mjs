@@ -6,6 +6,7 @@ import { $, $$, api, ask, badge, boot, copy, errorBlock, fmtDateTime, fmtFull, h
 import { setTitle, signInPrompt } from './pages.mjs';
 import { startSession } from './meet-session.mjs';
 import { icon } from './design-system.mjs';
+import { guidancePanel } from './meet-video-guidance.mjs';
 
 let sdkPromise = null;
 const sdk = () => sdkPromise ||= import('/vendor/livekit-client.esm.mjs');
@@ -190,6 +191,7 @@ async function prejoin(ctx, flow) {
         </details>
         <p class="hint">Meetings are charged to the host's workspace by connected time. Guests never pay.</p>
       </form>
+      ${flow.host && info.guidance ? guidancePanel(info.guidance) : ''}
     </section></div></div>`);
 
   const status = () => {

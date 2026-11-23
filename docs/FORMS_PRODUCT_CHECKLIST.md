@@ -1,5 +1,7 @@
 # Forms product checklist
 
+**Current review, 21 November 2026:** the full browser suite passed all journeys and 1,160 responsive/light/dark layout checks. Current blank-draft creation, question editing/options, logic, preview, design, publishing, responses, private edits and uploads passed their relevant browser/server checks. The dated milestones below are historical snapshots, not unresolved test failures. Automatic lead scoring remains unimplemented; see [current review and explicit limits](SHEETS_FORMS_REVIEW_2026-11-21.md).
+
 Started 9 November 2026 on branch `codex/forms-typography`, from a clean working tree at `0d6ac90`. This is the acceptance checklist for improving Forms. Each route lists its user goal, its main UX gaps, and how it will be verified. Typeform is the reference for hierarchy, navigation and editing interactions. Schedora's branding and existing contracts in `docs/FORMS.md` stay as they are.
 
 Status key: **Done** means built and verified locally in this checkout. **Planned** means the gap is recorded and not built yet. **In progress** means a local change exists but still needs its stated verification.

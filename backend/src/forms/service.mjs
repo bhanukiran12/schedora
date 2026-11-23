@@ -1,9 +1,15 @@
+import { completeResumeDraft } from './resume.mjs';
+import { emitEvent } from '../flow/events.mjs';
+import { createFormPayment, paymentPublishProblems, paymentRow, paymentToken, presentPayment } from './payments.mjs';
+import { queueFormReceipt, receiptPublishProblems, recordReceiptConsent, receiptStatus } from './receipts.mjs';
+import { attachResponseUploads, replaceResponseUploads } from './uploads.mjs';
+import { leadScore } from '../shared/forms-logic.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fail, HttpError } from '../http.mjs';
 import { filterActive, filterSql, searchMatcher } from './response-filter.mjs';
 import { slugify } from '../validate.mjs';
 import { consumeQuota, entitlementsFor, requireEntitlement, usageFor } from '../billing/entitlements.mjs';
-import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, formScore, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
+import { answerConditionHolds, answerText, attributionColumns, attributionValues, choiceRuleConflicts, comparesTypedText, definitionProblems, FIELD_TYPES, formEnding, formScore, isGrid, quizFeedback, responseColumns, responseColumnText, responseWindow, THEME_SIZE_TOKENS, THEME_TOKENS, publishedTypeChangeAllowed, starterDefinition, urlParamRuleConflicts, validateSubmission, withEvaluationPolicy } from '../shared/forms-logic.mjs';
 import { upsertContact } from '../platform/contacts.mjs';
 import { assertDefinitionAssets, recordVersionAssets } from './assets.mjs';
 import { assertSessionClaim, recordSessionSubmission, verifyTicket } from '../video/session.mjs';
@@ -95,12 +101,12 @@ export function normalizeDefinition(input) {
     submit_label: typeof input.submit_label === 'string' && input.submit_label.trim() ? input.submit_label.trim().slice(0, 40) : 'Submit',
     fields: Array.isArray(input.fields) ? input.fields.map(field => {
       if (!field || typeof field !== 'object') return field;
-      const clean = pick(field, ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder']);
+      const clean = pick(field, ['id', 'type', 'label', 'help', 'required', 'group', 'placeholder', 'display']);
       if (typeof clean.label === 'string') clean.label = clean.label.trim();
       if (typeof clean.help === 'string') clean.help = clean.help.trim() || undefined;
       if (field.type?.endsWith?.('_choice')) clean.options = Array.isArray(field.options) ? field.options.map(option => {
         if (!option || typeof option !== 'object') return option;
-        const kept = pick(option, ['id', 'label', 'correct', 'points']);
+        const kept = pick(option, ['id', 'label', 'correct', 'points', 'lead_points']);
         if (option.image != null) kept.image = option.image && typeof option.image === 'object' ? pick(option.image, ['asset']) : option.image;
         return kept;
       }) : field.options;
@@ -110,14 +116,42 @@ export function normalizeDefinition(input) {
       if (field.show_if) clean.show_if = pick(field.show_if, ['field', 'op', 'value']);
       if (field.media != null) clean.media = normalizeMedia(field.media);
       if (field.answer_rule != null) clean.answer_rule = pick(field.answer_rule, ['min', 'max', 'message']);
+      if (field.number != null) clean.number = typeof field.number === 'object' ? pick(field.number, ['min', 'max', 'integer', 'message']) : field.number;
+      if (field.grid != null) clean.grid = field.grid && typeof field.grid === 'object' && !Array.isArray(field.grid)
+        ? Object.fromEntries(['rows', 'columns'].map(key => [key, Array.isArray(field.grid[key]) ? field.grid[key].map(item => item && typeof item === 'object' ? pick(item, ['id', 'label']) : item) : field.grid[key]])) : field.grid;
+      if (field.scale != null) clean.scale = typeof field.scale === 'object' ? pick(field.scale, ['min', 'max', 'min_label', 'max_label']) : field.scale;
+      if (field.feedback != null) {
+        clean.feedback = typeof field.feedback === 'object' ? pick(field.feedback, ['correct', 'incorrect']) : field.feedback;
+        if (clean.feedback && typeof clean.feedback === 'object' && !clean.feedback.correct && !clean.feedback.incorrect) delete clean.feedback;
+      }
       return clean;
     }) : input.fields
   };
+  if (input.lead_scoring != null) definition.lead_scoring = typeof input.lead_scoring === 'object' && !Array.isArray(input.lead_scoring) ? pick(input.lead_scoring, ['warm', 'hot']) : input.lead_scoring;
+  if (input.payment != null) {
+    const payment = typeof input.payment === 'object' && !Array.isArray(input.payment) ? pick(input.payment, ['amount_cents', 'currency', 'description', 'window_hours']) : input.payment;
+    if (payment && typeof payment === 'object') {
+      payment.currency = payment.currency ?? 'INR';
+      if (typeof payment.description === 'string') payment.description = payment.description.trim() || undefined;
+      if (payment.description === undefined) delete payment.description;
+    }
+    definition.payment = payment;
+  }
+  if (input.receipts != null) {
+    const receipts = typeof input.receipts === 'object' && !Array.isArray(input.receipts) ? pick(input.receipts, ['whatsapp']) : input.receipts;
+    if (receipts?.whatsapp && typeof receipts.whatsapp === 'object' && !Array.isArray(receipts.whatsapp)) receipts.whatsapp = pick(receipts.whatsapp, ['phone_field']);
+    if (!receipts || typeof receipts !== 'object' || receipts.whatsapp != null) definition.receipts = receipts;
+  }
   if (hasItems(input.logic)) definition.logic = normalizeLogic(input.logic);
   if (hasItems(input.choice_rules)) definition.choice_rules = normalizeChoiceRules(input.choice_rules);
   if (hasItems(input.url_params)) definition.url_params = Array.isArray(input.url_params) ? input.url_params.map(normalizeUrlParam) : input.url_params;
   if (hasItems(input.endings)) definition.endings = Array.isArray(input.endings) ? input.endings.map(normalizeEnding) : input.endings;
   if (input.theme != null) definition.theme = normalizeTheme(input.theme);
+  if (input.responses != null) {
+    const settings = typeof input.responses === 'object' ? pick(input.responses, ['limit', 'open_at', 'close_at', 'closed_message', 'allow_edit']) : input.responses;
+    if (settings && typeof settings === 'object' && typeof settings.closed_message === 'string') settings.closed_message = settings.closed_message.trim() || undefined;
+    if (!settings || typeof settings !== 'object' || Object.values(settings).some(value => value != null)) definition.responses = settings;
+  }
   const problems = definitionProblems(definition);
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'definition', problems });
   return definition;
@@ -125,17 +159,20 @@ export function normalizeDefinition(input) {
 
 /** Respondents need choice labels and media, while grading uses the stored definition. */
 export function publicDefinition(definition) {
+  const { lead_scoring, ...publicForm } = definition;
   const fields = definition.fields.map(field => {
-    if (!field.options?.some(option => 'correct' in option || 'points' in option)) return field;
+    // Quiz feedback is shown only after submitting, with the result.
+    if (field.feedback) { const { feedback, ...rest } = field; field = rest; }
+    if (!field.options?.some(option => 'correct' in option || 'points' in option || 'lead_points' in option)) return field;
     const options = field.options.map(option => {
-      const { correct, points, ...publicOption } = option;
+      const { correct, points, lead_points, ...publicOption } = option;
       return publicOption;
     });
     return { ...field, options };
   });
-  if (!definition.theme?.source) return { ...definition, fields };
+  if (!definition.theme?.source) return { ...publicForm, fields };
   const { source, ...theme } = definition.theme;
-  return { ...definition, fields, theme };
+  return { ...publicForm, fields, theme };
 }
 
 function present(row) {
@@ -242,6 +279,10 @@ function validatePublish(app, workspaceId, form) {
   if (waiting.length) fail(400, 'validation_failed', waiting[0], { field: 'url_params', problems: waiting });
   const problems = form.routing ? routingProblems(app, workspaceId, definition, form.routing) : [];
   if (problems.length) fail(400, 'validation_failed', problems[0], { field: 'routing', problems });
+  const paymentProblems = paymentPublishProblems(app, workspaceId, definition);
+  if (paymentProblems.length) fail(400, 'validation_failed', paymentProblems[0], { field: 'payment', problems: paymentProblems });
+  const receiptProblems = receiptPublishProblems(app, definition);
+  if (receiptProblems.length) fail(400, 'validation_failed', receiptProblems[0], { field: 'receipts', problems: receiptProblems });
   return definition;
 }
 
@@ -272,6 +313,7 @@ export function publishForm(app, workspaceId, userId, id, body = {}) {
     const form = getForm(app, workspaceId, id);
     if (expected != null && expected !== form.revision) conflict(app, workspaceId, id);
     const definition = validatePublish(app, workspaceId, form);
+    if (definition.fields.some(field => field.type === 'file_upload') && !app.formUploads) fail(503, 'uploads_unavailable', 'Connect private attachment storage and file scanning before publishing a file upload question.');
     const version = (app.db.get('SELECT MAX(version) AS version FROM form_versions WHERE form_id = ?', id).version || 0) + 1;
     app.db.run('INSERT INTO form_versions (form_id, version, definition, routing, published_at, published_by) VALUES (?, ?, ?, ?, ?, ?)',
       id, version, JSON.stringify(withEvaluationPolicy(definition)), form.routing ? JSON.stringify(form.routing) : null, app.now(), userId);
@@ -321,7 +363,9 @@ export function publishedForm(app, slug, request) {
   if (form.published_version == null) closed(app, form);
   const respondent = assertFormAccess(app, request, form);
   const version = app.db.get('SELECT definition FROM form_versions WHERE form_id = ? AND version = ?', form.id, form.published_version);
-  return { ...form, definition: JSON.parse(version.definition), respondent };
+  const definition = JSON.parse(version.definition);
+  assertAcceptingResponses(app, form, definition);
+  return { ...form, definition, respondent };
 }
 
 // The ending a respondent reached, for the receipt. Always worked out from the accepted answers of the
@@ -330,8 +374,20 @@ export function publishedForm(app, slug, request) {
 const endingStep = (definition, answers, params) => {
   const ending = formEnding(definition, answers, params);
   const score = formScore(definition, answers);
-  return { ...(ending ? { ending } : {}), ...(score ? { quiz_score: score } : {}) };
+  const results = score ? quizFeedback(definition, answers) : [];
+  return { ...(ending ? { ending } : {}), ...(score ? { quiz_score: score, quiz_results: results } : {}) };
 };
+
+// Response settings in the live version (a closing time, a response limit) close the form for new
+// respondents. Responses already accepted, and retries of them, are not affected.
+function assertAcceptingResponses(app, form, definition) {
+  const count = definition.responses?.limit != null ? Number(app.db.get("SELECT COUNT(*) AS count FROM responses WHERE form_id = ? AND (payment_status IS NULL OR payment_status <> 'expired')", form.id).count) : 0;
+  const window = responseWindow(definition, { now: app.now(), count });
+  if (window.closed) fail(410, 'form_closed', window.message || ({
+    limit: 'This form has received all the responses it can accept.',
+    not_open_yet: 'This form is not accepting responses yet.'
+  })[window.reason] || 'This form is no longer accepting responses.', { reason: window.reason });
+}
 
 // The respondent's name for contacts and booking handoffs: a name question, or split name questions.
 const respondentName = answers => {
@@ -351,6 +407,7 @@ export function submitResponse(app, slug, body, request) {
   const form = formBySlug(app, slug);
   // Checked before anything else, replays included: without sign-in a protected form answers nothing.
   const respondent = assertFormAccess(app, request, form);
+  const editKeyHash = editHash(body.edit_key_hash);
   if (body.website) fail(400, 'rejected', 'Submission rejected.');
   // Optional: links the response to a meeting's form offer and the attendee's seat (docs/MEET_SESSION_OFFERS.md).
   const claim = body.session_ticket != null ? verifyTicket(app, body.session_ticket) : null;
@@ -359,12 +416,16 @@ export function submitResponse(app, slug, body, request) {
   if (body.version != null && !Number.isInteger(body.version)) invalid('version', 'Reload the form and try again.');
   try {
     return app.db.transaction(() => {
-      const existing = app.db.get('SELECT id, form_version, answers, request_hash, created_at FROM responses WHERE form_id = ? AND idempotency_key = ?', form.id, key);
+      const existing = app.db.get(`SELECT r.id, r.form_version, COALESCE(e.original_answers, r.answers) AS answers, r.request_hash, r.created_at
+        FROM responses r LEFT JOIN form_response_edits e ON e.response_id = r.id WHERE r.form_id = ? AND r.idempotency_key = ?`, form.id, key);
       if (existing) {
         const version = loadVersion(app, form.id, existing.form_version);
         const retry = validateSubmission(version.definition, body.answers, body.url_params, olderClient(body));
         const changed = Object.keys(retry.errors).length > 0 || (existing.request_hash != null && answersHash(retry.answers) !== existing.request_hash);
-        return { ...receipt(existing, existing.form_version), replay: true, answers_changed: changed, next: replayNextStep(app, form, existing.id, version), ...endingStep(version.definition, JSON.parse(existing.answers), body.url_params) };
+        const canEdit = Boolean(editKeyHash && !changed && app.db.get('SELECT 1 FROM form_response_edits WHERE response_id = ? AND token_hash = ?', existing.id, editKeyHash));
+        const owed = paymentRow(app, existing.id);
+        const next = owed && !owed.completed_at ? null : replayNextStep(app, form, existing.id, version);
+        return { ...receipt(existing, existing.form_version), ...(canEdit ? { can_edit: true } : {}), replay: true, answers_changed: changed, next, ...paymentReceipt(app, existing.id), ...receiptReceipt(app, existing.id), ...endingStep(version.definition, JSON.parse(existing.answers), body.url_params) };
       }
       const live = app.db.get('SELECT published_version FROM forms WHERE id = ?', form.id).published_version;
       if (live == null) closed(app, form);
@@ -376,6 +437,7 @@ export function submitResponse(app, slug, body, request) {
           fail(409, 'form_version_changed', 'This form was updated while you were answering. Nothing was submitted. Review the updated questions and submit again.', { version: live });
         }
       }
+      assertAcceptingResponses(app, form, version.definition);
       const { answers, errors } = validateSubmission(version.definition, body.answers, body.url_params, olderClient(body));
       if (Object.keys(errors).length) fail(400, 'validation_failed', 'Please check the highlighted answers.', { errors });
       if (claim) assertSessionClaim(app, claim, form.id);
@@ -383,19 +445,119 @@ export function submitResponse(app, slug, body, request) {
       consumeQuota(app, form.workspace_id, 'responses');
       const id = randomUUID();
       const now = app.now();
+      // A paid form's response is incomplete until its payment is confirmed (forms/payments.mjs): the
+      // contact, the event, the next step and the receipt wait for releaseResponse.
+      const payment = version.definition.payment || null;
       const emailField = version.definition.fields.find(field => field.type === 'email' && answers[field.id]);
-      const contactId = emailField ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: respondentName(answers) }) : null;
+      const contactId = emailField && !payment ? upsertContact(app, form.workspace_id, { email: answers[emailField.id], name: respondentName(answers) }) : null;
       // Kept apart from the answers: unverified, and never read for identity, contacts, Flow or routing.
       const attribution = attributionValues(version.definition, body.url_params);
       // The verified identity comes from the respondent session only, never from the request body or answers.
-      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, request_hash, created_at, contact_id, attribution, respondent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        id, form.workspace_id, form.id, pinned, JSON.stringify(answers), key, answersHash(answers), now, contactId, attribution ? JSON.stringify(attribution) : null, respondent ? JSON.stringify(respondent) : null);
+      app.db.run('INSERT INTO responses (id, workspace_id, form_id, form_version, answers, idempotency_key, request_hash, created_at, contact_id, attribution, respondent, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, form.workspace_id, form.id, pinned, JSON.stringify(answers), key, answersHash(answers), now, contactId, attribution ? JSON.stringify(attribution) : null, respondent ? JSON.stringify(respondent) : null, payment ? 'pending' : null);
+      if (payment) createFormPayment(app, form, id, payment, version.definition);
+      recordReceiptConsent(app, form, version.definition, id, answers, body.whatsapp_receipt === true);
+      const canEdit = Boolean(editKeyHash && !claim && !respondent && form.access === 'public' && editableResponses(version.definition) && editableResponses(loadVersion(app, form.id, live).definition));
+      if (canEdit) app.db.run('INSERT INTO form_response_edits (response_id, token_hash) VALUES (?, ?)', id, editKeyHash);
+      completeResumeDraft(app,form.id,pinned,body.resume_key);
+      attachResponseUploads(app, form, { ...version, number: pinned }, answers, key, respondent, id);
       if (claim) recordSessionSubmission(app, claim, id);
+      if (payment) return { ...receipt({ id, created_at: now }, pinned), replay: false, answers_changed: false, next: null, ...paymentReceipt(app, id), ...receiptReceipt(app, id), ...endingStep(version.definition, answers, body.url_params) };
       // The event carries identifiers only; Flow loads the answers it needs at run time.
       app.db.run("INSERT INTO outbox (id, workspace_id, type, subject_id, source_id, created_at) VALUES (?, ?, 'forms.response.created', ?, ?, ?)", randomUUID(), form.workspace_id, id, form.id, now);
-      return { ...receipt({ id, created_at: now }, pinned), replay: false, answers_changed: false, next: decideNextStep(app, form, id, version, answers), ...endingStep(version.definition, answers, body.url_params) };
+      queueFormReceipt(app, id);
+      return { ...receipt({ id, created_at: now }, pinned), ...(canEdit ? { can_edit: true } : {}), replay: false, answers_changed: false, next: decideNextStep(app, form, id, version, answers), ...receiptReceipt(app, id), ...endingStep(version.definition, answers, body.url_params) };
     });
   } finally { app.nudge?.(); }
+}
+
+// The respondent's private payment link and state, returned with the receipt of a paid form.
+function paymentReceipt(app, responseId) {
+  const row = paymentRow(app, responseId);
+  return row ? { payment: { ...presentPayment(row), token: paymentToken(app, responseId) } } : {};
+}
+const receiptReceipt = (app, responseId) => { const status = receiptStatus(app, responseId); return status ? { whatsapp_receipt: status } : {}; };
+
+/**
+ * Runs a paid response's downstream actions once its payment is confirmed (forms/payments.mjs calls
+ * this inside the transaction that records the payment): the contact record, the
+ * forms.response.created event for Flow and webhooks, the routed next step and the WhatsApp receipt.
+ */
+export function releaseResponse(app, responseId) {
+  const row = app.db.get('SELECT r.id, r.form_id, r.form_version, r.answers, r.contact_id, f.workspace_id, f.slug FROM responses r JOIN forms f ON f.id = r.form_id WHERE r.id = ?', responseId);
+  if (!row) return null;
+  const answers = JSON.parse(row.answers);
+  const version = loadVersion(app, row.form_id, row.form_version);
+  const emailField = version.definition.fields.find(field => field.type === 'email' && answers[field.id]);
+  if (emailField && !row.contact_id) app.db.run('UPDATE responses SET contact_id = ? WHERE id = ?', upsertContact(app, row.workspace_id, { email: answers[emailField.id], name: respondentName(answers) }), responseId);
+  app.db.run("INSERT INTO outbox (id, workspace_id, type, subject_id, source_id, created_at) VALUES (?, ?, 'forms.response.created', ?, ?, ?)", randomUUID(), row.workspace_id, responseId, row.form_id, app.now());
+  queueFormReceipt(app, responseId);
+  if (!app.db.get('SELECT 1 FROM form_handoffs WHERE response_id = ?', responseId)) decideNextStep(app, { id: row.form_id, workspace_id: row.workspace_id }, responseId, version, answers);
+  return true;
+}
+
+/** The next step a respondent sees after a paid response is complete. */
+export function nextStepForResponse(app, responseId) {
+  const row = app.db.get('SELECT r.form_id, r.form_version, f.workspace_id FROM responses r JOIN forms f ON f.id = r.form_id WHERE r.id = ?', responseId);
+  return row ? replayNextStep(app, { id: row.form_id, workspace_id: row.workspace_id }, responseId, loadVersion(app, row.form_id, row.form_version)) : null;
+}
+
+/** Name and email for a payment checkout, taken from the respondent's own answers. */
+export function respondentContact(app, responseId) {
+  const row = app.db.get('SELECT form_id, form_version, answers FROM responses WHERE id = ?', responseId);
+  if (!row) return {};
+  const answers = JSON.parse(row.answers);
+  const emailField = loadVersion(app, row.form_id, row.form_version).definition.fields.find(field => field.type === 'email' && answers[field.id]);
+  return { name: respondentName(answers) || undefined, email: emailField ? answers[emailField.id] : undefined };
+}
+
+// The browser keeps the original random key. Only its hash is stored on submission.
+const editHash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null;
+const editableResponses = definition => definition.responses?.allow_edit === true &&
+  definition.mode !== 'knowledge_quiz' && !definition.url_params?.length;
+
+export const editSubmissionId = responseId => 'edit_' + responseId.replaceAll('-', '');
+
+export function responseEditContext(app, slug, key, request) {
+  const form = formBySlug(app, slug);
+  const respondent = assertFormAccess(app, request, form);
+  const unavailable = () => fail(404, 'edit_link_unavailable', 'This response edit link is unavailable.');
+  if (!editHash(key)) unavailable();
+  const row = app.db.get(`SELECT r.id, r.form_version, r.answers, r.respondent, r.created_at, e.revision
+    FROM form_response_edits e JOIN responses r ON r.id = e.response_id
+    WHERE r.form_id = ? AND e.token_hash = ?`, form.id, sha256(key));
+  const live = app.db.get('SELECT published_version, access FROM forms WHERE id = ?', form.id);
+  if (!row || live.published_version == null || live.access !== 'public' || row.respondent || respondent ||
+      !editableResponses(loadVersion(app, form.id, live.published_version).definition)) unavailable();
+  const { definition } = loadVersion(app, form.id, row.form_version);
+  if (!editableResponses(definition)) unavailable();
+  return { form, row, definition };
+}
+
+export function editResponse(app, slug, body, request, save = false) {
+  return app.db.transaction(() => {
+    const { form, row, definition } = responseEditContext(app, slug, body.key, request);
+    if (!save) return {
+      ...receipt(row, row.form_version), definition: publicDefinition(definition),
+      answers: JSON.parse(row.answers), revision: Number(row.revision),
+      upload_submission_id: editSubmissionId(row.id)
+    };
+    if (!Number.isSafeInteger(body.revision) || !body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) {
+      fail(400, 'validation_failed', 'Reload the response and try again.');
+    }
+    const { answers, errors } = validateSubmission(definition, body.answers, null, olderClient(body));
+    if (Object.keys(errors).length) fail(400, 'validation_failed', 'Please check the highlighted answers.', { errors });
+    const saved = JSON.stringify(answers);
+    const revision = Number(row.revision);
+    if (saved === row.answers) return { ...receipt(row, row.form_version), revision };
+    if (body.revision !== revision) fail(409, 'response_edit_conflict', 'This response changed in another tab. Reload the edit link to see the latest answers.');
+    const update = app.db.run('UPDATE form_response_edits SET revision = revision + 1, original_answers = COALESCE(original_answers, ?) WHERE response_id = ? AND revision = ?', row.answers, row.id, revision);
+    if (!update.changes) fail(409, 'response_edit_conflict', 'This response changed in another tab. Reload the edit link to see the latest answers.');
+    replaceResponseUploads(app, form, row, definition, answers);
+    app.db.run('UPDATE responses SET answers = ? WHERE id = ?', saved, row.id);
+    emitEvent(app, { id: `edited:${row.id}:${revision + 1}`, workspaceId: form.workspace_id, type: 'forms.response.edited', subjectId: row.id, sourceId: form.id, payload: { revision: revision + 1 } });
+    return { ...receipt(row, row.form_version), revision: revision + 1 };
+  });
 }
 
 function loadVersion(app, formId, version) {
@@ -406,7 +568,7 @@ function loadVersion(app, formId, version) {
 // The receipt reference is derived from the response id; it identifies nothing else.
 const receipt = (row, version) => ({ id: row.id, reference: row.id.replace(/-/g, '').slice(0, 8).toUpperCase(), created_at: row.created_at, version });
 
-const RESPONSE_COLUMNS = `r.id, r.form_version, r.answers, r.attribution, r.respondent, r.created_at, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at`;
+const RESPONSE_COLUMNS = `r.id, r.form_version, r.answers, r.attribution, r.respondent, r.created_at, r.payment_status, h.status AS handoff_status, h.reason AS handoff_reason, h.booking_id, h.expires_at AS handoff_expires_at`;
 
 // Responses matching a filter, newest first. The database checks version, dates and sign-in; the
 // text search runs here because answers are read with the labels of the version they were given in.
@@ -446,7 +608,8 @@ export function listResponses(app, workspaceId, formId, { before, limit = 50, fi
   }
   const page = rows.slice(0, size);
   const last = page.at(-1);
-  return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, next_step: nextStepSummary(app, workspaceId, row), ...(row.attribution ? { attribution: JSON.parse(row.attribution) } : {}), ...(row.respondent ? { respondent: JSON.parse(row.respondent) } : {}) })),
+  const versions = formVersions(app, formId);
+  return { responses: page.map(row => ({ id: row.id, form_version: row.form_version, answers: JSON.parse(row.answers), created_at: row.created_at, ...(leadScore(versions[row.form_version], JSON.parse(row.answers)) ? { lead_score: leadScore(versions[row.form_version], JSON.parse(row.answers)) } : {}), next_step: nextStepSummary(app, workspaceId, row), ...(row.payment_status ? { payment: presentPayment(paymentRow(app, row.id), { includePrivate: true }) } : {}), ...receiptReceipt(app, row.id), ...(row.attribution ? { attribution: JSON.parse(row.attribution) } : {}), ...(row.respondent ? { respondent: JSON.parse(row.respondent) } : {}) })),
     next: rows.length > size ? `${last.created_at}.${last.id}` : null, ...(matched == null ? {} : { matched }),
     // Whether any response to the form carries a verified sign-in, so the inbox can offer that filter.
     has_verified: Boolean(app.db.get('SELECT 1 AS found FROM responses WHERE form_id = ? AND workspace_id = ? AND respondent IS NOT NULL LIMIT 1', formId, workspaceId)) };
@@ -477,12 +640,78 @@ export function formVersions(app, formId) {
 }
 
 // Columns for every question across all published versions, in latest-version order.
+function orderedDefinitions(versions, draft) {
+  return [...Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), draft];
+}
+
 function exportColumns(versions, draft) {
   const columns = new Map();
-  for (const definition of [...Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), draft]) {
-    for (const field of definition.fields) if (field.type !== 'page_break' && !columns.has(field.id)) columns.set(field.id, field);
+  for (const definition of orderedDefinitions(versions, draft)) {
+    for (const column of definition.fields.flatMap(responseColumns)) if (!columns.has(column.key)) columns.set(column.key, column);
   }
   return [...columns.values()];
+}
+
+/**
+ * A per-question overview of every response (docs/FORMS.md, "Summary"). Choices and scales are
+ * counted by option or point; numbers get count, average and range; other answers show the count and
+ * the most recent few. Each answer is read with the version it was given in, so renamed options are
+ * counted under their current label when the option still exists. Quiz forms add the score spread.
+ */
+export function responseSummary(app, workspaceId, formId) {
+  const form = getForm(app, workspaceId, formId);
+  const versions = formVersions(app, formId);
+  const byQuestion = new Map();
+  for (const definition of orderedDefinitions(versions, form.draft)) {
+    for (const field of definition.fields) if (field.type !== 'page_break' && !byQuestion.has(field.id)) byQuestion.set(field.id, field);
+  }
+  const publishedIds = new Set(Object.values(versions).flatMap(definition => definition.fields.map(field => field.id)));
+  const columns = [...byQuestion.values()].filter(field => publishedIds.has(field.id));
+  const rows = app.db.all('SELECT form_version, answers, created_at FROM responses WHERE form_id = ? AND workspace_id = ? ORDER BY created_at DESC, id DESC', formId, workspaceId);
+  const parsed = rows.map(row => ({ version: row.form_version, answers: JSON.parse(row.answers), at: row.created_at }));
+  const quiz = Object.values(versions).some(definition => definition.mode === 'knowledge_quiz');
+  const questions = columns.map(field => {
+    const answered = parsed.filter(row => {
+      const value = row.answers[field.id];
+      return Array.isArray(value) ? value.length : value != null && value !== '';
+    });
+    const base = { id: field.id, label: field.label, type: field.type, answered: answered.length };
+    if (field.type?.endsWith('_choice')) {
+      const counts = new Map((field.options || []).map(option => [option.id, { label: option.label, count: 0 }]));
+      for (const row of answered) {
+        const value = row.answers[field.id];
+        for (const id of Array.isArray(value) ? value : [value]) {
+          if (!counts.has(id)) counts.set(id, { label: (versions[row.version]?.fields.find(item => item.id === field.id)?.options || []).find(option => option.id === id)?.label || id, count: 0 });
+          counts.get(id).count++;
+        }
+      }
+      return { ...base, kind: 'choice', options: [...counts.values()] };
+    }
+    if (field.type === 'scale' || field.type === 'number') {
+      const values = answered.map(row => Number(row.answers[field.id])).filter(Number.isFinite);
+      const total = values.reduce((sum, value) => sum + value, 0);
+      const out = { ...base, kind: 'number', average: values.length ? Math.round(total / values.length * 100) / 100 : null, min: values.length ? Math.min(...values) : null, max: values.length ? Math.max(...values) : null };
+      if (field.type === 'scale') {
+        const scale = { min: field.scale?.min ?? 1, max: field.scale?.max ?? 5 };
+        out.points = Array.from({ length: scale.max - scale.min + 1 }, (_, index) => ({ label: String(scale.min + index), count: values.filter(value => value === scale.min + index).length }));
+        out.labels = { min: field.scale?.min_label || '', max: field.scale?.max_label || '' };
+      }
+      return out;
+    }
+    return { ...base, kind: 'text', recent: answered.slice(0, 5).map(row => answerText(versions[row.version]?.fields.find(item => item.id === field.id) || field, row.answers[field.id]).slice(0, 300)) };
+  });
+  let scores = null;
+  if (quiz) {
+    const spread = new Map();
+    for (const row of parsed) {
+      const score = formScore(versions[row.version], row.answers);
+      if (!score) continue;
+      const key = `${score.correct} / ${score.total}`;
+      spread.set(key, (spread.get(key) || 0) + 1);
+    }
+    scores = [...spread.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  }
+  return { total: rows.length, latest: rows[0]?.created_at ?? null, questions, ...(scores ? { scores } : {}) };
 }
 
 // Neutralizes spreadsheet formulas (CSV injection) and quotes every cell.
@@ -498,6 +727,15 @@ const NEXT_STEP_TEXT = { offered: 'Booking offered', unavailable: 'Booking unava
 // keep their original labels.
 // With a filter, only matching responses are written and the file name says so; the columns stay the
 // same as a full export.
+export const PAYMENT_CSV_COLUMNS = ['Payment status', 'Payment amount (INR)', 'Amount paid (INR)', 'Amount refunded (INR)', 'Paid at (UTC)', 'Razorpay payment ID'];
+export const PAYMENT_STATUS_TEXT = { pending: 'Awaiting payment', failed: 'Payment failed, awaiting retry', paid: 'Paid', expired: 'Payment window ended', refunded: 'Refunded', partially_refunded: 'Partly refunded', review: 'Needs payment review' };
+const rupees = cents => (cents / 100).toFixed(2);
+export function paymentCsvValues(row) {
+  if (!row) return ['', '', '', '', '', ''];
+  const state = row.status === 'pending' && row.last_failure ? 'failed' : row.status;
+  return [PAYMENT_STATUS_TEXT[state] || state, rupees(row.amount_cents), rupees(row.amount_paid), rupees(row.amount_refunded), row.paid_at ? new Date(row.paid_at).toISOString() : '', row.provider_payment_id || ''];
+}
+
 export function exportCsv(app, workspaceId, formId, filter = {}) {
   const form = getForm(app, workspaceId, formId);
   const versions = formVersions(app, formId);
@@ -510,16 +748,21 @@ export function exportCsv(app, workspaceId, formId, filter = {}) {
   // Attribution columns come last and only when recorded, so existing exports keep their shape.
   const attributed = app.db.all('SELECT attribution FROM responses WHERE form_id = ? AND workspace_id = ? AND attribution IS NOT NULL', formId, workspaceId).map(row => ({ attribution: parse(row.attribution) }));
   const attribution = attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), attributed);
-  const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(field => field.label || field.id), ...attribution.map(key => `Attribution: ${key}`), ...(verified ? ['Verified sign-in email', 'Verified sign-in subject'] : [])].map(csvCell).join(',')];
+  const lead = Object.values(versions).some(item => item.mode === 'lead_qualification' && item.lead_scoring);
+  // Payment columns appear only when some published version took payments, so other exports keep their shape.
+  const paid = Object.values(versions).some(item => item.payment);
+  const lines = [['Response ID', 'Submitted at (UTC)', 'Form version', 'Next step', ...columns.map(column => column.label), ...(lead ? ['Lead score', 'Lead priority', 'Lead score explanation'] : []), ...attribution.map(key => `Attribution: ${key}`), ...(verified ? ['Verified sign-in email', 'Verified sign-in subject'] : []), ...(paid ? PAYMENT_CSV_COLUMNS : [])].map(csvCell).join(',')];
   for (const row of rows) {
     const answers = JSON.parse(row.answers);
     const fields = versions[row.form_version]?.fields || [];
+    const qualification = leadScore(versions[row.form_version], answers);
     const step = nextStepSummary(app, workspaceId, row);
     const stepText = step ? [NEXT_STEP_TEXT[step.status], step.reference].filter(Boolean).join(' ') : '';
     const recorded = parse(row.attribution) || {};
     lines.push([row.id, new Date(row.created_at).toISOString(), row.form_version, stepText,
-      ...columns.map(column => answerText(fields.find(field => field.id === column.id) || column, answers[column.id])),
-      ...attribution.map(key => recorded[key] ?? ''), ...(verified ? (identity => [identity?.email ?? '', identity?.subject ?? ''])(parse(row.respondent)) : [])].map(csvCell).join(','));
+      ...columns.map(column => responseColumnText(fields, column, answers)),
+      ...(lead ? [qualification?.score ?? '', qualification?.band ?? '', qualification?.reasons.map(item => `${item.question}: ${item.answer} (+${item.points})`).join('; ') ?? ''] : []),
+      ...attribution.map(key => recorded[key] ?? ''), ...(verified ? (identity => [identity?.email ?? '', identity?.subject ?? ''])(parse(row.respondent)) : []), ...(paid ? paymentCsvValues(paymentRow(app, row.id)) : [])].map(csvCell).join(','));
   }
   return { filename: `${form.slug}-responses${filterActive(filter) ? '-filtered' : ''}.csv`, count: rows.length, body: '﻿' + lines.join('\r\n') + '\r\n' };
 }
@@ -585,6 +828,7 @@ export function saveRouting(app, workspaceId, id, body) {
     const field = fields.get(condition?.field);
     if (!field || !ROUTE_OPS.includes(condition.op)) invalid(`routing.rules.${index}`, `Rule ${index + 1} needs a question and a condition.`);
     const needsValue = ['equals', 'not_equals', 'contains'].includes(condition.op);
+    if (needsValue && (isGrid(field) || field.type === 'file_upload')) invalid(`routing.rules.${index}`, `Rule ${index + 1} can only check whether a grid is answered.`);
     if (needsValue && (condition.value == null || String(condition.value).trim() === '')) invalid(`routing.rules.${index}`, `Rule ${index + 1} needs a value to compare.`);
     if (needsValue && field.type.endsWith('_choice') && !field.options.some(option => option.id === condition.value)) invalid(`routing.rules.${index}`, `Rule ${index + 1} must use one of the options of "${field.label}".`);
     return { condition: { field: condition.field, op: condition.op, value: needsValue ? String(condition.value).slice(0, 300) : undefined }, action: normalizeAction(app, workspaceId, rule.action, `routing.rules.${index}.action`) };
@@ -634,7 +878,7 @@ function decideNextStep(app, form, responseId, version, answers) {
 function replayNextStep(app, form, responseId, version) {
   const handoff = app.db.get('SELECT * FROM form_handoffs WHERE response_id = ?', responseId);
   if (!handoff) {
-    const answers = JSON.parse(app.db.get('SELECT answers FROM responses WHERE id = ?', responseId).answers);
+    const answers = JSON.parse(app.db.get('SELECT COALESCE(e.original_answers, r.answers) AS answers FROM responses r LEFT JOIN form_response_edits e ON e.response_id = r.id WHERE r.id = ?', responseId).answers);
     return respondentAction(chooseAction(version.routing, answers, version.definition));
   }
   const fallback = respondentAction(version.routing?.fallback);

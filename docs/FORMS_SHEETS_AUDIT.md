@@ -1,5 +1,9 @@
 # Forms + Sheets: audit, comparison and roadmap
 
+> **Current acceptance, 21 November 2026.** The original comparison tables below are historical, not today's feature inventory. The implemented Forms release passed all current browser journeys, 1,160 layout checks, and the server suite. Sheets passed 39 browser journeys including the multiline editing correction. See [the current review, evidence and remaining feature limits](SHEETS_FORMS_REVIEW_2026-11-21.md).
+
+> **Status, 16 November 2026.** Sheets collaboration, the linked Form Responses grid and the editor are rebuilt; see `docs/SHEETS.md` for what exists and the open parity gaps. Forms gained number, linear scale, time, dropdown display, quiz feedback, response limits and a Summary view (`docs/FORMS.md`, last section). The tables below describe the 13 November state.
+
 Written 13 November 2026 against branch `codex/public-site-demo` (HEAD `989cda5`) **plus its uncommitted working tree** (65 modified files and several untracked ones, including the first Sheets prototype). Nothing in this document has been implemented yet; it is the plan to approve before work starts.
 
 Status key for the comparison tables:
@@ -63,9 +67,9 @@ Verdict: a useful proof that the integration idea works, but the data model (one
 | Title + description, image, video | Implemented | Question images, YouTube/Vimeo click-to-load |
 | Duplicate question | Implemented | `duplicateBlock` |
 | Drag to reorder | Implemented | Pointer + keyboard |
-| Undo / redo | **Missing** | Autosave exists, so a mistake is saved immediately with no way back |
+| Undo / redo | Implemented (13 Nov) | Ctrl/⌘+Z, Ctrl/⌘+Shift+Z, toolbar buttons; see `docs/FORMS.md`, "Undo, redo and shortcuts" |
 | Keyboard shortcuts | Partial | Outline navigation and reorder; no Ctrl+Z/Y, Ctrl+D, Ctrl+Enter, no shortcut help |
-| Autosave + status | Implemented | "All changes saved / Saving… / Not saved: changed elsewhere" |
+| Autosave | **Missing** (corrected 13 Nov) | Saving is explicit (Save draft). The status line reports "Unsaved edits / Saving… / All changes saved / Not saved: changed elsewhere". The first version of this audit wrongly listed autosave as implemented. |
 | Preview | Implemented | Device toggle, both layouts |
 | Templates | Partial | Mode starters (lead, quiz, match); the template gallery was removed on 10 Nov |
 | Quiz mode, answer key, points | Partial | Correct answers scored server-side; no per-question points, feedback, or release-score settings |
@@ -194,7 +198,7 @@ Effort is a rough size for one engineer (S ≤ 2 days, M ≤ 1 week, L ≤ 3 wee
 ### Phase 1: Forms audit fixes and UX (S–M)
 
 1. Fix the failing Forms keyboard and mobile journeys. *Depends on Phase 0.*
-2. **Builder undo / redo** with Ctrl/⌘+Z, Ctrl/⌘+Shift+Z / Ctrl+Y, plus Ctrl/⌘+D duplicate, Ctrl/⌘+Enter add question, and a `?` shortcut sheet. Autosave already exists, so undo is the missing safety net. (S)
+2. **Builder undo / redo** with Ctrl/⌘+Z, Ctrl/⌘+Shift+Z / Ctrl+Y, plus Ctrl/⌘+D duplicate, Ctrl/⌘+Enter add question, and a `?` shortcut sheet. Done 13 Nov. Saving remains explicit; autosave is a separate decision. (S)
 3. Finish the open design approval for the builder (question list beside the editor, single Publish, saved/pending state), already proposed in `PROJECT_CHECKPOINTS.md`.
 
 ### Phase 2: Forms parity (M–L)

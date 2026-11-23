@@ -8,14 +8,30 @@ export const FIELD_TYPES = {
   phone: 'Phone',
   single_choice: 'Single choice',
   multiple_choice: 'Multiple choice',
+  single_grid: 'Multiple-choice grid',
+  multiple_grid: 'Checkbox grid',
+  file_upload: 'File upload',
   date: 'Date',
+  time: 'Time',
+  number: 'Number',
+  scale: 'Linear scale',
   page_break: 'Page break'
 };
+
+// Bounds for the newer answer types (docs/FORMS.md, "Number, linear scale and time").
+export const FILE_LIMITS = { bytes: 2 * 1024 * 1024, count: 2, accept: '.pdf,.jpg,.jpeg,.png,.webp' };
+export const NUMBER_LIMIT = 1e12;
+export const GRID_LIMITS = { rows: 12, columns: 8, label: 100 };
+export const isGrid = field => field?.type === 'single_grid' || field?.type === 'multiple_grid';
+export const SCALE_LIMITS = { min: [0, 1], max: [2, 10], label: 40 };
+export const scaleOf = field => ({ min: field.scale?.min ?? 1, max: field.scale?.max ?? 5, min_label: field.scale?.min_label || '', max_label: field.scale?.max_label || '' });
+export const FEEDBACK_LIMIT = 300;
+export const CLOSED_MESSAGE_LIMIT = 300;
 // A question key that a published version used keeps its meaning. Its type may change only when
 // every answer already collected under that key still means the same thing in the new type:
 // a narrower text becomes wider text, or one choice becomes one of several. Anything else needs a
 // new question with a new key (docs/FORMS.md, "Changing a question's type").
-const WIDER_TYPES = { short_text: ['long_text'], email: ['short_text', 'long_text'], phone: ['short_text', 'long_text'], date: ['short_text', 'long_text'], single_choice: ['multiple_choice'] };
+const WIDER_TYPES = { short_text: ['long_text'], email: ['short_text', 'long_text'], phone: ['short_text', 'long_text'], date: ['short_text', 'long_text'], time: ['short_text', 'long_text'], number: ['short_text', 'long_text'], scale: ['short_text', 'long_text'], single_choice: ['multiple_choice'] };
 export const publishedTypeChangeAllowed = (from, to) => from === to || Boolean(WIDER_TYPES[from]?.includes(to));
 
 // ---- Media (docs/FORMS.md, "Media") ----
@@ -128,7 +144,8 @@ export const CONDITION_OPS = { equals: 'is', not_equals: 'is not', contains: 'in
 const LIMITS = { short_text: 300, long_text: 5000, email: 254, phone: 30 };
 const EMAIL = /^[^\s@<>()[\]\\,;:"]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 
-const isAnswered = value => Array.isArray(value) ? value.length > 0 : value != null && String(value).trim() !== '';
+const isAnswered = value => Array.isArray(value) ? value.length > 0
+  : value && typeof value === 'object' ? Object.values(value).some(answer => typeof answer === 'string' ? answer.trim() !== '' : Array.isArray(answer) && answer.length > 0) : value != null && String(value).trim() !== '';
 
 // ---- URL parameters (docs/FORMS.md, "URL parameters") ----
 // definition.url_params: [{ key, record? }]. A rule reads one as { param, op, value? }, so a parameter is
@@ -342,6 +359,7 @@ function choiceRuleProblem(definition, index, rule, name) {
     if (!asked) return `${name} must use the answer to an earlier question, and the question it uses is no longer before this one.`;
     if (!CONDITION_OPS[when.op]) return `${name} has an unsupported condition.`;
     if (VALUE_OPS.includes(when.op)) {
+      if (isGrid(asked) || asked.type === 'file_upload') return `${name} can only check whether this question is answered.`;
       if (typeof when.value !== 'string' || !when.value.trim() || when.value.length > 300) return `${name} needs a value to compare.`;
       if (asked.type.endsWith('_choice') && !asked.options?.some(option => option.id === when.value)) return `${name} depends on an option that is no longer in “${asked.label}”.`;
     }
@@ -484,9 +502,49 @@ export const screenPage = (definition, screen) => screen?.[0]?.group == null ? n
 
 export function answerText(field, value) {
   if (!isAnswered(value)) return '';
+  if (field.type === 'file_upload') return value.map(file => file.name).join(', ');
+  if (isGrid(field)) return field.grid.rows.flatMap(row => {
+    const text = gridRowText(field, row.id, value);
+    return text ? [`${row.label}: ${text}`] : [];
+  }).join(' · ');
   if (field.type === 'single_choice') return field.options.find(option => option.id === value)?.label ?? '';
   if (field.type === 'multiple_choice') return value.map(id => field.options.find(option => option.id === id)?.label).filter(Boolean).join(', ');
   return String(value);
+}
+
+function gridRowText(field, row, value) {
+  if (!isGrid(field) || !value || typeof value !== 'object' || !Object.hasOwn(value, row)) return '';
+  const ids = new Set(Array.isArray(value[row]) ? value[row] : [value[row]]);
+  return field.grid.columns.filter(column => ids.has(column.id)).map(column => column.label).join(', ');
+}
+
+export function responseColumns(field) {
+  if (field.type === 'page_break') return [];
+  if (!isGrid(field)) return [{ key: field.id, field: field.id, label: field.label || field.id }];
+  return field.grid.rows.map(row => ({ key: `${field.id}:${row.id}`, field: field.id, row: row.id, label: `${field.label} · ${row.label}` }));
+}
+
+export function responseColumnText(fields, column, answers) {
+  const field = fields.find(item => item.id === column.field);
+  if (!field) return '';
+  return column.row === undefined ? answerText(field, answers[field.id]) : gridRowText(field, column.row, answers[field.id]);
+}
+
+function gridAnswer(field, value) {
+  const { rows, columns } = field.grid;
+  if (value == null || value === '') value = {};
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(id => !rows.some(row => row.id === id))) return { error: 'Choose from the rows in this grid.' };
+  const answers = [];
+  for (const row of rows) {
+    const raw = Object.hasOwn(value, row.id) ? value[row.id] : undefined;
+    if (raw != null && raw !== '' && (field.type === 'multiple_grid' ? !Array.isArray(raw) || raw.length > GRID_LIMITS.columns : typeof raw !== 'string')) return { error: `Check the choices for “${row.label}”.` };
+    const selected = new Set(Array.isArray(raw) ? raw : raw ? [raw] : []);
+    const ids = columns.filter(item => selected.has(item.id)).map(item => item.id);
+    if (ids.length !== selected.size) return { error: `Choose from the listed options for “${row.label}”.` };
+    if (ids.length) answers.push([row.id, field.type === 'multiple_grid' ? ids : ids[0]]);
+    else if (field.required) return { error: `Choose an answer for “${row.label}”.` };
+  }
+  return { value: Object.fromEntries(answers) };
 }
 
 // Replaces {{field_id}} with the plain-text answer. Callers must escape the result for HTML.
@@ -502,9 +560,20 @@ export function answerRuleLimit(type) {
   return ['short_text', 'long_text'].includes(type) ? LIMITS[type] : type === 'multiple_choice' ? 50 : 0;
 }
 
+function validDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + 'T00:00:00Z');
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 function answerRuleError(field, value) {
   const rule = field.answer_rule;
   if (!rule) return null;
+  if (field.type === 'date') {
+    if (rule.min && value < rule.min) return rule.message || `Choose ${rule.min} or a later date.`;
+    if (rule.max && value > rule.max) return rule.message || `Choose ${rule.max} or an earlier date.`;
+    return null;
+  }
   const unit = field.type === 'multiple_choice' ? 'options' : 'characters';
   if (rule.min != null && value.length < rule.min) return rule.message || `Use at least ${rule.min} ${unit}.`;
   if (rule.max != null && value.length > rule.max) return rule.message || `Use no more than ${rule.max} ${unit}.`;
@@ -512,6 +581,15 @@ function answerRuleError(field, value) {
 }
 
 export function checkAnswer(field, raw, { applyRule = true } = {}) {
+  if (isGrid(field)) return gridAnswer(field, raw);
+  if (field.type === 'file_upload') {
+    const value = raw == null || raw === '' ? [] : raw;
+    if (!Array.isArray(value) || value.length > 2 || value.some(file => !file || typeof file !== 'object' ||
+      typeof file.id !== 'string' || !/^[a-f0-9]{32}$/.test(file.id) || typeof file.name !== 'string' || !file.name.trim() || file.name.length > 120) ||
+      new Set(value.map(file => file.id)).size !== value.length) return { error: 'Upload up to two files.' };
+    if (field.required && !value.length) return { error: 'Upload a file before continuing.' };
+    return { value: value.map(({ id, name }) => ({ id, name })) };
+  }
   let value = raw;
   if (field.type === 'multiple_choice') {
     if (value == null || value === '') value = [];
@@ -529,9 +607,23 @@ export function checkAnswer(field, raw, { applyRule = true } = {}) {
   if (field.type === 'email' && !EMAIL.test(value)) return { error: 'Enter a valid email address, like name@example.com.' };
   if (field.type === 'phone' && !/^\+?[0-9][0-9 ().-]{5,25}$/.test(value)) return { error: 'Enter a phone number with country code, like +91 98765 43210.' };
   if (field.type === 'single_choice' && !field.options.some(option => option.id === value)) return { error: 'Choose from the listed options.' };
-  if (field.type === 'date') {
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(value + 'T00:00:00Z');
-    if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return { error: 'Enter a date as YYYY-MM-DD.' };
+  if (field.type === 'date' && !validDate(value)) return { error: 'Enter a date as YYYY-MM-DD.' };
+  if (field.type === 'time' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) return { error: 'Enter a time as HH:MM, like 14:30.' };
+  if (field.type === 'number') {
+    const plain = value.replace(/,/g, '');
+    if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(plain)) return { error: 'Enter a number, like 42 or 3.5.' };
+    const number = Number(plain);
+    const { min, max, integer } = field.number || {};
+    if (!Number.isFinite(number) || Math.abs(number) > NUMBER_LIMIT) return { error: 'Enter a smaller number.' };
+    if (integer && !Number.isInteger(number)) return { error: 'Enter a whole number.' };
+    if (min != null && number < min) return { error: field.number.message || `Enter ${min} or more.` };
+    if (max != null && number > max) return { error: field.number.message || `Enter ${max} or less.` };
+    value = String(number);
+  }
+  if (field.type === 'scale') {
+    const { min, max } = scaleOf(field);
+    if (!/^\d{1,2}$/.test(value) || Number(value) < min || Number(value) > max) return { error: `Choose a number from ${min} to ${max}.` };
+    value = String(Number(value));
   }
   if (field.type === 'email') value = value.toLowerCase();
   const ruleError = applyRule && answerRuleError(field, value);
@@ -573,6 +665,7 @@ function conditionProblem(condition, available, name, definition) {
   if (!asked) return `${name} must use this question or an earlier one.`;
   if (!CONDITION_OPS[condition.op]) return `${name} has an unsupported rule.`;
   if (VALUE_OPS.includes(condition.op)) {
+    if (isGrid(asked) || asked.type === 'file_upload') return `${name} can only check whether this question is answered.`;
     if (typeof condition.value !== 'string' || condition.value.length > 300) return `${name} needs a value.`;
     if (asked.type.endsWith('_choice') && !asked.options?.some(option => option.id === condition.value)) return `${name} must use one of the options of "${asked.label}".`;
   }
@@ -734,9 +827,26 @@ export function definitionProblems(definition) {
   const problems = [];
   if (!definition || typeof definition !== 'object') return ['Form definition is missing.'];
   if (definition.mode != null && !['universal', 'lead_qualification', 'knowledge_quiz', 'match_quiz'].includes(definition.mode)) problems.push('Choose Universal, Lead qualification, Knowledge quiz or Match quiz mode.');
+  if (definition.lead_scoring != null) {
+    const rule = definition.lead_scoring;
+    if (definition.mode !== 'lead_qualification' || !rule || typeof rule !== 'object' || Array.isArray(rule)
+        || !Number.isInteger(rule.warm) || !Number.isInteger(rule.hot) || rule.warm < 0 || rule.hot <= rule.warm || rule.hot > 10000) {
+      problems.push('Lead scoring needs Lead qualification mode and whole-number thresholds: Warm at least 0, Hot greater than Warm and no more than 10,000.');
+    }
+  }
   if (typeof definition.title !== 'string' || !definition.title.trim() || definition.title.length > 150) problems.push('Give the form a title of up to 150 characters.');
   if (typeof (definition.description ?? '') !== 'string' || (definition.description ?? '').length > DESCRIPTION_LIMITS.form) problems.push(`Keep the form description to ${count(DESCRIPTION_LIMITS.form)} characters or fewer.`);
   if (!['classic', 'conversational'].includes(definition.presentation)) problems.push('Choose classic or conversational presentation.');
+  if (definition.responses != null) {
+    if (definition.responses.allow_edit != null && typeof definition.responses.allow_edit !== 'boolean') problems.push('Response editing must be on or off.');
+    const { limit, open_at: openAt, close_at: closeAt, closed_message: message } = definition.responses;
+    const validTime = value => value == null || (Number.isInteger(value) && value >= 0 && value <= 8640000000000000);
+    if (typeof definition.responses !== 'object' || (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 1000000))
+        || !validTime(openAt) || !validTime(closeAt) || (openAt != null && closeAt != null && closeAt <= openAt)
+        || (message != null && (typeof message !== 'string' || message.length > CLOSED_MESSAGE_LIMIT))) {
+      problems.push('Response limits need a whole number of responses, a closing time after the opening time and a short closed message.');
+    }
+  }
   if (!Array.isArray(definition.fields) || definition.fields.length > 100) return [...problems, 'A form can have up to 100 items.'];
   const seen = new Map();
   definition.fields.forEach((field, index) => {
@@ -751,17 +861,42 @@ export function definitionProblems(definition) {
       if (typeof field.help !== 'string' || field.help.length > limit) problems.push(`${name} ${field.type === 'page_break' ? 'page description' : 'description'} must be ${count(limit)} characters or fewer.`);
     }
     if (field.required != null && typeof field.required !== 'boolean') problems.push(`${name} required must be true or false.`);
+    if (isGrid(field) || field.grid != null) {
+      const validItems = (items, max) => Array.isArray(items) && items.length > 0 && items.length <= max && new Set(items.map(item => item?.id)).size === items.length && items.every(item =>
+        typeof item?.id === 'string' && /^[a-z0-9_]{1,40}$/.test(item.id) && typeof item.label === 'string' && item.label.trim() && item.label.length <= GRID_LIMITS.label);
+      if (!isGrid(field) || !validItems(field.grid?.rows, GRID_LIMITS.rows) || !validItems(field.grid?.columns, GRID_LIMITS.columns)) problems.push(`${name} needs a grid with unique rows and columns and a label for each.`);
+    }
     if (field.answer_rule != null) {
       const { min, max, message } = field.answer_rule;
       const limit = answerRuleLimit(field.type);
-      const validBound = bound => bound == null || (Number.isInteger(bound) && bound >= 1 && bound <= limit);
-      if (!limit || (min == null && max == null) || !validBound(min) || !validBound(max) || (min != null && max != null && min > max)
+      const date = field.type === 'date';
+      const validBound = bound => bound == null || (date ? validDate(bound) : Number.isInteger(bound) && bound >= 1 && bound <= limit);
+      if ((!date && !limit) || (min == null && max == null) || !validBound(min) || !validBound(max) || (min != null && max != null && min > max)
           || (field.type === 'multiple_choice' && min > (field.options?.length ?? 0))) {
         problems.push(`${name} needs valid minimum and maximum answer limits.`);
       }
       if (message != null && (typeof message !== 'string' || message.length > 200)) problems.push(`${name} needs an error message of up to 200 characters.`);
     }
     problems.push(...mediaProblems(field, name));
+    if (field.number != null) {
+      const { min, max, integer, message } = field.number;
+      const bound = value => value == null || (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= NUMBER_LIMIT);
+      if (field.type !== 'number' || typeof field.number !== 'object' || !bound(min) || !bound(max) || (min != null && max != null && min > max)
+          || (integer != null && typeof integer !== 'boolean') || (message != null && (typeof message !== 'string' || message.length > 200))) problems.push(`${name} needs valid number limits.`);
+    }
+    if (field.type === 'scale' || field.scale != null) {
+      const scale = field.scale ?? {};
+      const label = value => value == null || (typeof value === 'string' && value.length <= SCALE_LIMITS.label);
+      if (field.type !== 'scale' || typeof scale !== 'object' || ![undefined, ...SCALE_LIMITS.min].includes(scale.min)
+          || !(scale.max === undefined || (Number.isInteger(scale.max) && scale.max >= SCALE_LIMITS.max[0] && scale.max <= SCALE_LIMITS.max[1])) || !label(scale.min_label) || !label(scale.max_label)) {
+        problems.push(`${name} needs a scale from 0 or 1 up to 2–10, with labels of up to ${SCALE_LIMITS.label} characters.`);
+      }
+    }
+    if (field.display != null && !(field.type === 'single_choice' && field.display === 'dropdown')) problems.push(`${name} can be shown as a dropdown only when it is a single choice.`);
+    if (field.feedback != null) {
+      const text = value => value == null || (typeof value === 'string' && value.length <= FEEDBACK_LIMIT);
+      if (typeof field.feedback !== 'object' || !field.type?.endsWith('_choice') || !text(field.feedback.correct) || !text(field.feedback.incorrect)) problems.push(`${name} quiz feedback must be text of up to ${FEEDBACK_LIMIT} characters on a choice question.`);
+    }
     if (field.type?.endsWith('_choice')) {
       if (!Array.isArray(field.options) || field.options.length < 1 || field.options.length > 50) problems.push(`${name} needs 1–50 options.`);
       else {
@@ -771,6 +906,7 @@ export function definitionProblems(definition) {
           if (typeof option?.label !== 'string' || !option.label.trim() || option.label.length > 200) problems.push(`${name} options need labels up to 200 characters.`);
           if (option?.correct != null && typeof option.correct !== 'boolean') problems.push(`${name} correct-answer settings must be true or false.`);
           if (option?.points != null && (!Number.isInteger(option.points) || option.points < 0 || option.points > 100)) problems.push(`${name} option points must be a whole number from 0 to 100.`);
+          if (option?.lead_points != null && (!Number.isInteger(option.lead_points) || option.lead_points < 0 || option.lead_points > 100)) problems.push(`${name} lead points must be a whole number from 0 to 100.`);
           ids.add(option?.id);
         }
       }
@@ -780,7 +916,8 @@ export function definitionProblems(definition) {
       const source = seen.get(condition.field);
       if (!source) problems.push(`${name} logic must refer to an earlier question.`);
       if (!CONDITION_OPS[condition.op]) problems.push(`${name} logic has an unsupported rule.`);
-      if (['equals', 'not_equals', 'contains'].includes(condition.op) && (typeof condition.value !== 'string' || condition.value.length > 300)) problems.push(`${name} logic needs a value.`);
+      if ((isGrid(source) || source?.type === 'file_upload') && VALUE_OPS.includes(condition.op)) problems.push(`${name} logic can only check whether a grid is answered.`);
+      if (VALUE_OPS.includes(condition.op) && (typeof condition.value !== 'string' || condition.value.length > 300)) problems.push(`${name} logic needs a value.`);
       if (source?.type?.endsWith('_choice') && ['equals', 'not_equals', 'contains'].includes(condition.op) && !source.options?.some(option => option.id === condition.value)) problems.push(`${name} logic must use one of the options of "${source.label}".`);
     }
     if (typeof field.id === 'string') seen.set(field.id, field);
@@ -790,10 +927,75 @@ export function definitionProblems(definition) {
   problems.push(...choiceRuleShapeProblems(definition));
   problems.push(...urlParamProblems(definition));
   if (definition.theme != null) problems.push(...(typeof definition.theme === 'object' && !Array.isArray(definition.theme) ? themeProblems(definition.theme, { typographyOnly: true }) : ['Theme is invalid.']));
+  problems.push(...paymentProblems(definition));
+  problems.push(...receiptProblems(definition, seen));
   return problems;
 }
 
+// ---- Payments and receipts (docs/FORMS.md, "Payments" and "WhatsApp receipts") ----------------
+
+/** Bounds of a form payment: a fixed INR amount in paise, collected within a window after submitting. */
+export const PAYMENT_LIMITS = { min: 100, max: 50000000, description: 120, windowHours: { min: 1, max: 72, default: 24 } };
+
+/** A fixed payment collected after the response is saved. Part of the immutable published version. */
+export function paymentProblems(definition) {
+  const payment = definition.payment;
+  if (payment == null) return [];
+  const problems = [];
+  if (typeof payment !== 'object' || Array.isArray(payment)) return ['Payment settings are invalid.'];
+  if (!Number.isSafeInteger(payment.amount_cents) || payment.amount_cents < PAYMENT_LIMITS.min || payment.amount_cents > PAYMENT_LIMITS.max) problems.push('Set a payment amount from ₹1 to ₹5,00,000.');
+  if (payment.currency !== 'INR') problems.push('Form payments are collected in Indian rupees (INR).');
+  if (payment.description != null && (typeof payment.description !== 'string' || payment.description.length > PAYMENT_LIMITS.description)) problems.push(`Keep the payment description to ${PAYMENT_LIMITS.description} characters or fewer.`);
+  const window = payment.window_hours ?? PAYMENT_LIMITS.windowHours.default;
+  if (!Number.isInteger(window) || window < PAYMENT_LIMITS.windowHours.min || window > PAYMENT_LIMITS.windowHours.max) problems.push('Allow from 1 to 72 hours to complete payment.');
+  if (definition.responses?.allow_edit) problems.push('Paid forms cannot let respondents edit their answers after submitting. Turn off response editing or remove the payment.');
+  return problems;
+}
+
+/** Shown to respondents before they submit, e.g. "₹499.00". */
+export const paymentAmountText = amountCents => '₹' + (amountCents / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** Fixed wording of the respondent's WhatsApp opt-in; stored with each consent record. */
+export const WHATSAPP_RECEIPT_CONSENT = 'Send my response receipt to this number on WhatsApp. I can stop these messages at any time.';
+
+/** A WhatsApp receipt names the phone question it is sent to; the respondent must also opt in. */
+export function receiptProblems(definition, fields = new Map((definition.fields || []).map(field => [field?.id, field]))) {
+  const receipts = definition.receipts;
+  if (receipts == null) return [];
+  if (typeof receipts !== 'object' || Array.isArray(receipts) || Object.keys(receipts).some(key => key !== 'whatsapp')) return ['Receipt settings are invalid.'];
+  const whatsapp = receipts.whatsapp;
+  if (whatsapp == null) return [];
+  if (typeof whatsapp !== 'object' || Array.isArray(whatsapp) || Object.keys(whatsapp).some(key => key !== 'phone_field')) return ['WhatsApp receipt settings are invalid.'];
+  const field = fields.get(whatsapp.phone_field);
+  if (!field || field.type !== 'phone') return ['Choose the phone question that WhatsApp receipts are sent to.'];
+  return [];
+}
+
+/** E.164 form of a submitted phone answer, or null. Spaces, dots, dashes and brackets are ignored; a country code is required. */
+export function e164Phone(value) {
+  if (typeof value !== 'string') return null;
+  const compact = value.trim().replace(/[\s().-]/g, '');
+  const normalized = compact.startsWith('00') ? '+' + compact.slice(2) : compact;
+  return /^\+[1-9][0-9]{7,14}$/.test(normalized) ? normalized : null;
+}
+
 /** Score knowledge answers against the exact published definition; no client-supplied score is trusted. */
+/** Private, deterministic qualification score, calculated from the answered published version. */
+export function leadScore(definition, answers = {}) {
+  if (definition?.mode !== 'lead_qualification' || !definition.lead_scoring) return null;
+  const reasons = [];
+  for (const field of definition.fields || []) {
+    if (!field.type?.endsWith('_choice')) continue;
+    const selected = new Set(Array.isArray(answers[field.id]) ? answers[field.id] : [answers[field.id]]);
+    for (const option of field.options || []) if (selected.has(option.id) && option.lead_points > 0) {
+      reasons.push({ field: field.id, question: field.label, answer: option.label, points: option.lead_points });
+    }
+  }
+  const score = reasons.reduce((sum, reason) => sum + reason.points, 0);
+  const { warm, hot } = definition.lead_scoring;
+  return { score, band: score >= hot ? 'Hot' : score >= warm ? 'Warm' : 'Cold', reasons };
+}
+
 export function formScore(definition, answers = {}) {
   if (definition?.mode !== 'knowledge_quiz') return null;
   let total = 0;
@@ -807,6 +1009,36 @@ export function formScore(definition, answers = {}) {
     if (actual.length === expected.length && expected.every(id => actual.includes(id))) correct += 1;
   }
   return total ? { correct, total } : null;
+}
+
+/**
+ * Per-question quiz results for a knowledge quiz, shown after submitting: whether each graded answer
+ * was right and the author's feedback. The answer key itself is not included.
+ */
+export function quizFeedback(definition, answers = {}) {
+  if (definition?.mode !== 'knowledge_quiz') return [];
+  const out = [];
+  for (const field of definition.fields || []) {
+    if (!field.type?.endsWith('_choice')) continue;
+    const expected = (field.options || []).filter(option => option.correct === true).map(option => option.id);
+    if (!expected.length) continue;
+    const actual = Array.isArray(answers[field.id]) ? answers[field.id] : answers[field.id] ? [answers[field.id]] : [];
+    const correct = actual.length === expected.length && expected.every(id => actual.includes(id));
+    const feedback = (correct ? field.feedback?.correct : field.feedback?.incorrect) || '';
+    out.push({ id: field.id, label: field.label, correct, ...(feedback ? { feedback } : {}) });
+  }
+  return out;
+}
+
+/** Whether the form's response settings close it now: { closed, reason, message }. */
+export function responseWindow(definition, { now, count }) {
+  const settings = definition?.responses;
+  if (!settings) return { closed: false };
+  const message = settings.closed_message || '';
+  if (settings.open_at != null && now < settings.open_at) return { closed: true, reason: 'not_open_yet', message };
+  if (settings.close_at != null && now >= settings.close_at) return { closed: true, reason: 'closed_at', message };
+  if (settings.limit != null && count >= settings.limit) return { closed: true, reason: 'limit', message };
+  return { closed: false };
 }
 
 export function starterDefinition(title = 'Untitled form') {

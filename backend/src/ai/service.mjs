@@ -21,7 +21,7 @@ export function createAnthropic(config) {
   return config.anthropicApiKey && Anthropic ? new Anthropic({ apiKey: config.anthropicApiKey }) : null;
 }
 
-async function claude(app, params) {
+export async function claude(app, params) {
   if (!app.anthropic) fail(503, 'ai_not_configured', 'AI features need ANTHROPIC_API_KEY on the server.');
   const model = app.config.aiModel;
   const request = { model, ...params };

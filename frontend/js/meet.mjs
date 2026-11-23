@@ -139,11 +139,11 @@ async function meetingsTab(ctx, panel) {
         ${booking.status === 'canceled' ? html`<p class="muted">${booking.rescheduled_to ? 'Rescheduled.' : `Canceled by the ${booking.canceled_by}.`}${booking.cancel_reason ? ' Reason: ' + booking.cancel_reason : ''}</p>` : ''}
         <div id="prep-${booking.id}"></div>
       </div>
-      <div class="booking-row-side"><div class="row booking-status">${badge(booking.status, sentence(booking.status))}${booking.payment_status !== 'none' ? badge(booking.payment_status === 'paid' ? 'active' : 'pending', 'Payment ' + booking.payment_status) : ''}${booking.email ? badge(booking.email.status, 'Email ' + booking.email.status) : ''}</div>
+      <div class="booking-row-side"><div class="row booking-status">${badge(booking.status, sentence(booking.status))}${booking.attendance ? badge(booking.attendance === 'no_show' ? 'failed' : 'active', booking.attendance === 'no_show' ? 'No-show' : 'Attended') : ''}${booking.payment_status !== 'none' ? badge(booking.payment_status === 'paid' ? 'active' : 'pending', 'Payment ' + booking.payment_status) : ''}${booking.email ? badge(booking.email.status, 'Email ' + booking.email.status) : ''}</div>
         <div class="row booking-actions">${booking.video_room_url && scope === 'upcoming' ? html`<a class="btn btn-small btn-primary" href="${booking.video_room_url}" data-external>Join video</a>` : ''}
         ${scope === 'upcoming' ? html`<button class="btn btn-small" data-prep="${booking.id}" aria-label="Prepare for ${booking.event_title} with ${booking.invitee_name}">Prepare</button>` : ''}
         ${booking.contact_id ? html`<a class="btn btn-small" href="/meet/contacts/${booking.contact_id}" aria-label="Contact ${booking.invitee_name}">Contact</a>` : ''}
-        ${scope === 'upcoming' ? html`<button class="btn btn-small btn-quiet" data-cancel="${booking.id}" aria-label="Cancel ${booking.event_title} with ${booking.invitee_name}">Cancel</button>` : ''}</div></div></div></li>`)}</ul>`
+        ${scope === 'past' ? html`<button class="btn btn-small" data-attendance="${booking.id}" data-current-attendance="${booking.attendance || ''}">${booking.attendance ? 'Update attendance' : 'Record attendance'}</button>` : ''}${scope === 'upcoming' ? html`<button class="btn btn-small btn-quiet" data-cancel="${booking.id}" aria-label="Cancel ${booking.event_title} with ${booking.invitee_name}">Cancel</button>` : ''}</div></div></div></li>`)}</ul>`
       : html`<div class="empty section-gap">${{ upcoming: 'No upcoming meetings yet. Share a booking link to get started.', past: 'No past meetings.', canceled: 'No canceled meetings.' }[scope]}</div>`}`);
 
   $('#book-for').onclick = () => bookForPanel(ctx, types.filter(type => !type.managed_template));
@@ -155,6 +155,13 @@ async function meetingsTab(ctx, panel) {
     if ($('#bf-name')) { $('#bf-name').value = pending.name || ''; $('#bf-email').value = pending.email || ''; $('#bf-start').focus(); }
   }
   $$('[data-prep]', panel).forEach(button => button.onclick = () => showPrep(button.dataset.prep));
+  $$('[data-attendance]', panel).forEach(button => button.onclick = async () => {
+    const input = await ask({ title: 'Meeting attendance', fields: html`<label for="attendance-status">Attendance</label><select id="attendance-status" name="status"><option value="">Not recorded</option><option value="attended" ${button.dataset.currentAttendance === 'attended' ? raw('selected') : ''}>Attended</option><option value="no_show" ${button.dataset.currentAttendance === 'no_show' ? raw('selected') : ''}>No-show</option></select><label><input type="checkbox" name="notify"> When marking no-show, send the invitee an email with a rebooking link</label><p class="hint">Clearing attendance cancels a recovery email that has not been sent. An email already sent cannot be recalled.</p>`, confirm: 'Save attendance' });
+    if (!input || !ctx.alive()) return;
+    try { await api('POST', wsPath(`/bookings/${button.dataset.attendance}/attendance`), { status: input.status || null, notify: Boolean(input.notify) }); toast('Attendance saved.'); ctx.render(); }
+    catch (error) { toast(error.message); }
+  });
+
   $$('[data-cancel]', panel).forEach(button => button.onclick = async () => {
     const result = await ask({ title: 'Cancel this meeting?', body: 'The invitee will receive a cancellation email.', fields: html`<label for="cancel-reason">Reason (optional, shared with the invitee)</label><textarea id="cancel-reason" name="reason" maxlength="500"></textarea>
       <label class="check"><input type="checkbox" name="whole_meeting"> Cancel for every attendee (group events)</label>`, confirm: 'Cancel meeting', danger: true });
@@ -210,8 +217,8 @@ async function emailsTab(ctx, panel) {
     ${isAdmin() ? html`<form id="delivery-test"><h2>Send a test email</h2><p>Send one to an inbox you can check. You can send another test to the same inbox after an hour.</p><label for="delivery-target">Send to</label><select id="delivery-target" name="target"><option value="account">My Schedora account email</option><option value="google">My connected Google email</option></select><div data-form-status tabindex="-1"></div><button class="btn btn-small" type="submit">Send test email</button></form>` : ''}
     <h2 class="meet-delivery-heading">Recent messages</h2>
     ${emails.length ? html`<div class="table-wrap"><table><thead><tr><th>Sent</th><th>Type</th><th>To</th><th>Subject</th><th>Status</th></tr></thead><tbody>
-    ${emails.map(email => html`<tr><td>${fmtDateTime(email.created_at)}</td><td>${email.channel === 'sms' ? 'SMS · ' : ''}${email.kind.replace(/_/g, ' ')}</td><td>${email.to_address}</td><td>${email.subject || '—'}</td>
-      <td>${badge(email.status)}${email.status === 'scheduled' ? html`<div class="muted">${fmtDateTime(email.next_attempt_at)}</div>` : ''}${email.status === 'sent' && email.channel === 'email' ? html`<div class="muted">${email.accepted_transport ? deliveryEvidence({ status: email.status, transport: email.accepted_transport, report: email.delivery_status }).text : 'Sent before the sending method was recorded; delivery is unknown.'}</div>` : ''}${email.last_error ? html`<div class="muted">${email.last_error}</div>` : ''}</td></tr>`)}
+    ${emails.map(email => html`<tr><td>${fmtDateTime(email.created_at)}</td><td>${email.channel === 'whatsapp' ? 'WhatsApp · ' : email.channel === 'sms' ? 'SMS · ' : ''}${email.kind.replace(/_/g, ' ')}</td><td>${email.to_address}</td><td>${email.subject || '—'}</td>
+      <td>${badge(email.status)}${email.status === 'scheduled' ? html`<div class="muted">${fmtDateTime(email.next_attempt_at)}</div>` : ''}${email.status === 'sent' && email.channel === 'email' ? html`<div class="muted">${email.accepted_transport ? deliveryEvidence({ status: email.status, transport: email.accepted_transport, report: email.delivery_status }).text : 'Sent before the sending method was recorded; delivery is unknown.'}</div>` : ''}${email.status === 'sent' && ['sms','whatsapp'].includes(email.channel) ? html`<div class="muted">${email.accepted_transport === 'twilio' ? (email.delivery_status ? 'Provider report: ' + email.delivery_status : 'Accepted by Twilio; delivery not confirmed.') : 'Recorded locally; not delivered.'}</div>` : ''}${email.last_error ? html`<div class="muted">${email.last_error}</div>` : ''}</td></tr>`)}
     </tbody></table></div>` : html`<div class="empty">No messages yet.</div>`}`);
   if ($('#delivery-test', panel)) handleSubmit($('#delivery-test', panel), async data => {
     const result = await api('POST', wsPath('/emails/test'), { target: data.target });
@@ -341,7 +348,7 @@ export async function editor(ctx) {
       </div></section>
       <div data-form-status tabindex="-1"></div>
       <div class="actions"><button class="btn btn-primary" type="submit">${isNew ? 'Save booking link' : 'Save changes'}</button>
-        ${isNew ? '' : html`<button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
+        ${isNew ? '' : html`<a class="btn" href="/flow?event_type=${ctx.params[0]}">Automations in Flow</a><button class="btn btn-danger" type="button" id="delete-type">Delete</button>`}</div>
     </form></div>`);
 
   const form = $('#event-form');
@@ -719,6 +726,7 @@ export async function booking(ctx) {
         <input id="email" name="email" type="email" required maxlength="254" autocomplete="email" aria-describedby="email-hint" value="${prefill.email}">
         ${multiple ? html`<fieldset><legend class="label">Where should we meet?</legend><div class="choice-list">${event.locations.map((location, index) => html`<label class="check"><input type="radio" name="location_index" value="${index}" ${index === 0 ? raw('checked') : ''}> ${location.label}${location.auto_video || location.needs_phone ? '' : ': ' + location.display}</label>`)}</div></fieldset>` : ''}
         <div id="phone-field"></div>
+        ${boot.providers?.whatsapp === 'twilio' ? html`<label class="check"><input type="checkbox" name="whatsapp_consent"> Send booking confirmations and reminders to my number on WhatsApp (optional).</label><p class="hint">Use a number with country code. You can book without choosing WhatsApp.</p>` : ''}
         <div id="questions">${event.questions.map(question => html`<div class="question" data-field="${question.id}">${inputFor(question, prefill.answers[question.id], question.label)}</div>`)}</div>
         <label for="notes">Anything to share before the meeting?</label><textarea id="notes" name="notes" maxlength="1000"></textarea>
         <label for="guests">Add guests (optional)</label><span class="hint" id="guests-hint">Email addresses separated by commas. They receive the invitation too.</span><input id="guests" name="guests" aria-describedby="guests-hint" autocomplete="off">
@@ -731,7 +739,8 @@ export async function booking(ctx) {
     const updatePhone = () => {
       const index = multiple ? Number(form.querySelector('[name="location_index"]:checked')?.value ?? 0) : 0;
       const needsPhone = event.locations[index]?.needs_phone;
-      mount($('#phone-field'), needsPhone ? html`<label for="phone">Phone number for the call <span class="required-mark" aria-hidden="true">*</span></label><input id="phone" name="phone" type="tel" required maxlength="30" autocomplete="tel" placeholder="+91 98765 43210">` : '');
+      const optionalWhatsapp = boot.providers?.whatsapp === 'twilio';
+      mount($('#phone-field'), needsPhone || optionalWhatsapp ? html`<label for="phone">Phone number ${needsPhone ? 'for the call' : '(optional, for WhatsApp)'}</label><input id="phone" name="phone" type="tel" ${needsPhone ? raw('required') : ''} maxlength="30" autocomplete="tel" placeholder="+91 98765 43210">` : '');
     };
     updatePhone();
     form.addEventListener('change', event => { if (event.target.name === 'location_index') updatePhone(); });
@@ -753,6 +762,7 @@ export async function booking(ctx) {
         const body = { name: data.name, email: data.email, notes: data.notes, start: slot, timezone: state.timezone, answers, guests, website: data.website };
         if (multiple) body.location_index = Number(data.location_index);
         if (data.phone) body.phone = data.phone;
+        if (data.whatsapp_consent) body.whatsapp_consent = true;
         if (handoff) body.handoff = handoff;
         const result = await api('POST', base + '/bookings', body, { 'Idempotency-Key': state.key });
         if (result.checkout?.url) { location.href = result.checkout.url; return; }
@@ -850,12 +860,14 @@ export async function manage(ctx) {
     ${booking.status === 'canceled' && booking.payment?.status === 'paid' ? notice('warn', html`<p>A payment was received for this canceled appointment. Contact the host to review your refund. This time has not been rebooked.</p>`) : ''}
     ${status}
     ${booking.status === 'confirmed' && !data.expired ? joinBlock(booking, zone) : ''}
+    ${booking.whatsapp_reminders ? html`<p><button class="btn btn-small" id="whatsapp-optout">Stop WhatsApp reminders for this booking</button></p>` : ''}
     ${data.can_change ? html`<div class="actions" id="manage-actions"><button class="btn btn-primary" id="reschedule">Reschedule</button><button class="btn btn-danger" id="cancel">Cancel appointment</button>
       <a class="btn" href="/api/public/bookings/${token}/ics" download>Add to calendar</a></div><div id="reschedule-panel"></div>` : ''}
   </div></div>`);
   $('#pay-now')?.addEventListener('click', async () => {
     try { location.href = (await api('POST', `/api/public/bookings/${token}/checkout`)).url; } catch (error) { toast(error.message); }
   });
+  $('#whatsapp-optout')?.addEventListener('click',async()=>{try{await api('POST',`/api/public/bookings/${token}/whatsapp-optout`);toast('Future WhatsApp reminders for this booking are stopped. A message already sent cannot be recalled.');ctx.render();}catch(error){toast(error.message);}});
   if (!data.can_change) return;
 
   $('#cancel').onclick = async () => {

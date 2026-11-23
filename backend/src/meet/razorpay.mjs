@@ -3,6 +3,7 @@ import { fail } from '../http.mjs';
 import { text } from '../validate.mjs';
 import { encryptJson, decryptJson } from '../platform/crypto.mjs';
 import { confirmPayment, expireHolds } from './bookings.mjs';
+import { formPaymentWebhook, hasPendingFormPayments } from '../forms/payments.mjs';
 
 export function razorpayCredentials(app, workspaceId) {
   const row = app.db.get("SELECT credentials FROM integrations WHERE workspace_id = ? AND user_id IS NULL AND provider = 'razorpay' AND status = 'active'", workspaceId);
@@ -14,7 +15,7 @@ export function razorpayFeePolicy(app, workspaceId) {
   return config ? { provider: 'razorpay', customer_pays_processing: Boolean(config.customer_pays_processing), schedora_fee_cents: 0 } : null;
 }
 
-async function request(app, credentials, path, body) {
+export async function razorpayRequest(app, credentials, path, body) {
   const response = await app.fetchProvider('https://api.razorpay.com/v1/' + path, {
     method: body ? 'POST' : 'GET', signal: AbortSignal.timeout(15000),
     headers: { Authorization: 'Basic ' + Buffer.from(credentials.key_id + ':' + credentials.key_secret).toString('base64'), 'Content-Type': 'application/json' },
@@ -33,8 +34,9 @@ export async function connectRazorpay(app, workspaceId, body) {
   if (app.config.production && !app.config.allowTestPayments && key_id.startsWith('rzp_test_')) fail(400, 'validation_failed', 'Test keys are disabled on this server.');
   if (app.db.get("SELECT 1 FROM integrations WHERE workspace_id = ? AND provider = 'stripe' AND status = 'active'", workspaceId)) fail(409, 'payment_provider_connected', 'Disconnect Stripe before switching to Razorpay.');
   if (app.db.get("SELECT 1 FROM bookings WHERE workspace_id = ? AND status = 'pending' AND payment_ref LIKE 'razorpay:%'", workspaceId)) fail(409, 'payments_pending', 'Wait for pending payments before replacing Razorpay credentials.');
+  if (hasPendingFormPayments(app, workspaceId)) fail(409, 'payments_pending', 'Wait for pending form payments to be confirmed or expire before replacing Razorpay credentials.');
   const credentials = { key_id, key_secret, webhook_secret, customer_pays_processing: body.customer_pays_processing === true };
-  await request(app, credentials, 'payment_links?count=1');
+  await razorpayRequest(app, credentials, 'payment_links?count=1');
   const now = app.now();
   app.db.transaction(() => {
     app.db.run("DELETE FROM integrations WHERE workspace_id = ? AND user_id IS NULL AND provider = 'razorpay'", workspaceId);
@@ -54,15 +56,15 @@ export function createRazorpay(app) {
     if (booking.hold_expires_at <= app.now()) fail(409, 'payment_expired', 'The payment hold has expired. Choose a new time.');
     let link;
     const current = app.db.get('SELECT payment_ref FROM bookings WHERE id = ?', booking.id);
-    if (current.payment_ref?.startsWith('razorpay:')) link = await request(app, credentials, 'payment_links/' + encodeURIComponent(current.payment_ref.slice(9)));
+    if (current.payment_ref?.startsWith('razorpay:')) link = await razorpayRequest(app, credentials, 'payment_links/' + encodeURIComponent(current.payment_ref.slice(9)));
     else {
       // reference_id is unique at Razorpay. Recover an interrupted creation before issuing another.
-      const found = await request(app, credentials, 'payment_links?reference_id=' + encodeURIComponent(booking.id));
+      const found = await razorpayRequest(app, credentials, 'payment_links?reference_id=' + encodeURIComponent(booking.id));
       link = found.payment_links?.find(item => item.reference_id === booking.id);
       if (!link) {
         if (booking.hold_expires_at - app.now() < 16 * 60000) fail(409, 'payment_expired', 'Too little time remains to create a new Razorpay checkout. Choose a new appointment after this hold expires.');
         try {
-          link = await request(app, credentials, 'payment_links', {
+          link = await razorpayRequest(app, credentials, 'payment_links', {
             amount: booking.amount_cents, currency: 'INR', accept_partial: false,
             reference_id: booking.id, expire_by: Math.floor(booking.hold_expires_at / 1000),
             description: `${eventType.title} (${booking.reference})`.slice(0, 200),
@@ -72,7 +74,7 @@ export function createRazorpay(app) {
             notes: { schedora_token: encryptJson(app.config, { token }) }
           });
         } catch (error) {
-          const recovered = await request(app, credentials, 'payment_links?reference_id=' + encodeURIComponent(booking.id));
+          const recovered = await razorpayRequest(app, credentials, 'payment_links?reference_id=' + encodeURIComponent(booking.id));
           link = recovered.payment_links?.find(item => item.reference_id === booking.id);
           if (!link) throw error;
         }
@@ -121,20 +123,23 @@ export function createRazorpay(app) {
     async verify(booking, token) {
       const credentials = razorpayCredentials(app, booking.workspace_id);
       if (!credentials || !booking.payment_ref?.startsWith('razorpay:')) fail(409, 'not_razorpay', 'This booking has no Razorpay checkout.');
-      const link = await request(app, credentials, 'payment_links/' + encodeURIComponent(booking.payment_ref.slice(9)));
+      const link = await razorpayRequest(app, credentials, 'payment_links/' + encodeURIComponent(booking.payment_ref.slice(9)));
       return settle(booking.workspace_id, link, token);
     },
-    async webhook(workspaceId, raw, signature) {
+    async webhook(workspaceId, raw, signature, eventId) {
       const credentials = razorpayCredentials(app, workspaceId);
       if (!credentials) fail(404, 'not_found', 'Not configured.');
       const expected = createHmac('sha256', credentials.webhook_secret).update(raw).digest();
       if (!/^[a-f0-9]{64}$/.test(signature || '') || !timingSafeEqual(expected, Buffer.from(signature, 'hex'))) fail(400, 'invalid_signature', 'Razorpay signature does not match.');
       let event;
       try { event = JSON.parse(raw); } catch { fail(400, 'invalid_payload', 'Invalid webhook JSON.'); }
+      // Form payments (forms/payments.mjs) use fp_ references; everything else keeps the booking handling below.
+      const forms = await formPaymentWebhook(app, workspaceId, credentials, event, typeof eventId === 'string' ? eventId : null);
+      if (forms != null) return forms;
       if (event.event !== 'payment_link.paid') return 'ignored';
       const entity = event.payload?.payment_link?.entity;
       if (!/^plink_[A-Za-z0-9]+$/.test(entity?.id || '')) fail(400, 'invalid_payload', 'Missing payment link.');
-      const link = await request(app, credentials, 'payment_links/' + entity.id);
+      const link = await razorpayRequest(app, credentials, 'payment_links/' + entity.id);
       return settle(workspaceId, link);
     }
   };

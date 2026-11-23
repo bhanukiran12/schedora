@@ -154,3 +154,30 @@ test('run email evidence survives provider changes, legacy records and a crash w
     assert.equal((await env.client().get(path)).status, 401);
   } finally { await env.close(); }
 });
+
+test('form workflow simulations fill answer placeholders from fictional data, never saved responses', async () => {
+  const env = await setup();
+  try {
+    const owner = env.client();
+    const { ws } = await signUp(owner, 'Simulation owner');
+    const base = '/api/workspaces/' + ws.id;
+    const created = await owner.post(base + '/forms', { definition: { title: 'QA source', presentation: 'classic', fields: [
+      { id: 'name', type: 'short_text', label: 'Name', required: true },
+      { id: 'email', type: 'email', label: 'Email' },
+      { id: 'topic', type: 'single_choice', label: 'Topic', options: [{ id: 'support', label: 'Support' }, { id: 'sales', label: 'Sales' }] }
+    ] } });
+    assert.equal(created.status, 201);
+    assert.equal((await owner.post(base + '/forms/' + created.body.id + '/publish')).status, 200);
+    assert.equal((await env.client().post('/api/public/forms/' + created.body.slug + '/responses', { answers: { name: 'Private respondent marker', email: 'private@example.com', topic: 'sales' } })).status, 201);
+    const flow = await owner.post(base + '/flows', { name: 'Simulated review', trigger_type: 'forms.response.created', trigger_source: created.body.id, action_type: 'task', action_config: { title: 'Review {{answer.name}}', details: '{{form.title}} / {{answer.email}} / {{answer.topic}}' } });
+    assert.equal(flow.status, 201);
+    const before = ['tasks', 'emails', 'flow_runs'].map(table => env.app.db.get('SELECT COUNT(*) AS n FROM ' + table).n);
+    const simulated = await owner.post(base + '/flows/' + flow.body.id + '/simulate');
+    assert.equal(simulated.status, 200);
+    assert.equal(simulated.body.title, 'Review Sample Respondent');
+    assert.equal(simulated.body.details, 'QA source / respondent@example.com / Support');
+    assert.ok(!JSON.stringify(simulated.body).includes('Private respondent marker'));
+    assert.deepEqual(['tasks', 'emails', 'flow_runs'].map(table => env.app.db.get('SELECT COUNT(*) AS n FROM ' + table).n), before);
+    assert.equal(env.sent.length, 0);
+  } finally { await env.close(); }
+});

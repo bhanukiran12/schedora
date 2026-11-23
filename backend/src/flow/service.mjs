@@ -6,6 +6,7 @@ import { entitlementsFor, consumeQuota } from '../billing/entitlements.mjs';
 import { answerText } from '../shared/forms-logic.mjs';
 import { formatInstant } from '../meet/bookings.mjs';
 import { enqueueWebhooks } from '../platform/developer.mjs';
+import { dispatchFlowEvent, retryFlowRun } from './engine.mjs';
 
 export const TRIGGERS = ['meet.booking.created', 'meet.booking.canceled', 'meet.booking.rescheduled', 'forms.response.created'];
 const MAX_ATTEMPTS = 5;
@@ -86,6 +87,8 @@ export function createFlow(app, workspaceId, body) {
 
 export function updateFlow(app, workspaceId, id, body) {
   const current = getFlow(app, workspaceId, id);
+  // Step workflows change only through the Flow builder API, which checks publishing, connections and holds.
+  if (current.action_type === 'steps') fail(409, 'use_flow_builder', 'Open this workflow in the Flow builder to change it.');
   const value = normalize(app, workspaceId, body, current);
   if (value.status === 'enabled' && current.status !== 'enabled' && !entitlementsFor(app, workspaceId).flow.active) fail(402, 'entitlement_required', 'This workspace does not have an active Flow or Suite plan.');
   app.db.run('UPDATE flows SET name = ?, trigger_type = ?, trigger_source = ?, action_type = ?, action_config = ?, status = ?, updated_at = ? WHERE id = ?',
@@ -116,11 +119,13 @@ function loadContext(app, run) {
       recipients: { invitee: row.invitee_email, host: row.host_email }, hostId: row.host_id
     };
   }
-  const row = app.db.get(`SELECT r.*, v.definition FROM responses r JOIN form_versions v ON v.form_id = r.form_id AND v.version = r.form_version
+  const row = app.db.get(`SELECT r.*, v.definition, COALESCE(e.original_answers, r.answers) AS initial_answers
+    FROM responses r JOIN form_versions v ON v.form_id = r.form_id AND v.version = r.form_version
+    LEFT JOIN form_response_edits e ON e.response_id = r.id
     WHERE r.id = ? AND r.workspace_id = ?`, run.subject_id, run.workspace_id);
   if (!row) return null;
   const definition = JSON.parse(row.definition);
-  const answers = JSON.parse(row.answers);
+  const answers = JSON.parse(row.initial_answers);
   const values = { 'form.title': definition.title, 'response.id': row.id };
   for (const field of definition.fields) if (field.type !== 'page_break') values['answer.' + field.id] = answerText(field, answers[field.id]);
   return { kind: 'response', values, answers, definition };
@@ -138,11 +143,39 @@ function recipient(config, context) {
   return context.recipients?.[config.to] || null;
 }
 
+function sampleFormValues(app, workspaceId, formId) {
+  const values = { 'form.title': 'Sample form', 'response.id': 'sample-response' };
+  if (!formId) return values;
+  const row = app.db.get(`SELECT COALESCE(v.definition, f.draft) AS definition
+    FROM forms f LEFT JOIN form_versions v ON v.form_id = f.id AND v.version = f.published_version
+    WHERE f.id = ? AND f.workspace_id = ?`, formId, workspaceId);
+  if (!row) return values;
+  const definition = JSON.parse(row.definition);
+  values['form.title'] = definition.title;
+  // Simulations read the form structure only, never an actual respondent's answers.
+  for (const field of definition.fields) {
+    if (field.type === 'page_break') continue;
+    const sample = field.type === 'email' ? 'respondent@example.com'
+      : field.type === 'phone' ? '+12025550123'
+      : field.type === 'date' ? new Date(app.now()).toISOString().slice(0, 10)
+      : field.type === 'time' ? '10:00'
+      : field.type === 'number' ? String(field.number?.min ?? 1)
+      : field.type === 'scale' ? (field.scale?.min ?? 1)
+      : field.type === 'single_choice' ? field.options[0]?.id
+      : field.type === 'multiple_choice' ? field.options.slice(0, 1).map(option => option.id)
+      : field.type.endsWith('_grid') ? Object.fromEntries(field.grid.rows.map(item => [item.id, field.type === 'single_grid' ? field.grid.columns[0]?.id : field.grid.columns.slice(0, 1).map(option => option.id)]))
+      : field.type === 'file_upload' ? [{ id: '0'.repeat(32), name: 'sample.pdf' }]
+      : field.id === 'name' ? 'Sample Respondent' : 'Sample answer';
+    values['answer.' + field.id] = answerText(field, sample);
+  }
+  return values;
+}
+
 export function simulateFlow(app, workspaceId, id) {
   const flow = getFlow(app, workspaceId, id);
   const sample = flow.trigger_type.startsWith('meet.')
     ? { 'invitee.name': 'Sample Invitee', 'invitee.email': 'invitee@example.com', 'booking.reference': 'SCH-SAMPLE', 'booking.start': 'Monday, 2 November 2026 at 10:00 (Asia/Kolkata)', 'booking.start_host': 'Monday, 2 November 2026 at 10:00 (Asia/Kolkata)', 'event.title': 'Sample event', 'event.location': 'Online', 'host.name': 'Sample Host' }
-    : { 'form.title': 'Sample form', 'response.id': 'sample-response' };
+    : sampleFormValues(app, workspaceId, flow.trigger_source);
   const config = flow.action_config;
   return flow.action_type === 'email'
     ? { simulated: true, action: 'email', to: config.to, subject: render(config.subject, sample), body: render(config.body, sample), note: 'Simulation only. Nothing was sent.' }
@@ -155,7 +188,8 @@ export function simulateFlow(app, workspaceId, id) {
 // re-dispatching the same event a no-op, so duplicate delivery cannot create duplicate runs.
 export function dispatchEvent(app, event) {
   app.db.transaction(() => {
-    const flows = app.db.all(`SELECT id FROM flows WHERE workspace_id = ? AND trigger_type = ? AND status IN ('enabled', 'paused')
+    // Original single-action flows (no definition). Flow v1 workflows are started by dispatchFlowEvent below.
+    const flows = app.db.all(`SELECT id FROM flows WHERE workspace_id = ? AND trigger_type = ? AND status IN ('enabled', 'paused') AND action_type <> 'steps'
       AND (trigger_source IS NULL OR trigger_source = ?)`, event.workspace_id, event.type, event.source_id);
     const now = app.now();
     for (const flow of flows) {
@@ -167,7 +201,8 @@ export function dispatchEvent(app, event) {
       app.db.run(`INSERT INTO flow_runs (id, workspace_id, flow_id, event_id, event_type, subject_id, status, next_attempt_at, last_error, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, randomUUID(), event.workspace_id, flow.id, event.id, event.type, event.subject_id, status, now, error, now, now);
     }
-    enqueueWebhooks(app, event);
+    dispatchFlowEvent(app, event);
+    if (!event.type.startsWith('sheets.') && !['meet.booking.no_show', 'forms.response.edited', 'payments.captured', 'webhook.incoming'].includes(event.type)) enqueueWebhooks(app, event);
     app.db.run('UPDATE outbox SET dispatched_at = ? WHERE id = ?', now, event.id);
   });
 }
@@ -210,7 +245,7 @@ async function performAction(app, flow, run) {
 export async function processRun(app, runId) {
   const now = app.now();
   const claim = app.db.run(`UPDATE flow_runs SET status = 'running', attempts = attempts + 1, updated_at = ?
-    WHERE id = ? AND status IN ('queued', 'retrying') AND next_attempt_at <= ?
+    WHERE id = ? AND version IS NULL AND status IN ('queued', 'retrying') AND next_attempt_at <= ?
     AND (SELECT status FROM flows WHERE flows.id = flow_runs.flow_id) = 'enabled'`, now, runId, now);
   if (!claim.changes) return null;
   const run = app.db.get('SELECT * FROM flow_runs WHERE id = ?', runId);
@@ -230,14 +265,14 @@ export async function processRun(app, runId) {
 export async function processDueRuns(app, limit = 25) {
   const now = app.now();
   // Recover runs interrupted mid-execution (for example by a restart).
-  app.db.run("UPDATE flow_runs SET status = 'retrying', next_attempt_at = ?, last_error = 'Interrupted; retrying.' WHERE status = 'running' AND updated_at < ?", now, now - 300000);
-  const due = app.db.all(`SELECT r.id FROM flow_runs r JOIN flows f ON f.id = r.flow_id WHERE r.status IN ('queued', 'retrying') AND r.next_attempt_at <= ? AND f.status = 'enabled'
+  app.db.run("UPDATE flow_runs SET status = 'retrying', next_attempt_at = ?, last_error = 'Interrupted; retrying.' WHERE status = 'running' AND version IS NULL AND updated_at < ?", now, now - 300000);
+  const due = app.db.all(`SELECT r.id FROM flow_runs r JOIN flows f ON f.id = r.flow_id WHERE r.version IS NULL AND r.status IN ('queued', 'retrying') AND r.next_attempt_at <= ? AND f.status = 'enabled'
     ORDER BY r.next_attempt_at LIMIT ?`, now, limit);
   for (const { id } of due) await processRun(app, id);
   return due.length;
 }
 
-const RUN_SELECT = `SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at,
+const RUN_SELECT = `SELECT r.id, r.flow_id, f.name AS flow_name, f.status AS flow_status, r.event_type, r.subject_id, r.status, r.attempts, r.next_attempt_at, r.last_error, r.result, r.created_at, r.updated_at, r.version, r.reason,
       e.id AS email_id, e.status AS email_status, e.accepted_transport AS email_transport, e.sent_at AS email_accepted_at, e.delivery_status AS email_report
     FROM flow_runs r JOIN flows f ON f.id = r.flow_id
     LEFT JOIN emails e ON e.idempotency_key = 'flow-run:' || r.id AND e.workspace_id = r.workspace_id AND e.channel = 'email'`;
@@ -265,6 +300,8 @@ export function runsForSubjects(app, workspaceId, subjectIds) {
 
 // Manual retry of a failed run. Side effects stay idempotent because the run id is reused.
 export function retryRun(app, workspaceId, runId) {
+  // Flow v1 runs retry from their failed step and never repeat completed ones (engine.mjs).
+  if (app.db.get('SELECT version FROM flow_runs WHERE id = ? AND workspace_id = ?', runId, workspaceId)?.version != null) { retryFlowRun(app, workspaceId, runId); return; }
   const result = app.db.run("UPDATE flow_runs SET status = 'queued', attempts = 0, next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE id = ? AND workspace_id = ? AND status = 'failed'",
     app.now(), app.now(), runId, workspaceId);
   if (!result.changes) fail(409, 'not_retryable', 'Only failed runs can be retried.');

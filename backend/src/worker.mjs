@@ -8,7 +8,11 @@ import { videoTick } from './video/rooms.mjs';
 import { expireLots } from './video/credits.mjs';
 import { reconcileRecharges } from './video/recharge.mjs';
 import { MONITOR_INTERVAL_MS, runMonitoring } from './platform/monitoring.mjs';
+import { pruneUploads } from './forms/uploads.mjs';
 import { pruneAssets } from './forms/assets.mjs';
+import { reconcileFormPayments } from './forms/payments.mjs';
+import { syncDueSheets } from './forms/google-sheets.mjs';
+import { processFlowRuns, scanTimedTriggers } from './flow/engine.mjs';
 
 const DAY = 86400000;
 
@@ -23,7 +27,7 @@ export function applyRetention(app) {
       removed.responses += app.db.run('DELETE FROM responses WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff).changes;
       removed.bookings += app.db.run(`UPDATE bookings SET invitee_name = 'Removed after retention period', invitee_email = 'removed@invalid', invitee_phone = NULL, notes = '', answers = '{}', guests = '[]', cancel_reason = NULL, anonymized_at = ?
         WHERE workspace_id = ? AND ends_at < ? AND anonymized_at IS NULL`, now, workspace.id, cutoff).changes;
-      app.db.run('DELETE FROM flow_runs WHERE workspace_id = ? AND created_at < ? AND status IN (\'succeeded\', \'failed\')', workspace.id, cutoff);
+      app.db.run('DELETE FROM flow_runs WHERE workspace_id = ? AND created_at < ? AND status IN (\'succeeded\', \'failed\', \'skipped\', \'canceled\')', workspace.id, cutoff);
       app.db.run('DELETE FROM transcripts WHERE workspace_id = ? AND created_at < ?', workspace.id, cutoff);
       app.db.run('DELETE FROM poll_votes WHERE poll_id IN (SELECT id FROM polls WHERE workspace_id = ? AND created_at < ?)', workspace.id, cutoff);
       app.db.run("UPDATE video_participants SET display_name = 'Removed after retention period' WHERE workspace_id = ? AND created_at < ? AND status IN ('left', 'removed', 'expired')", workspace.id, cutoff);
@@ -33,9 +37,12 @@ export function applyRetention(app) {
     app.db.run('DELETE FROM outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM webhook_deliveries WHERE status IN ('delivered', 'failed') AND created_at < ?", now - 30 * DAY);
     app.db.run('DELETE FROM email_provider_events WHERE received_at < ?', now - 30 * DAY);
+    app.db.run('DELETE FROM form_payment_events WHERE received_at < ?', now - 90 * DAY);
     // Video: provider event and operation records are kept 30 days; participant names follow workspace retention.
     app.db.run('DELETE FROM video_provider_events WHERE processed_at IS NOT NULL AND processed_at < ?', now - 30 * DAY);
     app.db.run("DELETE FROM video_provider_ops WHERE status = 'done' AND updated_at < ?", now - 30 * DAY);
+    app.db.run("UPDATE form_resume_drafts SET answers='{}' WHERE expires_at<?",now);
+    app.db.run('DELETE FROM form_resume_drafts WHERE created_at<?',now-30*DAY);
     removed.images = pruneAssets(app);
   });
   return removed;
@@ -58,13 +65,18 @@ export function createWorker(app, { intervalMs = 2000 } = {}) {
         expireHolds(app);
         dispatchOutbox(app);
         await processDueRuns(app);
+        scanTimedTriggers(app);
+        await processFlowRuns(app);
         await syncMeetingCalendars(app);
         await deliverDueEmails(app);
         await deliverWebhooks(app);
         await syncDueCalendars(app);
         await videoTick(app);
+        await pruneUploads(app);
         expireLots(app);
         await reconcileRecharges(app);
+        await reconcileFormPayments(app);
+        await syncDueSheets(app);
         if (app.now() - lastRetention > 3600000) { applyRetention(app); lastRetention = app.now(); }
       } while (again);
       state.lastTickAt = app.now();

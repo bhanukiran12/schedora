@@ -1,0 +1,508 @@
+{
+  "at": "2026-11-23T10:18:47.115Z",
+  "checks": [
+    {
+      "area": "sqlite",
+      "name": "previous-schema database built (migrations 001–036) with realistic data",
+      "ok": true,
+      "detail": "36 migrations"
+    },
+    {
+      "area": "sqlite",
+      "name": "previous data includes legacy workflows, historical, failed, retrying and interrupted runs, pending emails and undispatched events",
+      "ok": true,
+      "detail": "workspaces 2, bookings 11, responses 10, flows 5, flow_runs 26, emails 42, tasks 9, outbox 21"
+    },
+    {
+      "area": "sqlite",
+      "name": "pre-migration backup written and integrity-checked",
+      "ok": true,
+      "detail": "backend/backups\\flow-rehearsal-2026-11-23T10-18-32-845Z\\backups\\schedora-2026-11-23T10-18-34-990Z.db"
+    },
+    {
+      "area": "sqlite",
+      "name": "037 applied on start",
+      "ok": true,
+      "detail": "60 ms for 26 runs and 196 rows"
+    },
+    {
+      "area": "sqlite",
+      "name": "row counts unchanged in every existing table",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "new Flow v1 tables created empty",
+      "ok": true,
+      "detail": "flow_approvals, flow_inbound_deliveries, flow_inbound_hooks, flow_provider_checks, flow_round_robin, flow_run_steps, flow_schedules, flow_versions, flow_waits"
+    },
+    {
+      "area": "sqlite",
+      "name": "foreign_key_check clean and integrity ok",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "every Flow v1 index exists, and indexes on rebuilt tables were recreated",
+      "ok": true,
+      "detail": "6 new indexes"
+    },
+    {
+      "area": "sqlite",
+      "name": "legacy rows keep their shape (no definition, no version)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "repeat start applies nothing and changes no rows",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "undispatched events were dispatched once by the new release",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "legacy runs stay legacy (version NULL) and no Flow v1 run was created from them",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "retrying and interrupted legacy runs completed after the upgrade",
+      "ok": true,
+      "detail": "[{\"status\":\"failed\",\"count\":1},{\"status\":\"queued\",\"count\":10},{\"status\":\"succeeded\",\"count\":20}]"
+    },
+    {
+      "area": "sqlite",
+      "name": "paused legacy workflow still holds its runs",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "one legacy run per (workflow, event): no duplicates",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "tenant isolation: the second tenant’s workflow ran only on its own booking",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "one task per succeeded legacy task run",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "scheduled booking emails from the previous release were kept",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "Flow v1 wait run is waiting with a persisted timer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "Flow v1 approval run is waiting for a person",
+      "ok": true,
+      "detail": "needs_approval"
+    },
+    {
+      "area": "sqlite",
+      "name": "two worker processes: each of 24 messages sent exactly once",
+      "ok": true,
+      "detail": "process A sent 9, process B sent 63"
+    },
+    {
+      "area": "sqlite",
+      "name": "two worker processes: every concurrent run finished once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "killed worker left its run leased and its step in flight",
+      "ok": true,
+      "detail": "running"
+    },
+    {
+      "area": "sqlite",
+      "name": "restart: the in-flight email became uncertain and was not resent",
+      "ok": true,
+      "detail": "run failed, step uncertain"
+    },
+    {
+      "area": "sqlite",
+      "name": "restart: the wait and approval survived",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restart: approval decided once after restart; email sent once",
+      "ok": true,
+      "detail": "first 200, second 409, sent [\"Approval needed: Approve reply\",\"Approved reply Avery\",\"Day after Wanda\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Second Tenant\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\"], run succeeded"
+    },
+    {
+      "area": "sqlite",
+      "name": "restart: the wait resumed when due and sent once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "schedule started one run for the passed slot",
+      "ok": true,
+      "detail": "1 run(s)"
+    },
+    {
+      "area": "sqlite",
+      "name": "restore of the pre-migration backup matches its row counts exactly",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restored database is at the previous schema (036)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restored database migrates forward again on the next start",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "control: without preparation the previous release starts its own runs on Flow v1 workflows",
+      "ok": true,
+      "detail": "[[\"retrying\",\"Cannot read properties of undefined (reading 'startsWith')\"]]"
+    },
+    {
+      "area": "sqlite",
+      "name": "prepare: Flow v1 workflows that were on or paused are now drafts",
+      "ok": true,
+      "detail": "5 switched"
+    },
+    {
+      "area": "sqlite",
+      "name": "previous release ignores prepared Flow v1 workflows (no runs started on them)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "previous release left every Flow v1 run untouched",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "previous release keeps running legacy workflows on new events",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "previous release lists every workflow, including Flow v1 drafts",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "previous release can still create single-action workflows on the migrated schema",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restore: recorded statuses are back",
+      "ok": true,
+      "detail": "5 restored"
+    },
+    {
+      "area": "sqlite",
+      "name": "restore: schedule slots missed during the rollback are not caught up",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restore: events that happened during the rollback do not start Flow v1 runs afterwards (documented gap)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "sqlite",
+      "name": "restore: runs pending before the rollback continue",
+      "ok": true,
+      "detail": "[\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\"]"
+    },
+    {
+      "area": "postgres",
+      "name": "previous schema stops at v32 (no v33)",
+      "ok": true,
+      "detail": "32 upgrades"
+    },
+    {
+      "area": "postgres",
+      "name": "previous-schema data loaded with valid foreign keys",
+      "ok": true,
+      "detail": "155 keys, rows: flows 5, flow_runs 26, bookings 11, responses 10, emails 42, outbox 21"
+    },
+    {
+      "area": "postgres",
+      "name": "pg_dump backup written before the upgrade",
+      "ok": true,
+      "detail": "312410 bytes"
+    },
+    {
+      "area": "postgres",
+      "name": "v33 applied in one transaction on open",
+      "ok": true,
+      "detail": "290 ms including connection"
+    },
+    {
+      "area": "postgres",
+      "name": "row counts unchanged in every existing table",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "new Flow v1 tables created empty",
+      "ok": true,
+      "detail": "flow_approvals, flow_inbound_deliveries, flow_inbound_hooks, flow_provider_checks, flow_round_robin, flow_run_steps, flow_schedules, flow_versions, flow_waits"
+    },
+    {
+      "area": "postgres",
+      "name": "foreign keys valid after the upgrade",
+      "ok": true,
+      "detail": "171 keys checked"
+    },
+    {
+      "area": "postgres",
+      "name": "every Flow v1 index exists",
+      "ok": true,
+      "detail": "6 indexes"
+    },
+    {
+      "area": "postgres",
+      "name": "run status check accepts the new states",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "single-action check removed so steps workflows fit",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "repeat start applies nothing and changes no rows",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "undispatched events were dispatched once by the new release",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "legacy runs stay legacy (version NULL) and no Flow v1 run was created from them",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "retrying and interrupted legacy runs completed after the upgrade",
+      "ok": true,
+      "detail": "[{\"status\":\"queued\",\"count\":10},{\"status\":\"failed\",\"count\":1},{\"status\":\"succeeded\",\"count\":20}]"
+    },
+    {
+      "area": "postgres",
+      "name": "paused legacy workflow still holds its runs",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "one legacy run per (workflow, event): no duplicates",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "tenant isolation: the second tenant’s workflow ran only on its own booking",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "one task per succeeded legacy task run",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "scheduled booking emails from the previous release were kept",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "Flow v1 wait run is waiting with a persisted timer",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "Flow v1 approval run is waiting for a person",
+      "ok": true,
+      "detail": "needs_approval"
+    },
+    {
+      "area": "postgres",
+      "name": "two worker processes: each of 24 messages sent exactly once",
+      "ok": true,
+      "detail": "process A sent 34, process B sent 38"
+    },
+    {
+      "area": "postgres",
+      "name": "two worker processes: every concurrent run finished once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "killed worker left its run leased and its step in flight",
+      "ok": true,
+      "detail": "running"
+    },
+    {
+      "area": "postgres",
+      "name": "restart: the in-flight email became uncertain and was not resent",
+      "ok": true,
+      "detail": "run failed, step uncertain"
+    },
+    {
+      "area": "postgres",
+      "name": "restart: the wait and approval survived",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "restart: approval decided once after restart; email sent once",
+      "ok": true,
+      "detail": "first 200, second 409, sent [\"Approval needed: Approve reply\",\"Approved reply Avery\",\"Day after Wanda\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Second Tenant\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\",\"Reminder: Intro call with Rehearsal Owner\"], run succeeded"
+    },
+    {
+      "area": "postgres",
+      "name": "restart: the wait resumed when due and sent once",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "schedule started one run for the passed slot",
+      "ok": true,
+      "detail": "1 run(s)"
+    },
+    {
+      "area": "postgres",
+      "name": "prepare: Flow v1 workflows that were on or paused are now drafts",
+      "ok": true,
+      "detail": "5 switched"
+    },
+    {
+      "area": "postgres",
+      "name": "previous release ignores prepared Flow v1 workflows (no runs started on them)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "previous release left every Flow v1 run untouched",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "previous release keeps running legacy workflows on new events",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "previous release lists every workflow, including Flow v1 drafts",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "previous release can still create single-action workflows on the migrated schema",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "restore: recorded statuses are back",
+      "ok": true,
+      "detail": "5 restored"
+    },
+    {
+      "area": "postgres",
+      "name": "restore: schedule slots missed during the rollback are not caught up",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "restore: events that happened during the rollback do not start Flow v1 runs afterwards (documented gap)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "restore: runs pending before the rollback continue",
+      "ok": true,
+      "detail": "[\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\",\"needs_approval\"]"
+    },
+    {
+      "area": "postgres",
+      "name": "pg_restore of the pre-upgrade dump matches the pre-upgrade row counts exactly",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "area": "postgres",
+      "name": "restored backup is at the previous schema (v32)",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "notes": [
+    "SQLite backup restore would discard every write made after the migration. In this rehearsal: {\"bookings\":1,\"contacts\":27,\"emails\":84,\"flow_runs\":87,\"flows\":5,\"meeting_hosts\":1,\"meetings\":1,\"monitor_alerts\":2,\"outbox\":27,\"responses\":26,\"sessions\":3,\"tasks\":5} plus all Flow v1 tables.",
+    "Previous-release dispatcher: the committed (HEAD) backend/src/flow/service.mjs, run against the migrated database with current helper modules. Its dispatch, claim and recovery SQL matches the deployed image; later uncommitted edits to that file are the Flow v1 changes and response-edit context.",
+    "PostgreSQL backup restore would discard every write after the upgrade. In this rehearsal: {\"bookings\":2,\"contacts\":29,\"emails\":88,\"flow_runs\":90,\"flows\":6,\"meeting_hosts\":2,\"meetings\":2,\"monitor_alerts\":2,\"outbox\":29,\"responses\":27,\"sessions\":4,\"tasks\":6}."
+  ]
+}

@@ -1,14 +1,17 @@
 import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, html, isAdmin, loading, mount, notice, raw, session, toast, uid, workspace, wsPath } from './core.mjs';
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
-import { mountWorkbookTabs } from './workbook-tabs.mjs';
+import { openAiFormDraft, openAiResponseSummary } from './forms-ai.mjs';
 import { buildTrail, responseTrailContext, STATE_LABELS } from './enquiry-trail.mjs';
 import { assessFormReadiness, conditionSentence } from './forms-readiness.mjs';
 import { readinessAreas } from './readiness-view.mjs';
 import { hostInfo, productOrigin } from './context.mjs';
 import { planTypeChange, replacementQuestion, typeChoices } from './forms-type-change.mjs';
 import { dropSlot, moveMessage } from './forms-reorder.mjs';
+import { createHistory, isMacPlatform, isTextEntry, shortcutAction, shortcutList } from './forms-history.mjs';
 import { exportDefinition, openImportDialog } from './forms-import.mjs';
 import { createdSource, draftAddress } from './forms-picker.mjs';
+import { mountSheetsSync, sheetsSyncSection } from './forms-google-sheets.mjs';
+import { applyPaymentSetting, bindPaymentReceipt, closingNotes, paymentReceipt, paymentSettingsCard, paymentStatusPage, receiptLine, refreshResponsePayment, responsePaymentBadges } from './forms-payments.mjs';
 import { openPrefillBuilder } from './forms-prefill.mjs';
 import { copyTitle, filterForms, formStatus, STATUS_FILTERS, statusCounts } from './forms-list.mjs';
 
@@ -21,7 +24,8 @@ export const trailList = (trail, headingId = 'trail-heading') => html`<section c
       : step.key === 'booking' && step.reference ? html`<p class="trail-links"><a href="/meet?tab=meetings">Meetings</a></p>` : ''}</div></li>`)}</ol>
   ${trail.notes.map(note => html`<p class="hint">${note}</p>`)}</section>`;
 import { blockEnd, canMove, contactInfoBlock, dropIsNoop, dropItem, duplicateBlock, isHead, moveItem, outlineMarks } from './forms-groups.mjs';
-import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FIELD_TYPES, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerRuleLimit, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, formScore, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, prefillAnswers, prefillProblem, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { CLIENT_EVALUATOR, CONDITION_OPS, DESCRIPTION_LIMITS, FEEDBACK_LIMIT, FIELD_TYPES, FILE_LIMITS, GRID_LIMITS, isGrid, CLOSED_MESSAGE_LIMIT, SCALE_LIMITS, scaleOf, VIDEO_PROVIDERS, URL_PARAM_LIMITS, answerRuleLimit, answerText, attributionColumns, checkAnswer, choiceRuleConflicts, definitionProblems, dropHiddenChoices, formEnding, formScore, withEvaluationPolicy, formScreens, screenPage, parseVideoUrl, pipe, prefillAnswers, prefillProblem, pruneLogic, urlParamKeyProblem, urlParamValues, videoEmbedUrl, videoWatchUrl, visibleFields, visiblePages } from '/shared/forms-logic.mjs';
+import { formUploads } from './form-uploads.mjs';
 import { TYPE_KIND, formIcon } from './forms-icons.mjs';
 import { designPanel } from './forms-design.mjs';
 import { logicMapModel } from './forms-logicmap.mjs';
@@ -77,6 +81,20 @@ function watchImages(root) {
   }
 }
 
+function gridInput(field, value, labelText, help, describedBy) {
+  const type = field.type === 'single_grid' ? 'radio' : 'checkbox';
+  return html`<fieldset class="response-grid" aria-describedby="${[describedBy, `q-${field.id}-instructions`].filter(Boolean).join(' ')}">
+    <legend class="q-label">${labelText}</legend>${help}
+    <p class="hint" id="q-${field.id}-instructions">${type === 'radio' ? 'Choose one per row.' : 'Choose any that apply per row.'}${field.required ? ' Answer every row.' : ''}</p>
+    ${field.grid.rows.map(row => {
+      const selected = Object.hasOwn(value || {}, row.id) ? [value[row.id]].flat() : [];
+      return html`<fieldset class="response-grid-row"><legend>${row.label}</legend><div class="response-grid-choices">
+        ${field.grid.columns.map(column => html`<label class="check"><input type="${type}" name="grid-${field.id}-${row.id}" id="q-${field.id}-${row.id}-${column.id}" data-grid-field="${field.id}" data-grid-row="${row.id}" value="${column.id}" ${selected.includes(column.id) ? raw('checked') : ''}><span>${column.label}</span></label>`)}
+      </div></fieldset>`;
+    })}
+  </fieldset>`;
+}
+
 function inputFor(field, value, labelText, assetUrl = publicAssetUrl) {
   const id = `q-${field.id}`;
   const describedBy = field.help ? `${id}-help` : '';
@@ -85,11 +103,30 @@ function inputFor(field, value, labelText, assetUrl = publicAssetUrl) {
   const help = field.help ? html`<div class="hint q-help" id="${id}-help" data-desc="q:${field.id}">${field.help}</div>` : '';
   const hint = field.placeholder ? html`placeholder="${field.placeholder}"` : '';
   switch (field.type) {
+    case 'file_upload': return html`<fieldset class="file-question" data-file-question="${field.id}"><legend class="q-label">${labelText}${field.required ? html` <span class="required-mark" aria-hidden="true">*</span>` : ''}</legend>${help}<p class="hint">Up to two PDF, JPEG, PNG or WebP files, 2 MB each.</p><input type="hidden" name="${field.id}" value="${JSON.stringify(value || [])}"><div data-file-list></div><label class="btn file-button">Choose files<input type="file" data-file-input="${field.id}" accept="${FILE_LIMITS.accept}" multiple disabled></label><p class="hint" data-file-status>Uploads are available on the published form.</p></fieldset>`;
+    case 'single_grid':
+    case 'multiple_grid': return gridInput(field, value, labelText, help, describedBy);
     case 'long_text': return html`${label}${help}<textarea ${common} ${hint} maxlength="5000">${value || ''}</textarea>`;
     case 'email': return html`${label}${help}<input ${common} ${hint} type="email" maxlength="254" autocomplete="email" value="${value || ''}">`;
     case 'date': return html`${label}${help}<input ${common} type="date" value="${value || ''}">`;
     case 'phone': return html`${label}${help}<input ${common} ${hint} type="tel" maxlength="30" autocomplete="tel" value="${value || ''}">`;
+    case 'time': return html`${label}${help}<input ${common} type="time" value="${value || ''}">`;
+    case 'number': {
+      const limits = field.number || {};
+      const step = limits.integer ? '1' : 'any';
+      return html`${label}${help}<input ${common} ${hint} type="text" inputmode="${limits.integer && !(limits.min < 0) ? 'numeric' : 'decimal'}" data-step="${step}" ${limits.min != null ? raw(`data-min="${limits.min}"`) : ''} ${limits.max != null ? raw(`data-max="${limits.max}"`) : ''} autocomplete="off" value="${value || ''}">${limits.min != null || limits.max != null ? html`<p class="hint q-range">${limits.min != null && limits.max != null ? `From ${limits.min} to ${limits.max}` : limits.min != null ? `${limits.min} or more` : `${limits.max} or less`}${limits.integer ? ', whole numbers only' : ''}.</p>` : ''}`;
+    }
+    case 'scale': {
+      const scale = scaleOf(field);
+      const points = Array.from({ length: scale.max - scale.min + 1 }, (_, index) => String(scale.min + index));
+      return html`<fieldset class="q-scale" ${raw(describedBy ? `aria-describedby="${describedBy}"` : '')}><legend class="q-label">${labelText}${field.required ? html` <span class="required-mark" aria-hidden="true">*</span><span class="visually-hidden">(required)</span>` : ''}</legend>${help}
+        <div class="scale-row">${scale.min_label ? html`<span class="scale-end" aria-hidden="true">${scale.min_label}</span>` : ''}<div class="scale-points">${points.map((point, index) => html`<label class="scale-point"><input type="radio" name="${field.id}" value="${point}" id="${id}-${index}" ${String(value) === point ? raw('checked') : ''}><span>${point}</span>${index === 0 && scale.min_label ? html`<span class="visually-hidden">, ${scale.min_label}</span>` : ''}${index === points.length - 1 && scale.max_label ? html`<span class="visually-hidden">, ${scale.max_label}</span>` : ''}</label>`)}</div>${scale.max_label ? html`<span class="scale-end" aria-hidden="true">${scale.max_label}</span>` : ''}</div></fieldset>`;
+    }
     case 'single_choice':
+      if (field.display === 'dropdown' && !field.options.some(option => option.image)) {
+        return html`${label}${help}<select ${common}><option value="">Choose…</option>${field.options.map(option => html`<option value="${option.id}" ${value === option.id ? raw('selected') : ''}>${option.label}</option>`)}</select>`;
+      }
+      // falls through to the radio list
     case 'multiple_choice': {
       const type = field.type === 'single_choice' ? 'radio' : 'checkbox';
       const selected = Array.isArray(value) ? value : value ? [value] : [];
@@ -153,9 +190,17 @@ function toggleDescription(root, button, expanded) {
   showFold(text, button, expanded.has(key));
 }
 
+const conditionOptions = field => Object.entries(CONDITION_OPS).filter(([op]) => (!isGrid(field) && field?.type !== 'file_upload') || op === 'answered' || op === 'not_answered');
+const questionInputs = id => `[name="${CSS.escape(id)}"], [data-grid-field="${CSS.escape(id)}"]`;
 function readAnswer(form, field) {
+  if (field.type === 'file_upload') { try { return JSON.parse(form.elements[field.id]?.value || '[]'); } catch { return []; } }
+  if (isGrid(field)) return Object.fromEntries(field.grid.rows.flatMap(row => {
+    const values = $$(`[data-grid-field="${CSS.escape(field.id)}"][data-grid-row="${CSS.escape(row.id)}"]:checked`, form).map(input => input.value);
+    return values.length ? [[row.id, field.type === 'multiple_grid' ? values : values[0]]] : [];
+  }));
   if (field.type === 'multiple_choice') return $$(`[name="${field.id}"]:checked`, form).map(input => input.value);
-  if (field.type === 'single_choice') return $(`[name="${field.id}"]:checked`, form)?.value || '';
+  if (field.type === 'single_choice' && field.display === 'dropdown' && form.elements[field.id]?.tagName === 'SELECT') return form.elements[field.id].value;
+  if (field.type === 'single_choice' || field.type === 'scale') return $(`[name="${field.id}"]:checked`, form)?.value || '';
   return form.elements[field.id]?.value ?? '';
 }
 
@@ -163,7 +208,7 @@ function readAnswer(form, field) {
 // when the caller has shown the outcome; when it throws, describeError(error) returns the message
 // to show (field errors from error.details.errors are placed next to their questions instead).
 export { inputFor, readAnswer };
-export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit, describeError, answers: initial = {}, banner = '', assetUrl = publicAssetUrl, embedVideo = true, urlParams = null } = {}) {
+export function renderForm(container, definition, { mode = definition.presentation, preview = false, onSubmit, describeError, answers: initial = {}, banner = '', assetUrl = publicAssetUrl, embedVideo = true, urlParams = null, uploads = null } = {}) {
   applyTheme(container.closest('.form-page') || container, definition.theme);
   // Text sizes follow the width the form is given, not the window, so a phone-sized preview in the
   // builder shows exactly what a phone shows.
@@ -221,6 +266,7 @@ export function renderForm(container, definition, { mode = definition.presentati
       ${fields.length ? fields.map(field => html`<div class="question${entered ? ` q-enter-${entered}` : ''}" data-field="${field.id}">${conversational && !page ? html`<span class="question-number">${position + 1} →</span>` : ''}
         ${mediaFor(field, assetUrl, loadedVideos, pipe(field.label, definition, answers), embedVideo)}${inputFor(field, answers[field.id], pipe(field.label, definition, answers), assetUrl)}
         ${errors[field.id] ? html`<div class="field-error" id="q-${field.id}-error">${errors[field.id]}</div>` : ''}</div>`) : html`<p class="muted">This form has no questions yet.</p>`}
+      ${last && (definition.payment || definition.receipts?.whatsapp) ? closingNotes(definition, { preview, consent: container.dataset.whatsappReceipt === '1', answers }) : ''}
       <div data-form-status tabindex="-1">${failure ? notice('bad', failure.message) : ''}</div>
       <div class="actions">
         ${position > 0 ? html`<button type="button" class="btn" data-back>Back</button>` : ''}
@@ -234,9 +280,14 @@ export function renderForm(container, definition, { mode = definition.presentati
     $$('[style-width]', container).forEach(bar => { bar.style.width = bar.getAttribute('style-width') + '%'; bar.removeAttribute('style-width'); });
     watchImages(container);
     const form = $('form', container);
+    if (uploads) uploads.mount(form, answers, (fieldId, value) => {
+      const focus = form.contains(document.activeElement) ? document.activeElement.id : null;
+      answers[fieldId] = value;
+      draw(focus || null);
+    });
     foldDescriptions(form, expanded);
     for (const field of fields) {
-      if (errors[field.id]) $$(`[name="${field.id}"]`, form).forEach(input => { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), `q-${field.id}-error`].filter(Boolean).join(' ')); });
+      if (errors[field.id]) $$(questionInputs(field.id), form).forEach(input => { input.setAttribute('aria-invalid', 'true'); input.setAttribute('aria-describedby', [input.getAttribute('aria-describedby'), `q-${field.id}-error`].filter(Boolean).join(' ')); });
     }
     // A page change brings the new question into view on phones, then focus moves to it.
     if (entered && !preview) container.scrollIntoView({ block: 'start' });
@@ -246,6 +297,7 @@ export function renderForm(container, definition, { mode = definition.presentati
     else if (pageErrors.length > 1 && !conversational) $('[data-error-summary]', form).focus();
     else if (focusId !== null && (conversational || pageErrors.length || entered)) (form.querySelector('[aria-invalid="true"]') || form.querySelector('input, textarea'))?.focus();
 
+    $('[data-whatsapp-receipt]', form)?.addEventListener('change', event => { container.dataset.whatsappReceipt = event.target.checked ? '1' : '0'; });
     form.addEventListener('click', event => {
       const fold = event.target.closest('[data-desc-toggle]');
       if (fold) { toggleDescription(form, fold, expanded); return; }
@@ -261,10 +313,11 @@ export function renderForm(container, definition, { mode = definition.presentati
       const jump = event.target.closest('[data-jump]');
       if (!jump) return;
       event.preventDefault();
-      form.querySelector(`[name="${CSS.escape(jump.dataset.jump)}"]`)?.focus();
+      form.querySelector(questionInputs(jump.dataset.jump))?.focus();
     });
     form.addEventListener('change', event => {
-      const name = event.target.name;
+      if (event.target.dataset.fileInput) return;
+      const name = event.target.dataset.gridField || event.target.name;
       const field = definition.fields.find(candidate => candidate.id === name);
       if (!field) return;
       answers[name] = readAnswer(form, field);
@@ -305,7 +358,7 @@ export function renderForm(container, definition, { mode = definition.presentati
     form.querySelector('[data-back]')?.addEventListener('click', () => { errors = {}; position--; moved = 'back'; draw(); });
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      if (form.dataset.busy) return;
+      if (form.dataset.busy || uploads?.blocked()) return;
       for (const field of fields) answers[field.id] = readAnswer(form, field);
       dropHiddenChoices(definition, answers, urlParams);
       errors = {};
@@ -353,7 +406,7 @@ export function renderForm(container, definition, { mode = definition.presentati
     setTimeout(() => { if (!finished && position === from) $('form', container)?.requestSubmit(); }, 300);
   }
   draw(null);
-  return { setBanner(value) { message = value; draw(); } };
+  return { answers: () => ({...answers}), setBanner(value) { message = value; draw(); } };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -371,9 +424,53 @@ const submissionStore = {
 const pendingKey = slug => `schedora.pending-answers.${slug}`;
 const unavailablePage = (title, body) => html`<div class="container page"><div class="card public-form-card"><div class="public-form"><h1>${title}</h1>${body}</div></div></div>`;
 
+async function renderResponseEdit(ctx, slug, key) {
+  const endpoint = `/api/public/forms/${encodeURIComponent(slug)}/response-edit`;
+  let response;
+  try { response = await api('POST', endpoint, { key }); }
+  catch (error) {
+    if (ctx.alive()) mount(ctx.main, unavailablePage('Could not open this response', html`<p>${error.message}</p>`));
+    return;
+  }
+  if (!ctx.alive()) return;
+  setTitle('Edit response · Forms by Schedora');
+  mount(ctx.main, html`<div class="form-page"><div class="container page"><div class="card public-form-card" id="form-root"></div></div></div>`);
+  const root = $('#form-root');
+  const uploads = formUploads({ slug, version: response.version, definition: response.definition }, response.upload_submission_id, { editKey: key, existing: response.answers });
+  renderForm(root, { ...response.definition, submit_label: 'Save changes' }, {
+    answers: response.answers, uploads,
+    banner: notice('info', html`<p>Editing response <strong>${response.reference}</strong>. Saving updates your original response.</p>`),
+    describeError: error => ({ retry: error.status === 0 || error.status >= 500, message: html`<p>${error.message}</p>` }),
+    onSubmit: async answers => {
+      await api('PATCH', endpoint, { key, answers, revision: response.revision, evaluator: CLIENT_EVALUATOR });
+      if (!ctx.alive()) return;
+      mount(root, html`<div class="public-form receipt" role="status"><h1 tabindex="-1">Response updated</h1><p>Receipt ${response.reference}</p><button class="btn" type="button" data-edit-again>Edit again</button></div>`);
+      $('[data-edit-again]', root).onclick = () => renderResponseEdit(ctx, slug, key);
+      $('h1', root).focus();
+    }
+  });
+}
+
+const toHex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+async function editCredential(storeKey) {
+  if (!globalThis.crypto?.subtle) return null;
+  const stored = submissionStore.get(storeKey);
+  const key = /^[a-f0-9]{64}$/.test(stored || '') ? stored : toHex(crypto.getRandomValues(new Uint8Array(32)));
+  submissionStore.set(storeKey, key);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  return { key, hash: toHex(new Uint8Array(digest)) };
+}
+
 export async function publicForm(ctx) {
   mount(ctx.main, html`<div class="container page">${loading('Loading form…')}</div>`);
   const slug = ctx.params[0];
+  const editKey = new URLSearchParams(location.hash.slice(1)).get('edit');
+  if (editKey) return renderResponseEdit(ctx, slug, editKey);
+  const paymentToken = ctx.query.get('payment');
+  if (paymentToken) {
+    mount(ctx.main, html`<div class="form-page"><div class="container page"><div class="card public-form-card" id="form-root"></div></div></div>`);
+    return paymentStatusPage(ctx, $('#form-root'), slug, paymentToken);
+  }
   let form;
   const signinUrl = `/api/public/forms/${encodeURIComponent(slug)}/signin?return=${encodeURIComponent(location.search)}`;
   try { form = await api('GET', `/api/public/forms/${slug}`); }
@@ -400,7 +497,7 @@ export async function publicForm(ctx) {
     }
     if (error.code === 'signin_unavailable') return mount(ctx.main, unavailablePage('Sign-in is not available', html`<p>${error.message}</p>`));
     if (error.status === 404) return mount(ctx.main, unavailablePage('This form is not available', html`<p>The link may be mistyped, or the form has not been published.</p>`));
-    if (error.status === 410) return mount(ctx.main, unavailablePage('This form is closed', html`<p>It is no longer accepting responses. Responses sent before it closed are not affected.</p>`));
+    if (error.status === 410) return mount(ctx.main, unavailablePage('This form is closed', html`<p>${error.details?.reason ? error.message : 'It is no longer accepting responses.'} Responses sent before it closed are not affected.</p>`));
     return mount(ctx.main, unavailablePage('We could not load this form', html`${notice('bad', html`<p>${error.status ? 'The form service had a problem.' : 'Schedora could not be reached.'} Nothing has been submitted from this page.</p>`)}<a class="btn" data-external href="${location.pathname + location.search}">Try again</a>`));
   }
   if (!ctx.alive()) return;
@@ -421,7 +518,30 @@ export async function publicForm(ctx) {
   // Answers kept on this tab when a sign-in expired at submit, restored once after signing in again.
   let restored = null;
   try { restored = JSON.parse(sessionStorage.getItem(pendingKey(slug)) || 'null'); sessionStorage.removeItem(pendingKey(slug)); } catch { restored = null; }
-  respondTo(root, form, { mode, urlParams: ctx.query, prefill, restored: restored && typeof restored === 'object' && !Array.isArray(restored) ? restored : null, signinUrl });
+  const resumeKey=new URLSearchParams(location.hash.slice(1)).get('resume');
+  if(resumeKey) {
+    try { const saved=await api('POST',`/api/public/forms/${slug}/resume`,{action:'read',key:resumeKey}); restored=saved.answers; }
+    catch(error) { return mount(root,notice('warn',html`<p>${error.message}</p><a class="btn" href="/f/${slug}">Start a new response</a>`)); }
+  }
+  const runner=respondTo(root, form, { mode, urlParams: ctx.query, prefill, restored: restored && typeof restored === 'object' && !Array.isArray(restored) ? restored : null, signinUrl, extra:resumeKey ? {resume_key:resumeKey} : {} });
+  const canResume=!form.respondent && form.definition.mode!=='knowledge_quiz' && !form.definition.url_params?.length && !form.definition.fields.some(field=>field.type==='file_upload');
+  if(canResume) {
+    const area=document.createElement('div');area.className='public-form';mount(area,html`<button class="btn btn-small" type="button" data-save-resume>Save and continue later</button><div data-resume-result></div>`);root.after(area);
+    let key=resumeKey;
+    $('[data-save-resume]',area).onclick=async()=>{
+      if($('.receipt',root)) return area.remove();
+      const consent=await ask({title:'Save your unfinished answers?',body:'Your answers will be stored for up to 7 days. Anyone with the private link can read them. Keep the link safe; avoid saving sensitive information on a shared device.',confirm:'Save answers and create link'});
+      if(!consent) return;
+      if(!key) key=Array.from(crypto.getRandomValues(new Uint8Array(32)),value=>value.toString(16).padStart(2,'0')).join('');
+      try {
+        const saved=await api('POST',`/api/public/forms/${slug}/resume`,{action:'save',consent:true,key,version:form.version,answers:runner.answers()});
+        runner.setResumeKey(key);
+        const url=new URL('/f/'+slug,location.origin);url.hash='resume='+key;
+        mount($('[data-resume-result]',area),html`<p>Draft saved until ${fmtDateTime(saved.expires_at)}. Save this private link:</p><input aria-label="Private resume link" readonly value="${url.href}"><button class="btn btn-small" type="button" data-delete-resume>Delete saved draft</button>`);
+        $('[data-delete-resume]',area).onclick=async()=>{try{await api('POST',`/api/public/forms/${slug}/resume`,{action:'delete',key});runner.setResumeKey(null);key=null;mount($('[data-resume-result]',area),html`<p>Saved draft deleted. Your answers remain on this tab.</p>`);}catch(error){toast(error.message);}};
+      }catch(error){toast(error.message);}
+    };
+  }
 }
 
 /**
@@ -436,6 +556,8 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
   let uncertain = Boolean(submissionId);
   if (!submissionId) { submissionId = uid() + uid(); submissionStore.set(storeKey, submissionId); }
   const embedded = document.body.dataset.embed === '1';
+  const uploads = formUploads(form, submissionId);
+  const editStoreKey = `edit:${storeKey}:${submissionId}`;
 
   // Every message states only what is known about whether the response was saved.
   const describeError = error => {
@@ -449,7 +571,7 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
       return { message: html`<p><strong>Your sign-in expired, so nothing was submitted.</strong> Sign in again and your answers on this tab come back.</p><p><a class="btn btn-small" data-external href="${signinUrl}">Sign in again</a></p>` };
     }
     if (error.code === 'rate_limited') return { retry: true, message: html`<p>Too many attempts from this connection. Wait a minute, then submit again. ${uncertain ? 'We still cannot confirm whether an earlier attempt was received; submitting again will not create a duplicate.' : 'Nothing has been saved yet.'}</p>` };
-    const known = { form_closed: 'This form stopped accepting responses before your answers arrived.', quota_exceeded: 'This form has reached its response limit for now.', entitlement_required: 'This form is not accepting responses right now.',
+    const known = { form_closed: error.details?.reason ? error.message : 'This form stopped accepting responses before your answers arrived.', quota_exceeded: 'This form has reached its response limit for now.', entitlement_required: 'This form is not accepting responses right now.',
       session_already_submitted: 'You already answered this form in this meeting.', not_in_meeting: 'You are no longer in this meeting.', session_invalid: 'This meeting form is no longer valid. Close it and open it again from the meeting card.' }[error.code];
     if (known) return { message: html`<p><strong>${known}</strong> Your response was not saved. Your answers are still on this page if you want to copy them.</p>` };
     return { message: html`<p>${error.message} Your response was not saved.</p>` };
@@ -471,24 +593,29 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
 
   function begin(initial = {}, banner = '') {
     let latest = { ...initial };
-    renderForm(root, form.definition, {
-      mode, answers: initial, banner, describeError, embedVideo, urlParams,
+    const rendered = renderForm(root, form.definition, {
+      mode, answers: initial, banner, describeError, embedVideo, urlParams, uploads,
       onSubmit: async answers => {
         latest = answers;
         // Only what this version declares leaves the page; the server cleans it again regardless.
         const params = Object.fromEntries(Object.entries(urlParamValues(form.definition, urlParams)));
-        const result = await api('POST', `/api/public/forms/${form.slug}/responses`, { answers, evaluator: CLIENT_EVALUATOR, submission_id: submissionId, version: form.version, ...(Object.keys(params).length ? { url_params: params } : {}), ...extra }, {}, { timeout: SUBMIT_TIMEOUT_MS });
+        const credential = form.definition.responses?.allow_edit && !extra.session_ticket && !embedded && !form.respondent
+          && form.definition.mode !== 'knowledge_quiz' && !form.definition.url_params?.length ? await editCredential(editStoreKey) : null;
+        const optedIn = form.definition.receipts?.whatsapp && root.dataset.whatsappReceipt === '1';
+        const result = await api('POST', `/api/public/forms/${form.slug}/responses`, { ...(credential ? { edit_key_hash: credential.hash } : {}), ...(optedIn ? { whatsapp_receipt: true } : {}), answers, evaluator: CLIENT_EVALUATOR, submission_id: submissionId, version: form.version, ...(Object.keys(params).length ? { url_params: params } : {}), ...extra }, {}, { timeout: SUBMIT_TIMEOUT_MS });
         submissionStore.clear(storeKey);
-        showReceipt(result);
+        submissionStore.clear(editStoreKey);
+        showReceipt(result, credential?.key);
       }
     });
-    return { answers: () => latest };
+    return { answers: () => rendered.answers() };
   }
   let start = restored ? begin({ ...prefill, ...restored }, notice('info', html`<p>Your answers from before you signed in again are back. Check them, then submit.</p>`))
     : Object.keys(prefill).length ? begin(prefill, notice('info', html`<p>Some answers are already filled in from your link. Check them before you submit; you can change any of them.</p>`))
     : begin();
 
-  function showReceipt(result) {
+  function showReceipt(result, editKey) {
+    root.parentElement?.querySelector('[data-save-resume]')?.parentElement?.remove();
     const next = result.next;
     const booking = next?.type === 'booking';
     const target = embedded ? raw('target="_top"') : '';
@@ -507,14 +634,20 @@ export function respondTo(root, form, { mode = form.definition.presentation, sto
     const answered = start.answers();
     const endingTitle = ending && pipe(ending.title, form.definition, answered);
     const offered = booking && next.status === 'offered';
-    mount(root, html`<div role="status" class="public-form receipt"><h1 tabindex="-1">${offered ? 'Response received — choose a time' : endingTitle || 'Response received'}</h1>
+    const owed = result.payment && !result.payment.complete;
+    mount(root, html`<div role="status" class="public-form receipt"><h1 tabindex="-1">${owed ? 'Answers saved — payment needed' : offered ? 'Response received — choose a time' : endingTitle || 'Response received'}</h1>
       ${offered && endingTitle ? html`<p><strong>${endingTitle}</strong></p>` : ''}${ending?.message ? html`<p class="ending-message">${pipe(ending.message, form.definition, answered)}</p>` : ''}
-      ${result.quiz_score ? html`<p class="quiz-score"><strong>Your score</strong><span>${result.quiz_score.correct} of ${result.quiz_score.total} correct</span></p>` : ''}<p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
+      ${result.quiz_score ? html`<p class="quiz-score"><strong>Your score</strong><span>${result.quiz_score.correct} of ${result.quiz_score.total} correct</span></p>
+        ${result.quiz_results?.length ? html`<ol class="quiz-results" aria-label="Your answers">${result.quiz_results.map(item => html`<li class="${item.correct ? 'is-correct' : 'is-incorrect'}"><span class="quiz-result-mark" aria-hidden="true">${item.correct ? '✓' : '✗'}</span><span><strong>${item.label}</strong> <span class="quiz-result-word">${item.correct ? 'Correct' : 'Not correct'}</span>${item.feedback ? html`<span class="quiz-feedback">${item.feedback}</span>` : ''}</span></li>`)}</ol>` : ''}` : ''}<p>${result.answers_changed ? 'Your response from your first attempt was saved. Changes you made after that attempt were not saved.' : 'Your answers were saved.'}</p>
       <dl class="confirm-facts"><dt>Receipt</dt><dd>${result.reference}</dd><dt>Received</dt><dd>${fmtDateTime(result.created_at)}</dd></dl>
+      ${result.can_edit && editKey ? html`<p><a class="btn" data-external href="/f/${encodeURIComponent(slug)}#edit=${editKey}">Edit response</a></p><p class="hint">Save this private link to edit your response later.</p>` : ''}
+      ${paymentReceipt({ ...result, slug })}${receiptLine(result.whatsapp_receipt)}
       ${step}</div>`);
+    bindPaymentReceipt(root, { ...result, slug });
     $('h1', root).focus();
     onAccepted?.(result);
   }
+  return {answers:()=>start.answers(),setResumeKey(key){if(key)extra.resume_key=key;else delete extra.resume_key;}};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -527,7 +660,7 @@ export async function dashboard(ctx) {
   if (ctx.query.get('create') === '1') return ctx.navigate('/forms?tab=all', { replace: true });
   const overview = ctx.query.get('tab') !== 'all';
   mount(ctx.main, html`<div class="container page forms-page"><div class="page-head forms-head"><div class="page-head-text"><p class="page-eyebrow" title="${workspace().name}">Forms · ${workspace().name}</p><h1>${overview ? 'Overview' : 'All forms'}</h1>${overview ? html`<p class="lead">Your forms and responses, ready for the next conversation.</p>` : ''}</div>
-    <button class="btn btn-primary" id="new-form" type="button">Create form</button></div>
+    <div class="row"><a class="btn" href="/sheets">Open Sheets</a><button class="btn btn-primary" id="new-form" type="button">Create form</button><button class="btn" id="ai-draft-form" type="button">Draft with AI</button><button class="btn" id="qualify-starter" type="button">Qualify then book</button></div></div>
     ${workspace().entitlements.forms.active ? '' : notice('warn', html`<p>This workspace has no active Forms or Suite plan, so forms cannot be published or collect responses. <a href="/billing">Review plans</a>.</p>`)}
     <div id="form-list">${loading()}</div></div>`);
   const createBlank = async () => {
@@ -547,6 +680,12 @@ export async function dashboard(ctx) {
     }
   };
   $('#new-form').onclick = createBlank;
+  $('#qualify-starter').onclick=async()=>{
+    const decision=await ask({title:'Create a qualification starter?',body:'Creates an unpublished enquiry form with private lead scoring, a draft round-robin event with you as its initial host, routing for ready-to-start leads, and an inactive Flow follow-up draft (speed-to-lead). Review the hosts and wording. Publish the event before publishing the form. Nothing is sent or enabled automatically.',confirm:'Create private starter'});
+    if(!decision)return;
+    try{const kit=await api('POST',wsPath('/forms/qualify-starter'),{request_id:crypto.randomUUID()});await ask({title:'Qualification starter created',body:html`<ol><li><a href="/meet/event-types/${kit.event_type_id}">Review and publish the booking event</a>; add available hosts.</li><li><a href="/forms/${kit.form_id}">Review the form and routing</a>, then publish.</li>${kit.flow_id ? html`<li><a href="/flow/build/${kit.flow_id}">Review the follow-up workflow in Flow</a>, then publish and turn it on.</li>` : html`<li>${kit.flow_note || 'Ask a workspace admin to add the follow-up workflow in Flow.'}</li>`}</ol><p>Nothing is published or switched on.</p>`,confirm:'Open form draft'});ctx.navigate('/forms/'+kit.form_id);}catch(error){toast(error.message);}
+  };
+  $('#ai-draft-form').onclick = () => openAiFormDraft(ctx);
   try {
     const forms = await api('GET', wsPath('/forms'));
     if (!ctx.alive()) return;
@@ -660,15 +799,17 @@ const randomKey = (prefix, taken) => {
 // The add-content picker, by what the creator wants to ask rather than by input control.
 const CONTENT_GROUPS = [
   ['Contact details', ['contact_info', 'email', 'phone']],
-  ['Written answers', ['short_text', 'long_text']],
-  ['Choices', ['single_choice', 'multiple_choice']],
-  ['Dates and pages', ['date', 'question_page', 'page_break']]
+  ['Written answers', ['short_text', 'long_text', 'file_upload']],
+  ['Choices', ['single_choice', 'multiple_choice', 'single_grid', 'multiple_grid']],
+  ['Numbers and ratings', ['number', 'scale']],
+  ['Dates and pages', ['date', 'time', 'question_page', 'page_break']]
 ];
-const CONTENT_LABELS = { ...FIELD_TYPES, contact_info: 'Contact details', email: 'Email address', phone: 'Phone number', short_text: 'Short answer', long_text: 'Long answer', single_choice: 'Choose one', multiple_choice: 'Choose multiple', date: 'Date', question_page: 'Question page', page_break: 'Page break' };
+const CONTENT_LABELS = { ...FIELD_TYPES, contact_info: 'Contact details', email: 'Email address', phone: 'Phone number', short_text: 'Short answer', long_text: 'Long answer', single_choice: 'Choose one', multiple_choice: 'Choose multiple', date: 'Date', time: 'Time', number: 'Number', scale: 'Linear scale', question_page: 'Question page', page_break: 'Page break' };
 const CONTENT_HELP = {
   contact_info: 'Add name, email and phone together', email: 'Collect an email address', phone: 'Collect a phone number',
-  short_text: 'A one-line answer', long_text: 'A longer written answer', single_choice: 'Choose one answer from a list',
-  multiple_choice: 'Choose any that apply', date: 'Pick a calendar date', question_page: 'Start a new page with a question', page_break: 'Split questions across pages'
+  file_upload: 'Collect private PDFs and images', short_text: 'A one-line answer', long_text: 'A longer written answer', single_choice: 'Choose one answer from a list',
+  multiple_choice: 'Choose any that apply', single_grid: 'One choice per row', multiple_grid: 'Multiple choices per row', date: 'Pick a calendar date', time: 'A time of day', number: 'A number, with optional limits', scale: 'Rate on a scale, such as 1 to 5',
+  question_page: 'Start a new page with a question', page_break: 'Split questions across pages'
 };
 
 const SAVE_TEXT = { saved: 'All changes saved', dirty: 'Unsaved edits', saving: 'Saving…', failed: 'Not saved', conflict: 'Not saved: changed elsewhere' };
@@ -679,7 +820,7 @@ const FORM_MODES = {
   match_quiz: { title: 'Match quiz mode', short: 'Match quiz', description: 'Match answers to a personalized result.', icon: 'mode_match' }
 };
 // What the answer area looks like on the question canvas. Choice questions show their options instead.
-const ANSWER_SAMPLES = { short_text: 'Short answer', long_text: 'Longer answer, several lines', email: 'name@example.com', phone: '+91 98765 43210', date: 'dd / mm / yyyy' };
+const ANSWER_SAMPLES = { short_text: 'Short answer', long_text: 'Longer answer, several lines', email: 'name@example.com', phone: '+91 98765 43210', date: 'dd / mm / yyyy', time: '-- : --', number: '0' };
 
 // Images are re-encoded in the browser before upload: this applies the photo's orientation, drops
 // camera and location metadata and keeps files small. The server still checks every byte.
@@ -722,6 +863,14 @@ export async function builder(ctx) {
   let view = 'edit';
   let selectedQuestion = 0;
   let selectedEnding = null; // an ending's position when one is open on the canvas instead of a question
+  // Undo and redo (forms-history.mjs). savedJson is the draft as last saved, so undoing back to it
+  // shows the draft as saved again; saving stays an explicit step.
+  const mac = isMacPlatform();
+  const modKey = mac ? 'Meta' : 'Control';
+  const modLabel = mac ? '⌘' : 'Ctrl';
+  const edits = createHistory();
+  edits.reset(JSON.stringify(draft));
+  let savedJson = JSON.stringify(draft);
 
   document.body.classList.add('form-editor');
   mount(ctx.main, html`<div class="container builder-page" data-surface="content">
@@ -730,7 +879,7 @@ export async function builder(ctx) {
       <nav class="builder-index" id="builder-index" aria-label="Form builder sections"><ul>
         <li><a href="#questions" data-section="questions" aria-current="location">Questions</a></li><li><a href="#design-panel" data-section="design">Design</a></li><li><a href="#workflow-map" data-section="workflow">Logic</a></li><li><a href="#settings" data-section="settings">Settings</a></li>
         <li><a href="#share-panel" data-section="share">Share</a></li><li><a href="/forms/${form.id}/responses" id="responses-link">Responses</a></li></ul></nav>
-      <div class="builder-publish"><div id="builder-status"></div><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
+      <div class="builder-publish"><div id="builder-status"></div><button class="btn" id="preview-from-section" type="button">Preview</button><button class="btn" id="save">Save draft</button><button class="btn btn-primary" id="publish">Publish form</button></div>
     </header>
     <div id="builder-notice" tabindex="-1"></div>
     <div class="visually-hidden" aria-live="polite" id="builder-live"></div>
@@ -741,14 +890,16 @@ export async function builder(ctx) {
             <div class="add-menu-header"><span class="add-menu-header-icon">${formIcon('plus_circle')}</span><span><strong>Add to your form</strong><small>Choose a question type or add a page.</small></span></div>
             <div class="add-menu-groups">${CONTENT_GROUPS.map(([heading, types]) => html`<section class="add-menu-group"><h2 class="add-menu-heading">${heading}</h2><div class="add-menu-options">${types.map(type => html`<button type="button" class="add-menu-item" data-add-type="${type}"><span class="add-menu-icon" data-kind="${TYPE_KIND[type] || 'layout'}">${formIcon(type === 'question_page' ? 'page' : type)}</span><span class="add-menu-item-copy"><strong>${CONTENT_LABELS[type]}</strong><small>${CONTENT_HELP[type]}</small></span></button>`)}</div></section>`)}</div>
           </div></div>
+        <div class="history-tools" role="group" aria-label="Undo and redo"><button class="btn btn-icon" type="button" id="undo-change" aria-label="Undo" aria-keyshortcuts="${modKey}+Z" aria-disabled="true" title="Undo (${modLabel}+Z)">${formIcon('undo')}</button><button class="btn btn-icon" type="button" id="redo-change" aria-label="Redo" aria-keyshortcuts="${modKey}+Shift+Z" aria-disabled="true" title="Redo (${modLabel}+${mac ? '⇧' : 'Shift'}+Z)">${formIcon('redo')}</button></div>
         <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost" type="button" id="open-design" aria-expanded="false" aria-controls="design-panel" title="Typography and themes for this form">${formIcon('design')}<span class="tool-text">Design</span></button>
         <span class="toolbar-divider" aria-hidden="true"></span><div class="preview-devices" role="group" aria-label="Device size"><button type="button" class="btn btn-icon" data-device="desktop" aria-label="Desktop size" title="Desktop size">${formIcon('desktop')}</button><button type="button" class="btn btn-icon" data-device="mobile" aria-label="Mobile size" title="Mobile size">${formIcon('mobile')}</button></div>
         <span class="toolbar-divider" aria-hidden="true"></span><button class="btn btn-ghost builder-preview-toggle" type="button" id="toolbar-preview" data-builder-view="preview" aria-label="Preview form" title="See the form as respondents do. Nothing is saved or sent.">${formIcon('play')}<span class="tool-text">Preview</span></button>
 
+        <button class="btn btn-ghost" type="button" id="question-inspector" aria-controls="fields"></button>
         <details class="overflow-menu toolbar-end"><summary class="btn btn-icon" aria-label="More actions" title="More actions">${formIcon('more')}</summary>
-          <div class="overflow-panel"><button class="btn" type="button" id="import-form">Import JSON as a new form</button><p class="hint overflow-hint">Creates a separate unpublished draft; this form stays unchanged.</p><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
+          <div class="overflow-panel"><button class="btn" type="button" id="show-shortcuts" aria-keyshortcuts="?">Keyboard shortcuts <kbd aria-hidden="true">?</kbd></button><button class="btn" type="button" id="import-form">Import JSON as a new form</button><p class="hint overflow-hint">Creates a separate unpublished draft; this form stays unchanged.</p><button class="btn" type="button" id="export-form">Export form definition</button><p class="hint overflow-hint">A .json file of the saved draft: questions, logic and theme. No responses.</p><button class="btn btn-danger" id="delete-form">Delete form</button></div></details>
       </div>
-      <aside class="form-mode-guide" id="form-mode-guide" hidden></aside>
+      <aside class="form-mode-guide" id="form-mode-guide" hidden></aside><p class="hint" id="form-length-hint" hidden></p>
       <div class="builder" data-view="edit" data-device="desktop">
         <section class="builder-edit" id="builder-edit" aria-label="Form editor"><div id="questions" class="question-workspace">
           <aside class="question-sidebar" aria-labelledby="questions-heading">
@@ -795,20 +946,23 @@ export async function builder(ctx) {
   const announce = text => { $('#builder-live').textContent = ''; setTimeout(() => { $('#builder-live').textContent = text; }, 30); };
   const setState = value => {
     saveState = value;
+    if (value === 'saved') savedJson = JSON.stringify(draft);
     if (value === 'saved') delete document.body.dataset.dirty; else document.body.dataset.dirty = '1';
     renderStatus();
     readiness?.unsaved(value !== 'saved');
   };
-  // One quiet line beside the actions, only when the author has something to act on. A live form whose
-  // saved draft matches it shows nothing; the live version number is in Share. Failures stay prominent.
+  // The header shows the authoring state on every surface, including when the saved draft is live.
   const statusLine = () => {
     if (saveState === 'failed' || saveState === 'conflict') return { tone: 'bad', text: SAVE_TEXT[saveState] };
     if (saveState === 'saving') return { tone: 'quiet', text: SAVE_TEXT.saving };
     if (saveState === 'dirty') return { tone: 'pending', text: SAVE_TEXT.dirty };
-    if (form.published_version) return form.has_unpublished_changes ? { tone: 'pending', text: 'Draft saved · not published' } : null;
+    if (form.published_version) return form.has_unpublished_changes
+      ? { tone: 'pending', text: 'Draft saved · not published' }
+      : { tone: 'quiet', text: `Live · version ${form.published_version}` };
     return { tone: 'quiet', text: form.locked_ids?.length ? 'Closed · not collecting' : 'Not published' };
   };
   const renderStatus = () => {
+    setTitle(`${draft.title || 'Untitled form'} · Forms by Schedora`);
     const line = statusLine();
     const status = $('#builder-status');
     status.dataset.save = saveState;
@@ -841,7 +995,7 @@ export async function builder(ctx) {
       <div class="share-row"><input id="share-link" readonly value="${url}"><button class="btn btn-primary btn-small" type="button" data-copy-target="share-link">Copy link</button><a class="btn btn-small" id="open-live" href="${url}" target="_blank" rel="noopener">Open live form<span class="visually-hidden"> (opens in a new tab)</span></a></div>
       <p class="copy-status" id="share-status" role="status"></p>
       ${isLocalLink(url) ? notice('warn', html`<p><strong>This is a local address.</strong> It opens only on this computer or network, so respondents elsewhere cannot use it. Share the link from your deployed Schedora address instead.</p>`) : ''}
-      <div class="share-row"><a class="btn btn-small" id="share-email" href="${email}" data-external>Email the link</a>${navigator.share ? html`<button class="btn btn-small" type="button" id="share-native">Share…</button>` : ''}</div>
+      <div class="share-row"><a class="btn btn-small" id="share-email" href="${email}" data-external>Email the link</a><a class="btn btn-small" id="share-whatsapp" href="${`https://wa.me/?text=${encodeURIComponent(form.draft.title + ": " + url)}`}" target="_blank" rel="noopener noreferrer" data-external>Share on WhatsApp</a>${navigator.share ? html`<button class="btn btn-small" type="button" id="share-native">Share…</button>` : ''}</div>
       <p class="hint">Email the link opens a new message in your own email app; Schedora does not send it. Copying or sharing does not show that anyone has responded. Accepted responses appear under <a href="/forms/${form.id}/responses">Responses</a>.</p>
       <details class="share-embed"><summary>Conversational link and embed code</summary>
         <label for="share-conv">Conversational link (one question at a time)</label><div class="share-row"><input id="share-conv" readonly value="${publicUrl(form, 'conversational')}"><button class="btn btn-small" type="button" data-copy-target="share-conv">Copy</button></div>
@@ -867,6 +1021,9 @@ export async function builder(ctx) {
     mount($('#preview-params'), html`${form.legacy_text_comparison ? html`<p class="hint" data-preview-policy>This preview shows what the next publish will do. Live version ${form.published_version} compares typed answers exactly as typed until then.</p>` : ''}${keys.length ? html`<div class="preview-params"><p class="hint">Sample link values for this preview. Nothing is recorded.</p>${keys.map(key => html`<label for="pp-${key}">${key}</label><input id="pp-${key}" data-preview-param="${key}" maxlength="${URL_PARAM_LIMITS.value}" autocomplete="off" value="${previewSamples.get(key) || ''}">`)}</div>` : ''}`);
   };
 
+  // Payment and WhatsApp receipt availability for this workspace and server, loaded once (forms-payments.mjs).
+  let paymentReadiness = null;
+  api('GET', wsPath('/forms-payment-readiness')).then(result => { paymentReadiness = result; }, () => { paymentReadiness = { payments: { provider: null, message: 'Payment setup could not be checked. Reload to try again.' }, whatsapp_receipts: { available: false } }; }).finally(() => { if (ctx.alive() && $('#settings')) renderSettings(); });
   const renderSettings = () => mount($('#settings'), html`<div class="card card-plain"><h2 id="settings-heading" tabindex="-1">Form details</h2>
     <div class="form-details"><div>
     <label for="f-title">Form title</label><input id="f-title" data-setting="title" maxlength="150" value="${draft.title}">
@@ -874,7 +1031,20 @@ export async function builder(ctx) {
     <fieldset><legend class="label" id="presentation-legend" tabindex="-1">Presentation</legend>
       <label class="check"><input type="radio" name="presentation" value="classic" data-setting="presentation" ${draft.presentation === 'classic' ? raw('checked') : ''}> Classic: questions grouped into pages</label>
       <label class="check"><input type="radio" name="presentation" value="conversational" data-setting="presentation" ${draft.presentation === 'conversational' ? raw('checked') : ''}> Conversational: one question at a time</label></fieldset>
-    <label for="f-submit">Submit button text</label><input id="f-submit" data-setting="submit_label" maxlength="40" value="${draft.submit_label || 'Submit'}"></div></div></div>`);
+    <label for="f-submit">Submit button text</label><input id="f-submit" data-setting="submit_label" maxlength="40" value="${draft.submit_label || 'Submit'}"></div></div></div>
+    <div class="card card-plain response-controls"><h2 id="responses-settings-heading" tabindex="-1">Collecting responses</h2>
+      <p class="hint">These apply to the live form after you publish. Responses already received are kept.</p>
+      <div class="form-details"><div>
+      <label class="check"><input type="checkbox" data-response-setting="allow_edit" ${draft.responses?.allow_edit ? raw('checked') : ''}> Allow respondents to edit their answers</label>
+      <p class="hint">Available for public forms opened directly, without quizzes or URL parameters. The response receipt includes a private edit link.</p>
+      <label for="f-limit">Stop after this many responses <span class="muted">(optional)</span></label><input id="f-limit" type="number" min="1" max="1000000" step="1" inputmode="numeric" data-response-setting="limit" value="${draft.responses?.limit ?? ''}">
+      <label for="f-open">Start accepting responses at <span class="muted">(optional, your local time)</span></label><input id="f-open" type="datetime-local" data-response-setting="open_at" value="${draft.responses?.open_at ? localDateTime(draft.responses.open_at) : ''}">
+      <label for="f-close">Stop accepting responses at <span class="muted">(optional, your local time)</span></label><input id="f-close" type="datetime-local" data-response-setting="close_at" value="${draft.responses?.close_at ? localDateTime(draft.responses.close_at) : ''}">
+      <label for="f-closed-message">Message when the form is closed <span class="muted">(optional)</span></label><textarea id="f-closed-message" rows="2" data-response-setting="closed_message" maxlength="${CLOSED_MESSAGE_LIMIT}" placeholder="This form is no longer accepting responses.">${draft.responses?.closed_message || ''}</textarea>
+      </div></div></div>${paymentSettingsCard(draft, paymentReadiness)}
+    <div class="card card-plain"><h2 id="automations-heading">After submit: automations</h2><p class="hint">Follow up on responses with Flow: send a booking link, wait for a booking, assign an owner or create tasks. Workflows start only on completed responses (after payment for paid forms).</p><a class="btn btn-small" href="/flow?form=${form.id}">Automate follow-up in Flow</a></div>`);
+  // A timestamp as the value of a datetime-local input, in the browser's time zone.
+  const localDateTime = at => { const date = new Date(at); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
 
   // Who can respond (docs/FORMS.md, "Respondent sign-in"). It belongs to the form, not the draft, so it applies
   // to the live form at once and is confirmed first.
@@ -1069,7 +1239,7 @@ export async function builder(ctx) {
       return html`<li class="jump-rule" data-jump="${position}">
         ${compound ? html`<p class="hint">This rule combines conditions, and is kept as written.</p>` : html`
           <label for="${prefix}jf-${position}">When</label><select id="${prefix}jf-${position}" data-jump-field aria-label="${name}: question">${position === rules.length - 1 ? html`<option value="" ${rule.when ? '' : raw('selected')}>Always</option>` : ''}${askable.map(candidate => html`<option value="${candidate.id}" ${candidate.id === rule.when?.field ? raw('selected') : ''}>${candidate.label.slice(0, 50)}</option>`)}${paramOptions(rule.when?.param)}</select>
-          ${rule.when ? html`<select data-jump-op aria-label="${name}: rule">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${op === rule.when.op ? raw('selected') : ''}>${label}</option>`)}</select>
+          ${rule.when ? html`<select data-jump-op aria-label="${name}: rule">${conditionOptions(asked).map(([op, label]) => html`<option value="${op}" ${op === rule.when.op ? raw('selected') : ''}>${label}</option>`)}</select>
             ${['answered', 'not_answered'].includes(rule.when.op) ? '' : asked?.type.endsWith('_choice')
               ? html`<select data-jump-value aria-label="${name}: value">${asked.options.map(option => html`<option value="${option.id}" ${option.id === rule.when.value ? raw('selected') : ''}>${option.label}</option>`)}</select>`
               : html`<input data-jump-value aria-label="${name}: value" value="${rule.when.value || ''}">`}` : ''}`}
@@ -1096,7 +1266,7 @@ export async function builder(ctx) {
       const removed = rule.hide.filter(id => !field.options?.some(option => option.id === id));
       return html`<li class="jump-rule choice-rule" data-choice-rule="${position}">
         <label for="wf-crf-${position}">If</label><select id="wf-crf-${position}" data-cr-field aria-label="${name}: question">${asked || declaredParams(draft).some(param => param.key === rule.when.param) ? '' : html`<option value="" selected>${rule.when.param != null ? 'A URL parameter no longer declared' : 'A question no longer before this one'}</option>`}${sources.map(candidate => html`<option value="${candidate.id}" ${candidate === asked ? raw('selected') : ''}>${candidate.label.slice(0, 50)}</option>`)}${paramOptions(rule.when.param)}</select>
-        <select data-cr-op aria-label="${name}: rule">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${op === rule.when.op ? raw('selected') : ''}>${label}</option>`)}</select>
+        <select data-cr-op aria-label="${name}: rule">${conditionOptions(asked).map(([op, label]) => html`<option value="${op}" ${op === rule.when.op ? raw('selected') : ''}>${label}</option>`)}</select>
         ${['answered', 'not_answered'].includes(rule.when.op) ? '' : asked?.type.endsWith('_choice')
           ? html`<select data-cr-value aria-label="${name}: value">${asked.options.some(option => option.id === rule.when.value) ? '' : html`<option value="" selected>An option that was removed</option>`}${asked.options.map(option => html`<option value="${option.id}" ${option.id === rule.when.value ? raw('selected') : ''}>${option.label}</option>`)}</select>`
           : html`<input data-cr-value aria-label="${name}: value" value="${rule.when.value || ''}">`}
@@ -1143,13 +1313,16 @@ export async function builder(ctx) {
   // Workflow: the map of what leads where, and the same jump editor as the inspector beside it, so one
   // set of rules is edited and drawn. Selecting here selects in Content too.
   const workflowActive = () => $('.builder-page').dataset.surface === 'workflow';
+  // The summary line stays current on every surface (status and checks read it); the map itself is
+  // drawn only while Logic is shown.
   const renderWorkflowMap = () => {
-    if (!workflowActive()) return;
     const map = logicMapModel(draft);
     const sentences = key => map.jumps.filter(jump => jump.from === key);
     const hides = key => map.choices.filter(rule => rule.field === key);
     const conflictsOf = key => map.conflicts.filter(conflict => conflict.field === key);
     const orphans = map.conflicts.filter(conflict => conflict.rule === null);
+    mount($('#workflow-summary'), html`${map.jumps.length} jump rule${map.jumps.length === 1 ? '' : 's'}.${map.choices.length ? ` ${map.choices.length} hide-choice rule${map.choices.length === 1 ? '' : 's'}.` : ''}${map.unreached.length ? ` ${map.unreached.length} item${map.unreached.length === 1 ? '' : 's'} no path leads to.` : ' Every item can be reached.'}${map.conflicts.length ? html` <strong data-conflict-count>${map.conflicts.length} hide-choice conflict${map.conflicts.length === 1 ? '' : 's'} to fix before publishing.</strong>` : ''}${orphans.length ? html` ${orphans[0].message} <button class="btn btn-small" type="button" data-cr-orphans>Remove</button>` : ''}`);
+    if (!workflowActive()) return;
     mount($('#workflow-nodes'), html`${map.nodes.map(node => html`<li class="workflow-node${node.member ? ' is-member' : ''}${node.reached ? '' : ' is-unreached'}" data-map-node="${node.key}">
         ${node.kind === 'ending' || node.kind === 'end' ? html`<div class="workflow-end"><span class="q-badge" data-kind="layout">${formIcon('ending')}</span><span>${node.label}${node.defaultEnding ? html` <span class="muted">· default</span>` : ''}</span></div>`
           : html`<button type="button" class="workflow-select" data-map-select="${node.index}" aria-pressed="${String(node.index === selectedQuestion)}"><span class="q-badge" data-kind="${TYPE_KIND[node.type]}">${formIcon(node.kind === 'page' ? 'page' : node.type)}${node.mark ? html`<span class="question-row-number">${node.mark}</span>` : ''}</span><span>${node.label}</span></button>`}
@@ -1157,7 +1330,6 @@ export async function builder(ctx) {
         ${sentences(node.key).length ? html`<ul class="workflow-rules">${sentences(node.key).map(jump => html`<li>${jump.sentence}</li>`)}</ul>` : ''}
         ${hides(node.key).length ? html`<ul class="workflow-rules" data-map-hides>${hides(node.key).map(rule => html`<li>${rule.sentence}</li>`)}</ul>` : ''}
         ${conflictsOf(node.key).map(conflict => html`<p class="workflow-note" data-map-conflict>${conflict.message}</p>`)}</li>`)}`);
-    mount($('#workflow-summary'), html`${map.jumps.length} jump rule${map.jumps.length === 1 ? '' : 's'}.${map.choices.length ? ` ${map.choices.length} hide-choice rule${map.choices.length === 1 ? '' : 's'}.` : ''}${map.unreached.length ? ` ${map.unreached.length} item${map.unreached.length === 1 ? '' : 's'} no path leads to.` : ' Every item can be reached.'}${map.conflicts.length ? html` <strong data-conflict-count>${map.conflicts.length} hide-choice conflict${map.conflicts.length === 1 ? '' : 's'} to fix before publishing.</strong>` : ''}${orphans.length ? html` ${orphans[0].message} <button class="btn btn-small" type="button" data-cr-orphans>Remove</button>` : ''}`);
     drawWorkflowArcs(map);
   };
   // The jumps as arcs beside the list. Decorative: every jump is also written under its question.
@@ -1219,13 +1391,24 @@ export async function builder(ctx) {
   // Question and Answer start open; Media and Logic stay one line until they hold something. A section
   // the author opened or closed stays that way while moving between questions.
   const sectionChoice = new Map();
-  const inspectorSection = (key, title, body, used = true) => html`<details class="inspector-section" data-inspector="${key}" ${sectionChoice.get(key) ?? used ? raw('open') : ''}><summary>${title}</summary>${body}</details>`;
+  const inspectorSection = (key, title, body, used = true) => html`<details class="inspector-section" data-inspector="${key}" ${sectionChoice.get(key) ?? used ? raw('open') : ''}><summary>${formIcon({ question: 'settings', answer: 'check', media: 'play', logic: 'logic' }[key])}<span>${title}</span></summary><div class="inspector-fields">${body}</div></details>`;
   // The answer area of a question, the same on its own canvas and inside a page.
-  const answerArea = (field, index, name) => field.type.endsWith('_choice') ? html`<fieldset class="canvas-options"><legend class="visually-hidden">Options</legend>${field.options.map((option, optionIndex) => html`<div class="canvas-option-row"><span class="canvas-option-key" aria-hidden="true">${String.fromCharCode(65 + optionIndex % 26)}</span><input class="canvas-option" aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}">${draft.mode === 'knowledge_quiz' ? html`<label class="quiz-correct-toggle"><input type="checkbox" data-correct-option="${optionIndex}" ${option.correct ? raw('checked') : ''}><span>Correct</span></label>` : ''}${option.image ? html`<span class="row"><img class="option-thumb" src="${workspaceAssetUrl(option.image.asset)}" alt=""><button class="btn btn-small" type="button" data-option-image-remove="${optionIndex}" aria-label="Remove the picture from option ${optionIndex + 1}">Remove picture</button></span>`
+  const gridEditor = (field, name) => ['rows', 'columns'].map(part => {
+    const singular = part === 'rows' ? 'row' : 'column';
+    const items = field.grid[part];
+    return html`<fieldset class="grid-editor"><legend>${part === 'rows' ? 'Rows' : 'Columns'}</legend>
+      ${items.map((item, index) => html`<div class="canvas-option-row">
+        <input class="canvas-option" aria-label="${singular} ${index + 1} of ${name}" maxlength="${GRID_LIMITS.label}" data-grid-part="${part}" data-grid-index="${index}" value="${item.label}">
+        <button type="button" class="btn btn-icon" data-grid-remove="${part}" data-grid-index="${index}" aria-label="Remove ${singular} ${index + 1}" ${items.length === 1 ? raw('disabled') : ''}>${formIcon('trash')}</button>
+      </div>`)}
+      <button type="button" class="btn-link" data-grid-add="${part}" ${items.length >= GRID_LIMITS[part] ? raw('disabled') : ''}>Add ${singular}</button>
+    </fieldset>`;
+  });
+  const answerArea = (field, index, name) => field.type === 'file_upload' ? html`<div class="canvas-answer">PDFs and images · up to 2 files, 2 MB each</div>${!boot.formUploads ? html`<p class="hint">Connect private storage and file scanning before publishing.</p>` : ''}` : isGrid(field) ? gridEditor(field, name) : field.type.endsWith('_choice') ? html`<fieldset class="canvas-options"><legend class="visually-hidden">Options</legend>${field.options.map((option, optionIndex) => html`<div class="canvas-option-row"><span class="canvas-option-key" data-shape="${field.type === 'multiple_choice' ? 'box' : 'circle'}" aria-hidden="true"></span><input class="canvas-option" aria-label="Option ${optionIndex + 1} of ${name}" data-option="${optionIndex}" maxlength="200" value="${option.label}">${draft.mode === 'knowledge_quiz' ? html`<label class="quiz-correct-toggle"><input type="checkbox" data-correct-option="${optionIndex}" ${option.correct ? raw('checked') : ''}><span>Correct</span></label>` : ''}${draft.mode === 'lead_qualification' ? html`<label class="lead-option-points">Points<input type="number" min="0" max="100" step="1" data-lead-points="${optionIndex}" aria-label="Lead points for option ${optionIndex + 1}" value="${option.lead_points ?? 0}"></label>` : ''}${option.image ? html`<span class="row"><img class="option-thumb" src="${workspaceAssetUrl(option.image.asset)}" alt=""><button class="btn btn-small" type="button" data-option-image-remove="${optionIndex}" aria-label="Remove the picture from option ${optionIndex + 1}">Remove picture</button></span>`
       : html`<label class="btn btn-small file-button">Picture<span class="visually-hidden"> for option ${optionIndex + 1}</span><input type="file" accept="${IMAGE_TYPES.join(',')}" data-option-file="${optionIndex}" class="visually-hidden"></label>`}
       <button class="btn btn-icon" data-remove-option="${optionIndex}" aria-label="Remove option ${optionIndex + 1}" title="Remove option" ${field.options.length === 1 ? raw('disabled') : ''}>${formIcon('trash')}</button></div>`)}
     ${field.options.some(option => option.image) ? html`<p class="hint">Pictures appear above each option's text. Answers, logic and exports use the option text, not the picture.</p>` : ''}
-    <button class="btn-link" data-add-option>Add option</button></fieldset>` : html`<div class="canvas-answer" aria-hidden="true">${field.placeholder || ANSWER_SAMPLES[field.type] || 'Answer'}</div>`;
+    <button class="btn-link" data-add-option>Add option</button></fieldset>` : field.type === 'scale' ? (scale => html`<div class="canvas-scale" aria-hidden="true">${scale.min_label ? html`<span>${scale.min_label}</span>` : ''}${Array.from({ length: scale.max - scale.min + 1 }, (_, at) => html`<span class="canvas-scale-point">${scale.min + at}</span>`)}${scale.max_label ? html`<span>${scale.max_label}</span>` : ''}</div>`)(scaleOf(field)) : html`<div class="canvas-answer" aria-hidden="true">${field.placeholder || ANSWER_SAMPLES[field.type] || 'Answer'}</div>`;
   const itemName = index => {
     const field = draft.fields[index];
     if (field.grouped) return `page “${field.label || 'Untitled page'}”`;
@@ -1249,9 +1432,15 @@ export async function builder(ctx) {
           <div class="canvas-member-head"><label class="visually-hidden" for="fl-${index}">Question ${marks[index]}</label><textarea id="fl-${index}" class="canvas-member-label" data-prop="label" rows="1" maxlength="300" placeholder="Your question here">${field.label}</textarea>${field.required ? html`<span class="required-mark" aria-hidden="true">*</span>` : ''}</div>
           ${answerArea(field, index, `question ${marks[index]}`)}</div>`)}
         ${members.length ? '' : html`<p class="hint canvas-member">No questions on this page yet. Use Add content while the page is selected.</p>`}
-        <span class="canvas-button canvas-page-button" aria-hidden="true">OK</span></div></div></section>`;
+        <span class="canvas-button canvas-page-button" aria-hidden="true">${blockEnd(draft.fields, headAt) >= draft.fields.length ? draft.submit_label || 'Submit' : 'Next'}</span></div></div></section>`;
   };
   const renderFields = () => {
+    const lengthHint=$('#form-length-hint');
+    if(lengthHint) {
+      const count=draft.fields.filter(field=>!['page_break','statement'].includes(field.type)).length;
+      lengthHint.hidden=count<=10;
+      lengthHint.textContent=count>10 ? `${count} questions. Consider removing nonessential questions or using pages and logic to shorten each respondent’s path.` : '';
+    }
     selectedQuestion = Math.max(0, Math.min(selectedQuestion, draft.fields.length - 1));
     if (draft.fields[selectedQuestion]?.group != null) collapsedPages.delete(draft.fields[selectedQuestion].group);
     if (!draft.endings?.[selectedEnding]) selectedEnding = null;
@@ -1269,17 +1458,17 @@ export async function builder(ctx) {
       // one data-index, so every editing control is handled the same way in either.
       const page = field.grouped ? field : field.group != null ? draft.fields.find(candidate => candidate.id === field.group) : null;
       const canvas = page ? pageCanvas(page, index) : html`<section class="field-editor question-canvas ${pageBreak ? 'page-break' : ''}" data-index="${index}" aria-label="Edit ${name}">${canvasTools(field, index)}
-        <div class="canvas-frame"><div class="canvas-body">${pageBreak ? html`<p class="canvas-page-break">Page break</p><p class="hint">Questions after this start a new page in classic presentation, and a jump can go to it.</p>` : html`
+        <div class="canvas-frame">${pageBreak ? '' : html`<p class="canvas-kind" data-kind="${TYPE_KIND[field.type] || 'layout'}"><span class="canvas-kind-icon" aria-hidden="true">${formIcon(field.type)}</span>${CONTENT_LABELS[field.type] || FIELD_TYPES[field.type]}${field.type === 'single_choice' && field.display === 'dropdown' ? ' · dropdown' : ''}${field.required ? html`<span class="canvas-kind-required">Required</span>` : ''}</p>`}<div class="canvas-body">${pageBreak ? html`<p class="canvas-page-break">Page break</p><p class="hint">Questions after this start a new page in classic presentation, and a jump can go to it.</p>` : html`
           <div class="canvas-question-row">
             <span class="canvas-number">${number}</span>
             <div><label class="visually-hidden" for="fl-${index}">Question</label><textarea id="fl-${index}" class="canvas-question" data-prop="label" rows="1" maxlength="300" placeholder="Your question here" aria-describedby="fl-${index}-hint">${field.label}</textarea>
               <label class="visually-hidden" for="fh-${index}">Description (optional)</label><textarea id="fh-${index}" class="canvas-description" data-prop="help" rows="1" ${limitAttributes(`fh-${index}`, DESCRIPTION_LIMITS.question)} placeholder="Description (optional)">${field.help || ''}</textarea>${characterCount(`fh-${index}`, field.help, DESCRIPTION_LIMITS.question)}</div>
             ${field.media?.type === 'image' ? html`<img class="canvas-media" src="${workspaceAssetUrl(field.media.asset)}" alt="">` : field.media?.type === 'video' ? html`<p class="canvas-note">${VIDEO_PROVIDERS[field.media.provider]} video placeholder</p>` : ''}
-            <div class="canvas-answer-area">${answerArea(field, index, name)}<span class="canvas-button" aria-hidden="true">OK</span></div>
+            <div class="canvas-answer-area">${answerArea(field, index, name)}<span class="canvas-button" aria-hidden="true">${index === draft.fields.length - 1 ? draft.submit_label || 'Submit' : 'Next'}</span></div>
           </div>`}</div></div>
       </section>`;
       return html`${canvas}<aside class="question-settings" data-index="${index}" aria-labelledby="question-settings-heading">
-        <h3 class="visually-hidden" id="question-settings-heading">${pageBreak ? 'Page settings' : 'Question settings'}</h3>
+        <header class="question-settings-header"><h3 id="question-settings-heading">${pageBreak ? 'Page options' : 'Question options'}</h3><p>${pageBreak ? `Page break ${index + 1}` : `Question ${number} · ${FIELD_TYPES[field.type]}`}</p></header>
         ${field.grouped ? html`<div class="inspector-section inspector-note"><p class="hint">Edit this page's title and description on the canvas. Choose a question on it to change that question's settings.</p></div>` : ''}
         ${pageBreak ? '' : inspectorSection('question', 'Question', html`
           <label for="ft-${index}">Type</label><select id="ft-${index}" data-type aria-describedby="ft-${index}-note">${typeChoices(field).map(type => html`<option value="${type}" ${type === field.type ? raw('selected') : ''}>${FIELD_TYPES[type]}</option>`)}</select>
@@ -1291,7 +1480,26 @@ export async function builder(ctx) {
             <p class="hint">${prefillProblem(field) ? html`Prefilled links: not available. ${prefillProblem(field)}` : html`Prefilled links fill this question with <code>answer.${field.id}=…</code>. Build one under Share.`}</p>
             ${locked.has(field.id) ? html`<p class="hint" id="key-locked-${index}">The key is fixed because a published version uses it, so earlier answers stay matched to this question.</p>` : ''}</details>`)}
         ${pageBreak ? '' : inspectorSection('answer', 'Answer', html`<label class="check"><input type="checkbox" data-prop="required" ${field.required ? raw('checked') : ''}> Required</label>${['short_text', 'long_text', 'email', 'phone'].includes(field.type) ? html`<label for="fp-${index}">Placeholder <span class="muted">(optional)</span></label><input id="fp-${index}" data-prop="placeholder" maxlength="100" value="${field.placeholder || ''}">` : ''}
-          ${answerRuleLimit(field.type) ? html`<fieldset class="answer-validation"><legend>Response validation</legend>
+          ${field.type === 'single_choice' ? html`<label class="check"><input type="checkbox" data-display ${field.display === 'dropdown' ? raw('checked') : ''} ${field.options.some(option => option.image) ? raw('disabled') : ''}> Show as a dropdown</label>${field.options.some(option => option.image) ? html`<p class="hint">Options with pictures are always shown as a list.</p>` : ''}` : ''}
+          ${field.type === 'number' ? html`<fieldset class="answer-validation"><legend>Number limits</legend>
+            <label for="number-min-${index}">Smallest allowed</label><input id="number-min-${index}" type="number" step="any" data-number="min" value="${field.number?.min ?? ''}">
+            <label for="number-max-${index}">Largest allowed</label><input id="number-max-${index}" type="number" step="any" data-number="max" value="${field.number?.max ?? ''}">
+            <label class="check"><input type="checkbox" data-number="integer" ${field.number?.integer ? raw('checked') : ''}> Whole numbers only</label>
+            <label for="number-message-${index}">Custom error message</label><input id="number-message-${index}" maxlength="200" data-number="message" value="${field.number?.message ?? ''}"></fieldset>` : ''}
+          ${field.type === 'scale' ? (scale => html`<fieldset class="answer-validation"><legend>Scale</legend>
+            <div class="row"><span><label for="scale-min-${index}">From</label><select id="scale-min-${index}" data-scale="min">${SCALE_LIMITS.min.map(value => html`<option value="${value}" ${scale.min === value ? raw('selected') : ''}>${value}</option>`)}</select></span>
+            <span><label for="scale-max-${index}">To</label><select id="scale-max-${index}" data-scale="max">${Array.from({ length: SCALE_LIMITS.max[1] - SCALE_LIMITS.max[0] + 1 }, (_, at) => SCALE_LIMITS.max[0] + at).map(value => html`<option value="${value}" ${scale.max === value ? raw('selected') : ''}>${value}</option>`)}</select></span></div>
+            <label for="scale-low-${index}">Label for ${scale.min} <span class="muted">(optional)</span></label><input id="scale-low-${index}" maxlength="${SCALE_LIMITS.label}" data-scale="min_label" value="${scale.min_label}" placeholder="e.g. Not likely">
+            <label for="scale-high-${index}">Label for ${scale.max} <span class="muted">(optional)</span></label><input id="scale-high-${index}" maxlength="${SCALE_LIMITS.label}" data-scale="max_label" value="${scale.max_label}" placeholder="e.g. Very likely"></fieldset>`)(scaleOf(field)) : ''}
+          ${draft.mode === 'knowledge_quiz' && field.type.endsWith('_choice') ? html`<fieldset class="answer-validation"><legend>Quiz feedback <span class="muted">(shown after submitting)</span></legend>
+            <label for="feedback-right-${index}">When the answer is correct</label><input id="feedback-right-${index}" maxlength="${FEEDBACK_LIMIT}" data-feedback="correct" value="${field.feedback?.correct ?? ''}">
+            <label for="feedback-wrong-${index}">When the answer is not correct</label><input id="feedback-wrong-${index}" maxlength="${FEEDBACK_LIMIT}" data-feedback="incorrect" value="${field.feedback?.incorrect ?? ''}">
+            <p class="hint">Respondents see their score, which questions they got right and this feedback. The correct options stay hidden.</p></fieldset>` : ''}
+          ${field.type === 'date' ? html`<fieldset class="answer-validation"><legend>Response validation</legend>
+            <label for="validation-min-${index}">Earliest date</label><input id="validation-min-${index}" type="date" data-answer-rule="min" value="${field.answer_rule?.min ?? ''}">
+            <label for="validation-max-${index}">Latest date</label><input id="validation-max-${index}" type="date" data-answer-rule="max" value="${field.answer_rule?.max ?? ''}">
+            <label for="validation-message-${index}">Custom error message</label><input id="validation-message-${index}" maxlength="200" data-answer-rule="message" value="${field.answer_rule?.message ?? ''}"></fieldset>`
+            : answerRuleLimit(field.type) ? html`<fieldset class="answer-validation"><legend>Response validation</legend>
             ${['min', 'max'].map((bound, at) => html`<label for="validation-${bound}-${index}">${at ? 'Maximum' : 'Minimum'} ${field.type === 'multiple_choice' ? 'selections' : 'characters'}</label>
             <input id="validation-${bound}-${index}" type="number" min="1" max="${answerRuleLimit(field.type)}" step="1" data-answer-rule="${bound}" value="${field.answer_rule?.[bound] ?? ''}">`)}
             <label for="validation-message-${index}">Custom error message</label><input id="validation-message-${index}" maxlength="200" data-answer-rule="message" value="${field.answer_rule?.message ?? ''}">
@@ -1301,7 +1509,7 @@ export async function builder(ctx) {
           <label class="check"><input type="checkbox" data-logic ${field.show_if ? raw('checked') : ''} ${earlier.length ? '' : raw('disabled')}> ${pageBreak ? 'Show this page only when…' : 'Show only when…'}</label>
           ${field.show_if ? html`<div class="row">
             <select data-cond="field" aria-label="Earlier question">${earlier.map(candidate => html`<option value="${candidate.id}" ${candidate.id === field.show_if.field ? raw('selected') : ''}>${candidate.label.slice(0, 50)}</option>`)}</select>
-            <select data-cond="op" aria-label="Rule">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${op === field.show_if.op ? raw('selected') : ''}>${label}</option>`)}</select>
+            <select data-cond="op" aria-label="Rule">${conditionOptions(source).map(([op, label]) => html`<option value="${op}" ${op === field.show_if.op ? raw('selected') : ''}>${label}</option>`)}</select>
             ${['answered', 'not_answered'].includes(field.show_if.op) ? '' : source?.type?.endsWith('_choice')
               ? html`<select data-cond="value" aria-label="Value">${source.options.map(option => html`<option value="${option.id}" ${option.id === field.show_if.value ? raw('selected') : ''}>${option.label}</option>`)}</select>`
               : html`<input data-cond="value" aria-label="Value" value="${field.show_if.value || ''}">`}</div>
@@ -1364,9 +1572,34 @@ export async function builder(ctx) {
   const outlineOpen = () => $('.question-sidebar').classList.contains('outline-open');
   const showOutline = open => {
     $('.question-sidebar').classList.toggle('outline-open', open);
+    if (open && narrowOutline()) setQuestionPane('edit');
     $('#outline-toggle').setAttribute('aria-expanded', String(open));
     if (open) ($('#outline-panel [aria-pressed="true"]') || $('#outline-panel .question-select'))?.scrollIntoView({ block: 'nearest' });
   };
+  const inspectorButton = $('#question-inspector');
+  const setQuestionPane = pane => {
+    $('.builder').dataset.questionPane = pane;
+    const options = pane === 'options';
+    const label = options ? 'Back to question' : 'Question options';
+    inspectorButton.setAttribute('aria-label', label);
+    inspectorButton.title = label;
+    mount(inspectorButton, html`${formIcon(options ? 'edit' : 'settings')}<span class="tool-text">${label}</span>`);
+  };
+  setQuestionPane('edit');
+  inspectorButton.onclick = () => {
+    const opening = $('.builder').dataset.questionPane !== 'options';
+    showOutline(false);
+    setQuestionPane(opening ? 'options' : 'edit');
+    if (opening) $('#fields .question-settings :is(select, summary, input, button)')?.focus();
+    else ($('#fields [data-prop="label"], #fields [data-ending-prop="title"]') || inspectorButton).focus();
+  };
+  $('#fields').addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !event.target.closest('.question-settings')
+        || $('.builder').dataset.questionPane !== 'options') return;
+    event.preventDefault();
+    setQuestionPane('edit');
+    inspectorButton.focus();
+  });
   $('#outline-toggle').onclick = () => {
     showOutline(!outlineOpen());
     if (outlineOpen()) ($('#outline-panel [aria-pressed="true"]') || $('#outline-panel .question-select'))?.focus();
@@ -1496,6 +1729,16 @@ export async function builder(ctx) {
     announce(text);
     toast(text);
   };
+  // Every change to the draft passes through refresh() (or the theme's setTheme), which records it.
+  // Typing is recorded as 'text' so a burst in one control is one step; anything else is its own step.
+  const renderHistoryButtons = () => {
+    $('#undo-change')?.setAttribute('aria-disabled', String(!edits.canUndo));
+    $('#redo-change')?.setAttribute('aria-disabled', String(!edits.canRedo));
+  };
+  const trackEdit = (kind, target = document.activeElement) => {
+    edits.record(JSON.stringify(draft), { question: selectedQuestion, ending: selectedEnding }, { kind, target });
+    renderHistoryButtons();
+  };
   const refresh = ({ fields = false, preview = true } = {}) => {
     // A moved or deleted question, option or ending can leave a jump with nowhere valid to go.
     const removed = fields ? pruneLogic(draft) : 0;
@@ -1507,6 +1750,7 @@ export async function builder(ctx) {
     if (fields) renderWorkflow(); else renderWorkflowMap();
     if (preview) renderPreview();
     setState('dirty');
+    trackEdit(fields ? 'change' : 'text');
   };
 
   const renderModePicker = () => {
@@ -1522,7 +1766,7 @@ export async function builder(ctx) {
     if (mode === 'universal') { guide.hidden = true; guide.replaceChildren(); return; }
     guide.hidden = false;
     const content = {
-      lead_qualification: html`<div><p class="form-mode-eyebrow">Lead qualification</p><h2>Ask the questions that help you follow up</h2><p>Collect a person's needs, timing, and fit. Use Workflow to send each answer to a useful next question or result.</p></div><button class="btn" type="button" data-mode-workflow>Set up workflow</button>`,
+      lead_qualification: html`<div><p class="form-mode-eyebrow">Lead qualification</p><h2>Prioritize the right conversations</h2><p>Assign points to choice answers. Your team sees the score and why; respondents do not.</p><label><input type="checkbox" data-lead-enabled ${draft.lead_scoring ? raw('checked') : ''}> Enable lead scoring</label>${draft.lead_scoring ? html`<div class="lead-score-thresholds"><label>Warm from<input type="number" min="0" max="9999" data-lead-threshold="warm" value="${draft.lead_scoring.warm}"></label><label>Hot from<input type="number" min="1" max="10000" data-lead-threshold="hot" value="${draft.lead_scoring.hot}"></label></div><p>Below Warm is Cold. Thresholds and points are published with this form version.</p>` : ''}</div><button class="btn" type="button" data-mode-workflow>Set up workflow</button>`,
       knowledge_quiz: html`<div><p class="form-mode-eyebrow">Knowledge quiz</p><h2>Choose the right answers</h2><p>Add a choice question, then mark each correct option in the question. Respondents see their score after submitting.</p></div><button class="btn btn-small" type="button" data-mode-first-choice>Add a choice question</button>`,
       match_quiz: html`<div><p class="form-mode-eyebrow">Match quiz</p><h2>Give people a result that fits</h2><p>Start with editable questions and result pages. Answers are matched to results using rules you can change in Workflow.</p><div class="form-mode-actions"><button class="btn btn-primary" type="button" data-match-preset="recommendation">Set up a recommendation quiz</button><button class="btn" type="button" data-match-preset="personality">Set up a personality quiz</button><button class="btn btn-ghost" type="button" data-mode-workflow>Open Workflow</button></div></div><div class="form-mode-example" aria-hidden="true"><strong>When someone chooses…</strong><span>Gold</span><i></i><strong>Show the matching result</strong></div>`
     }[mode];
@@ -1589,6 +1833,24 @@ export async function builder(ctx) {
       $('#access-status').textContent = access === 'signin' ? 'Saved. Respondents now sign in before answering.' : 'Saved. Anyone with the link can respond.';
     } catch (error) { renderAccess(); $('#access-status').textContent = `Not changed. ${error.message}`; }
   });
+  $('#settings').addEventListener('change', event => {
+    if (applyPaymentSetting(draft, event.target)) {
+      // Toggles add or remove controls; focus returns to the same toggle for keyboard users.
+      if (event.target.type === 'checkbox') { const { paymentSetting, receiptSetting } = event.target.dataset; renderSettings(); $(paymentSetting ? `[data-payment-setting="${paymentSetting}"]` : `[data-receipt-setting="${receiptSetting}"]`)?.focus(); }
+      refresh(); return;
+    }
+    const key = event.target.dataset.responseSetting;
+    if (!key) return;
+    const settings = { ...draft.responses };
+    const value = event.target.value.trim();
+    if (key === 'allow_edit') { if (event.target.checked) settings.allow_edit = true; else delete settings.allow_edit; queueMicrotask(() => { renderSettings(); $('[data-response-setting="allow_edit"]')?.focus(); }); }
+    else if (!value) delete settings[key];
+    else if (key === 'limit') { const limit = Math.trunc(Number(value)); if (limit >= 1) settings.limit = Math.min(limit, 1000000); else delete settings.limit; }
+    else if (key === 'close_at' || key === 'open_at') { const at = new Date(value).getTime(); if (Number.isFinite(at)) settings[key] = at; else delete settings[key]; }
+    else settings.closed_message = value.slice(0, CLOSED_MESSAGE_LIMIT);
+    if (Object.keys(settings).length) draft.responses = settings; else delete draft.responses;
+    refresh();
+  });
   $('#settings').addEventListener('input', event => {
     const key = event.target.dataset.setting;
     if (!key) return;
@@ -1604,10 +1866,21 @@ export async function builder(ctx) {
     if (!button) return;
     const mode = button.dataset.formMode;
     if (mode === 'universal') delete draft.mode; else draft.mode = mode;
+    if (mode !== 'lead_qualification') delete draft.lead_scoring;
     $('#form-mode-picker').open = false;
     renderModePicker(); renderModeGuide();
     refresh({ fields: true });
     $('#form-mode-picker > summary').focus();
+  });
+  $('#form-mode-guide').addEventListener('change', event => {
+    if (event.target.hasAttribute('data-lead-enabled')) {
+      if (event.target.checked) draft.lead_scoring = { warm: 25, hot: 50 };
+      else delete draft.lead_scoring;
+      renderModeGuide(); refresh({ fields: true });
+    } else if (event.target.dataset.leadThreshold && draft.lead_scoring) {
+      draft.lead_scoring[event.target.dataset.leadThreshold] = event.target.valueAsNumber;
+      refresh();
+    }
   });
   $('#form-mode-guide').addEventListener('click', event => {
     const preset = event.target.closest('[data-match-preset]');
@@ -1624,7 +1897,8 @@ export async function builder(ctx) {
     const editor = event.target.closest('[data-index]');
     if (!editor) return;
     const field = draft.fields[Number(editor.dataset.index)];
-    const { prop, option, cond } = event.target.dataset;
+    const { prop, option, cond, gridPart, gridIndex } = event.target.dataset;
+    if (gridPart) { field.grid[gridPart][Number(gridIndex)].label = event.target.value; return refresh(); }
     if (prop === 'placeholder') { if (event.target.value) field.placeholder = event.target.value; else delete field.placeholder; return refresh(); }
     if (prop === 'label' || prop === 'help') {
       field[prop] = event.target.value;
@@ -1651,11 +1925,45 @@ export async function builder(ctx) {
     const index = Number(editor.dataset.index);
     const field = draft.fields[index];
     const { prop, cond } = event.target.dataset;
+    if (event.target.dataset.leadPoints !== undefined) {
+      field.options[Number(event.target.dataset.leadPoints)].lead_points = event.target.valueAsNumber;
+      refresh(); return;
+    }
     const ruleKey = event.target.dataset.answerRule;
+    const { number: numberKey, scale: scaleKey, feedback: feedbackKey } = event.target.dataset;
+    if (numberKey) {
+      const limits = { ...field.number };
+      if (numberKey === 'integer') { if (event.target.checked) limits.integer = true; else delete limits.integer; }
+      else if (event.target.value === '' || (numberKey !== 'message' && !Number.isFinite(event.target.valueAsNumber))) delete limits[numberKey];
+      else limits[numberKey] = numberKey === 'message' ? event.target.value.trim() : event.target.valueAsNumber;
+      if (Object.keys(limits).length) field.number = limits; else delete field.number;
+      refresh();
+      return;
+    }
+    if (scaleKey) {
+      const scale = { ...scaleOf(field), [scaleKey]: ['min', 'max'].includes(scaleKey) ? Number(event.target.value) : event.target.value.trim() };
+      field.scale = Object.fromEntries(Object.entries(scale).filter(([, value]) => value !== ''));
+      refresh({ fields: ['min', 'max'].includes(scaleKey) });
+      if (['min', 'max'].includes(scaleKey)) fieldsRoot.querySelector(`[data-index="${index}"] [data-scale="${scaleKey}"]`)?.focus();
+      return;
+    }
+    if (feedbackKey) {
+      const feedback = { ...field.feedback, [feedbackKey]: event.target.value.trim() };
+      for (const key of Object.keys(feedback)) if (!feedback[key]) delete feedback[key];
+      if (Object.keys(feedback).length) field.feedback = feedback; else delete field.feedback;
+      refresh();
+      return;
+    }
+    if (event.target.dataset.display !== undefined) {
+      if (event.target.checked) field.display = 'dropdown'; else delete field.display;
+      refresh({ fields: true });
+      fieldsRoot.querySelector(`[data-index="${index}"] [data-display]`)?.focus();
+      return;
+    }
     if (ruleKey) {
       const rule = { ...field.answer_rule };
       if (event.target.value === '') delete rule[ruleKey];
-      else rule[ruleKey] = ruleKey === 'message' ? event.target.value.trim() : event.target.valueAsNumber;
+      else rule[ruleKey] = ruleKey === 'message' || field.type === 'date' ? event.target.value.trim() : event.target.valueAsNumber;
       if (Object.keys(rule).length) field.answer_rule = rule;
       else delete field.answer_rule;
       refresh();
@@ -1684,6 +1992,7 @@ export async function builder(ctx) {
     if (cond === 'field' || cond === 'op' || (cond === 'value' && event.target.tagName === 'SELECT')) {
       field.show_if[cond] = event.target.value;
       const source = draft.fields.find(candidate => candidate.id === field.show_if.field);
+      if ((isGrid(source) || source?.type === 'file_upload') && !conditionOptions(source).some(([op]) => op === field.show_if.op)) field.show_if.op = 'answered';
       if (['answered', 'not_answered'].includes(field.show_if.op)) delete field.show_if.value;
       else if (source?.type.endsWith('_choice') && !source.options.some(option => option.id === field.show_if.value)) field.show_if.value = source.options[0].id;
       else field.show_if.value ??= '';
@@ -1744,6 +2053,14 @@ export async function builder(ctx) {
       selectedQuestion = Math.min(index, draft.fields.length - 1);
       focus = draft.fields.length ? '.canvas-tools [data-remove]' : '#add-field';
       announce(`Item removed.${dependent.length ? ` ${dependent.length} display rule${dependent.length > 1 ? 's that depended on it were' : ' that depended on it was'} removed too.` : ''} Save the draft to keep this change.`);
+    } else if (button.dataset.gridAdd || button.dataset.gridRemove) {
+      const part = button.dataset.gridAdd || button.dataset.gridRemove;
+      const items = field.grid[part];
+      const label = part === 'rows' ? 'Row' : 'Column';
+      const position = button.dataset.gridAdd ? items.length : Math.max(0, Number(button.dataset.gridIndex) - 1);
+      if (button.dataset.gridAdd) items.push({ id: randomKey(label.toLowerCase(), items), label: `${label} ${items.length + 1}` });
+      else items.splice(Number(button.dataset.gridIndex), 1);
+      focus = `[data-index="${index}"] [data-grid-part="${part}"][data-grid-index="${position}"]`;
     } else if (button.dataset.addOption !== undefined) {
       field.options.push({ id: randomKey('opt', field.options), label: 'Option ' + (field.options.length + 1) });
       focus = `[data-index="${index}"] [data-option="${field.options.length - 1}"]`;
@@ -1774,6 +2091,11 @@ export async function builder(ctx) {
     const list = items => html`<ul>${items.map(item => html`<li>${item}</li>`)}</ul>`;
     const apply = (next, message) => {
       if (field.group != null) next.group = field.group;
+      // Settings that belong to one type do not follow the question to another.
+      if (next.type !== 'number') delete next.number;
+      if (next.type !== 'scale') delete next.scale; else next.scale ??= { min: 1, max: 5 };
+      if (next.type !== 'single_choice') delete next.display;
+      if (!next.type.endsWith('_choice')) delete next.feedback;
       draft.fields[index] = next;
       if (next.id !== field.id) renameInChoiceRules(draft, field.id, next.id);
       refresh({ fields: true });
@@ -1984,6 +2306,8 @@ export async function builder(ctx) {
     if (narrowOutline() && outlineOpen()) { showOutline(false); $('#outline-toggle').focus(); }
   };
   $('#add-ending').onclick = () => {
+    showOutline(false);
+    setQuestionPane('edit');
     draft.endings = [...(draft.endings || []), { id: randomKey('end', draft.endings || []), title: 'Thanks for responding' }];
     selectedEnding = draft.endings.length - 1;
     announce(`Ending ${draft.endings.length} added. Save the draft to keep this change.`);
@@ -2040,6 +2364,8 @@ export async function builder(ctx) {
   addMenu.onclick = event => {
     const type = event.target.closest('[data-add-type]')?.dataset.addType;
     if (!type) return;
+    showOutline(false);
+    setQuestionPane('edit');
     const current = draft.fields[selectedQuestion];
     const afterCurrent = draft.fields.length ? blockEnd(draft.fields, selectedQuestion) : 0;
     if (type === 'contact_info' || type === 'question_page') {
@@ -2063,6 +2389,11 @@ export async function builder(ctx) {
     const field = { id: randomKey(type === 'page_break' ? 'page' : 'q', draft.fields), type, label: type === 'page_break' ? '' : 'New question', required: false };
     if (type === 'page_break') delete field.required;
     if (type.endsWith('_choice')) field.options = [{ id: randomKey('opt', []), label: 'Option 1' }, { id: randomKey('opt', []), label: 'Option 2' }];
+    if (isGrid(field)) field.grid = {
+      rows: [1, 2].map(number => ({ id: randomKey('row', []), label: `Row ${number}` })),
+      columns: [1, 2].map(number => ({ id: randomKey('column', []), label: `Column ${number}` }))
+    };
+    if (type === 'scale') field.scale = { min: 1, max: 5 };
     // A question added while a page or one of its questions is selected joins that page.
     // A page break never splits a page, so it lands after the whole page.
     const owner = isHead(current) ? current.id : current?.group ?? null;
@@ -2110,6 +2441,7 @@ export async function builder(ctx) {
       paintCanvas();
       renderPreview();
       setState(restoring && themeBaseline === 'saved' && JSON.stringify(draft) === JSON.stringify(form.draft) ? 'saved' : 'dirty');
+      trackEdit('design', 'theme');
     }
   });
   $('#open-design').onclick = () => design.toggle();
@@ -2118,12 +2450,13 @@ export async function builder(ctx) {
   const selectView = next => {
     view = next;
     $('.builder').dataset.view = view;
+    inspectorButton.hidden = view === 'preview';
     const toggle = $('#toolbar-preview');
     const previewing = view === 'preview';
     toggle.dataset.builderView = previewing ? 'edit' : 'preview';
     toggle.title = previewing ? 'Back to editing the questions' : 'See the form as respondents do. Nothing is saved or sent.';
     toggle.setAttribute('aria-label', previewing ? 'Back to editing the form' : 'Preview form');
-    mount(toggle, html`${formIcon(previewing ? 'edit' : 'play')}<span>${previewing ? 'Back to editing' : 'Preview'}</span>`);
+    mount(toggle, html`${formIcon(previewing ? 'edit' : 'play')}<span class="tool-text">${previewing ? 'Back to editing' : 'Preview'}</span>`);
   };
 
   const reportError = (error, prefix = '') => {
@@ -2161,7 +2494,7 @@ export async function builder(ctx) {
     mount($('#builder-notice'), notice('bad', html`<p><strong>Someone saved this form after you opened it</strong> (last saved ${fmtDateTime(current.updated_at)}). Your edits have not been saved and are still on this page.</p>
       <div class="actions"><button class="btn" type="button" id="conflict-load">Discard my edits and load theirs</button><button class="btn btn-danger" type="button" id="conflict-keep">Save my version over theirs</button></div>`));
     $('#builder-notice').focus();
-    $('#conflict-load').onclick = () => { form = current; draft = structuredClone(form.draft); design.refresh(); $('#builder-notice').innerHTML = ''; setState('saved'); renderAll(); renderWorkflow(); renderRouting(); announce('Loaded the latest saved version.'); };
+    $('#conflict-load').onclick = () => { form = current; draft = structuredClone(form.draft); edits.reset(JSON.stringify(draft)); renderHistoryButtons(); design.refresh(); $('#builder-notice').innerHTML = ''; setState('saved'); renderAll(); renderWorkflow(); renderRouting(); announce('Loaded the latest saved version.'); };
     $('#conflict-keep').onclick = async () => { if (await save({ force: current.revision })) { toast('Your version was saved.'); renderRouting(); } };
   };
 
@@ -2172,6 +2505,9 @@ export async function builder(ctx) {
     if (form.published_version && !(await ask({ title: `Publish version ${form.published_version + 1}?`, body: 'New visitors see the updated questions and routing right away. Responses already received stay linked to the version they answered. People who opened the current version can still submit it for 24 hours.', confirm: 'Publish' }))) return;
     try {
       form = await api('POST', wsPath(`/forms/${form.id}/publish`), { base_revision: form.revision });
+      // Published keys and types are now locked; earlier steps could undo into a draft that breaks them.
+      edits.reset(JSON.stringify(draft));
+      renderHistoryButtons();
       renderStatus(); renderShare(); readiness.check(); renderFields(); renderPreviewParams();
       mount($('#builder-notice'), notice('ok', html`<p>Version ${form.published_version} is live. New responses use this version. Share the respondent link below.</p>`));
       showSurface('share');
@@ -2236,6 +2572,8 @@ export async function builder(ctx) {
       return $('#preview-heading').focus({ preventScroll: true });
     }
     selectView('edit');
+    showOutline(false);
+    setQuestionPane('edit');
     $('#fields').scrollIntoView({ block: 'start' });
     ($('#fields [data-prop="label"]') || $('#add-field')).focus({ preventScroll: true });
   }
@@ -2307,7 +2645,7 @@ export async function builder(ctx) {
     const draw = () => mount($('#routing'), html`<details class="card card-plain" ${form.routing ? raw('open') : ''}><summary><strong>Next step after submitting</strong> <span class="muted">(optional)</span></summary>
       <p class="hint">Rules are checked in order and the first match decides. The response is always saved first; a booking page is offered as a next step, and booking is optional for the respondent.${meetActive ? '' : ' Booking pages need an active Meet or Suite plan.'}</p>
       <ol class="rule-list">${rules.map((rule, index) => html`<li class="range"><span>If</span> <select data-rfield="${index}" aria-label="Rule ${index + 1}: question">${questions().map(field => html`<option value="${field.id}" ${field.id === rule.condition.field ? raw('selected') : ''}>${field.label.slice(0, 40)}</option>`)}</select>
-        <select data-rop="${index}" aria-label="Rule ${index + 1}: condition">${Object.entries(CONDITION_OPS).map(([op, label]) => html`<option value="${op}" ${rule.condition.op === op ? raw('selected') : ''}>${label}</option>`)}</select>
+        <select data-rop="${index}" aria-label="Rule ${index + 1}: condition">${conditionOptions(questions().find(field => field.id === rule.condition.field)).map(([op, label]) => html`<option value="${op}" ${rule.condition.op === op ? raw('selected') : ''}>${label}</option>`)}</select>
         ${valueEditor(rule, index)} <span>then</span> ${actionEditor(rule.action, index)}
         <span class="row"><button class="btn btn-small" type="button" data-rmove="${index}:-1" aria-label="Move rule ${index + 1} up" ${index === 0 ? raw('disabled') : ''}>↑</button><button class="btn btn-small" type="button" data-rmove="${index}:1" aria-label="Move rule ${index + 1} down" ${index === rules.length - 1 ? raw('disabled') : ''}>↓</button><button class="btn btn-small" type="button" data-rremove="${index}" aria-label="Remove rule ${index + 1}">Remove</button></span>
         <p class="logic-sentence" data-rule-sentence="${index}">${ruleSentence(index)}</p></li>`)}</ol>
@@ -2324,7 +2662,7 @@ export async function builder(ctx) {
     const root = $('#routing');
     root.onchange = event => {
       const { rfield, rop, rvalue, akind, aevent } = event.target.dataset;
-      if (rfield !== undefined) { const rule = rules[Number(rfield)]; rule.condition.field = event.target.value; rule.condition.value = defaultValue(rule.condition.field); return redraw(`[data-rfield="${rfield}"]`); }
+      if (rfield !== undefined) { const rule = rules[Number(rfield)]; rule.condition.field = event.target.value; rule.condition.value = defaultValue(rule.condition.field); if (['single_grid', 'multiple_grid', 'file_upload'].includes(questions().find(field => field.id === rule.condition.field)?.type)) rule.condition.op = 'answered'; return redraw(`[data-rfield="${rfield}"]`); }
       if (rop !== undefined) { const rule = rules[Number(rop)]; rule.condition.op = event.target.value; if (!['answered', 'not_answered'].includes(rule.condition.op) && !rule.condition.value) rule.condition.value = defaultValue(rule.condition.field); return redraw(`[data-rop="${rop}"]`); }
       if (rvalue !== undefined && event.target.tagName === 'SELECT') rules[Number(rvalue)].condition.value = event.target.value;
       if (akind !== undefined) { setAction(akind, event.target.value === 'event' ? { type: 'event', event_type_id: eventTypes[0]?.id } : { type: event.target.value }); return redraw(`[data-akind="${akind}"]`); }
@@ -2347,7 +2685,7 @@ export async function builder(ctx) {
         announce(`Rule moved to position ${index + step + 1} of ${rules.length}.`);
         return redraw(`[data-rmove="${index + step}:${step}"]:not([disabled])`);
       }
-      if (target.id === 'add-rule') { const field = questions()[0]; rules.push({ condition: { field: field.id, op: 'equals', value: defaultValue(field.id) }, action: { type: eventTypes.length ? 'event' : 'message', event_type_id: eventTypes[0]?.id } }); return redraw(`[data-rfield="${rules.length - 1}"]`); }
+      if (target.id === 'add-rule') { const field = questions()[0]; rules.push({ condition: { field: field.id, op: isGrid(field) || field.type === 'file_upload' ? 'answered' : 'equals', value: defaultValue(field.id) }, action: { type: eventTypes.length ? 'event' : 'message', event_type_id: eventTypes[0]?.id } }); return redraw(`[data-rfield="${rules.length - 1}"]`); }
       if (target.id === 'toggle-fallback') { fallback = fallback ? null : { type: 'message', message: '' }; return redraw('#toggle-fallback'); }
       if (target.id === 'save-routing' || target.id === 'clear-routing') {
         if (saveState !== 'saved') { mount($('#builder-notice'), notice('warn', html`<p>Save the question changes first, so routing is checked against the questions you see.</p>`)); return $('#builder-notice').focus(); }
@@ -2367,16 +2705,106 @@ export async function builder(ctx) {
     };
   }
   // Preview is its own step in the header: it shows the draft as respondents would see it and saves nothing.
-  $('#toolbar-preview').onclick = () => {
-    // Keeps the layout last chosen under Preview presentation; the form's own layout otherwise.
-    if (view !== 'preview') return goTo('preview-' + ($('#preview-mode').value || draft.presentation || 'classic'));
+  let previewReturn;
+  let previewSection;
+  const openPreview = opener => {
+    previewReturn = opener;
+    previewSection = $('#builder-index [aria-current]')?.dataset.section;
+    goTo('preview-' + ($('#preview-mode').value || draft.presentation || 'classic'));
+  };
+  const closePreview = () => {
     selectView('edit');
-    $('#toolbar-preview').focus();
+    if (previewReturn?.id === 'preview-from-section' && sections[previewSection]) {
+      showSurface(sections[previewSection][0], previewSection);
+    }
+    (previewReturn || $('#toolbar-preview')).focus();
+    previewReturn = null;
+  };
+  $('#preview-from-section').onclick = event => openPreview(event.currentTarget);
+  $('#toolbar-preview').onclick = event => {
+    // Keeps the layout last chosen under Preview presentation; the form's own layout otherwise.
+    if (view !== 'preview') return openPreview(event.currentTarget);
+    closePreview();
   };
   $('#import-form').onclick = () => {
     $('.overflow-menu').open = false;
     openImportDialog({ workspaceId: session.workspaceId, onCreated: imported => ctx.navigate(draftAddress(imported, { created: 'import', workspaceId: session.workspaceId })) });
   };
+
+  // ---- Undo, redo and keyboard shortcuts (forms-history.mjs) ----
+  // A step restores the whole draft (questions, pages, logic, endings, theme) and selects where the
+  // change happened. Saving stays explicit: the status shows saved only when the draft matches it.
+  const applyEdit = (entry, verb) => {
+    if (!entry) { announce(`Nothing to ${verb}.`); return; }
+    const active = document.activeElement;
+    const focusCanvas = !active || active === document.body || $('#fields')?.contains(active);
+    draft = JSON.parse(entry.json);
+    const { question = 0, ending = null } = entry.selection || {};
+    selectedQuestion = Math.max(0, Math.min(question, draft.fields.length - 1));
+    selectedEnding = ending != null && draft.endings?.[ending] ? ending : null;
+    design.refresh();
+    renderAll();
+    renderWorkflow();
+    paintCanvas();
+    const saved = entry.json === savedJson;
+    setState(saved ? 'saved' : 'dirty');
+    renderHistoryButtons();
+    announce(`${verb === 'undo' ? 'Undone' : 'Redone'}. ${saved ? 'The draft matches the saved version.' : 'Save the draft to keep this change.'}`);
+    if (focusCanvas) ($(`#fields [data-index="${selectedQuestion}"] [data-prop="label"]`) || $('#add-field'))?.focus();
+    else if (!active.isConnected) ($(verb === 'undo' ? '#undo-change' : '#redo-change'))?.focus();
+  };
+  $('#undo-change').onclick = () => applyEdit(edits.undo(), 'undo');
+  $('#redo-change').onclick = () => applyEdit(edits.redo(), 'redo');
+
+  const openShortcuts = () => {
+    const opener = document.activeElement;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'card shortcuts-dialog';
+    dialog.setAttribute('aria-labelledby', 'shortcuts-title');
+    const keys = list => list.map((key, at) => html`${at ? html`<span class="shortcut-plus" aria-hidden="true">+</span>` : ''}<kbd>${key}</kbd>`);
+    mount(dialog, html`<div class="row-between"><h2 id="shortcuts-title" tabindex="-1">Keyboard shortcuts</h2><button class="btn btn-small" type="button" data-close>Close</button></div>
+      <dl class="shortcut-list">${shortcutList(mac).map(item => html`<div><dt>${keys(item.keys)}${item.also ? html`<span class="shortcut-or">or</span>${keys(item.also)}` : ''}</dt><dd>${item.label}</dd></div>`)}</dl>
+      <p class="hint">In a text box, ${modLabel}+Z undoes typing in that box. Undo covers this draft until you publish. Saving is still a separate step: use Save draft.</p>`);
+    document.body.append(dialog);
+    dialog.addEventListener('click', event => { if (event.target.closest('[data-close]') || event.target === dialog) dialog.close(); });
+    dialog.addEventListener('close', () => { dialog.remove(); if (opener?.isConnected) opener.focus(); else $('#add-field')?.focus(); });
+    dialog.showModal();
+    $('#shortcuts-title', dialog).focus();
+  };
+  $('#show-shortcuts').onclick = () => { $('.overflow-menu').open = false; openShortcuts(); };
+
+  // Types that Ctrl/⌘+Enter repeats from the selected question; anything else adds a short answer.
+  const REPEATABLE = new Set(['short_text', 'long_text', 'email', 'phone', 'single_choice', 'multiple_choice', 'single_grid', 'multiple_grid', 'file_upload', 'date']);
+  const onBuilderKey = event => {
+    if (!ctx.alive() || !addButton.isConnected) { document.removeEventListener('keydown', onBuilderKey); return; }
+    if (event.defaultPrevented) return;
+    if (event.key === 'Escape' && view === 'preview' && $('.builder-page').dataset.surface === 'content' && !document.querySelector('dialog[open]')) {
+      event.preventDefault();
+      closePreview();
+      return;
+    }
+    const action = shortcutAction(event, { mac, textEntry: isTextEntry(event.target), dialogOpen: Boolean(document.querySelector('dialog[open]')) });
+    if (!action) return;
+    event.preventDefault();
+    if (action === 'swallow') return;
+    if (action === 'undo') return applyEdit(edits.undo(), 'undo');
+    if (action === 'redo') return applyEdit(edits.redo(), 'redo');
+    if (action === 'help') return openShortcuts();
+    // Duplicate and add work on the question canvas, where their result can be seen.
+    if ($('.builder-page').dataset.surface !== 'content' || view !== 'edit') {
+      announce(`${action === 'add' ? 'Adding' : 'Duplicating'} a question works in Questions while editing. Open Questions, then try again.`);
+      return;
+    }
+    if (action === 'duplicate') {
+      const button = selectedEnding == null && $(`#fields .canvas-tools[data-index="${selectedQuestion}"] [data-duplicate]`);
+      if (!button) { announce('Select a question or page to duplicate.'); return; }
+      button.click();
+      return;
+    }
+    const current = selectedEnding == null ? draft.fields[selectedQuestion] : null;
+    $(`#add-menu [data-add-type="${REPEATABLE.has(current?.type) ? current.type : 'short_text'}"]`).click();
+  };
+  document.addEventListener('keydown', onBuilderKey);
   // Exports what is saved, so the file always matches a revision the server accepted.
   $('#export-form').onclick = async () => {
     $('.overflow-menu').open = false;
@@ -2456,9 +2884,10 @@ const SINCE_DAYS = { '1d': 1, '7d': 7, '30d': 30 };
 const SIGNIN_FILTERS = [['', 'Anyone'], ['verified', 'Verified sign-in'], ['anonymous', 'Not signed in']];
 const wideResponses = () => window.matchMedia('(min-width: 1200px)').matches;
 
-export const responseWorkbook = ctx => responses(ctx, { workbook: true });
+// The linked workbook is its own page now (sheets.mjs); kept for callers of the old export.
+export const responseWorkbook = async ctx => (await import('./sheets.mjs')).sheetsPage(ctx);
 
-export async function responses(ctx, { workbook = false } = {}) {
+export async function responses(ctx) {
   if (!session.user) return mount(ctx.main, signInPrompt(ctx, { product: 'forms', title: 'Sign in to see responses', lead: 'Responses are visible only to members of the form\'s workspace.' }));
   if (!needsSession(ctx)) return;
   // Search and filters live in the address, so a reload or a shared link keeps them. The server
@@ -2479,6 +2908,7 @@ export async function responses(ctx, { workbook = false } = {}) {
     if (filters.signin) query.set('signin', filters.signin);
     return query;
   };
+  const aiSummaryButton = () => html`<button class="btn btn-small" type="button" data-ai-response-summary>Summarize text with AI</button>`;
   const listPath = before => {
     const query = serverQuery();
     if (before) query.set('before', before);
@@ -2494,7 +2924,6 @@ export async function responses(ctx, { workbook = false } = {}) {
   }
   if (!ctx.alive()) return;
   const { form, versions } = data;
-  let formulaResponses = active() ? null : data.responses;
   let rows = data.responses;
   let matched = data.matched ?? null;
   let total = form.response_count;
@@ -2508,13 +2937,7 @@ export async function responses(ctx, { workbook = false } = {}) {
   let listState = 'ready'; // 'loading' while a new search runs, 'error' when it failed
   let listError = null;
   const trailOf = row => context ? buildTrail(row, context) : null;
-  setTitle(workbook ? `${form.draft.title} · Schedora Sheets` : `Responses: ${form.draft.title} · Forms by Schedora`);
-  if (workbook) document.body.classList.add('form-editor');
-  const columnLetter = index => {
-    let label = '';
-    for (let n = index + 1; n; n = Math.floor((n - 1) / 26)) label = String.fromCharCode(65 + (n - 1) % 26) + label;
-    return label;
-  };
+  setTitle(`Responses: ${form.draft.title} · Forms by Schedora`);
   // Every question any version asked, latest version first; each answer is shown with the labels
   // of the version it was given in.
   const columns = [];
@@ -2531,22 +2954,11 @@ export async function responses(ctx, { workbook = false } = {}) {
   const verifiedColumn = () => rows.some(row => row.respondent);
   const attributionKeys = () => attributionColumns(Object.keys(versions).sort((a, b) => b - a).map(key => versions[key]), rows);
   let oldestFirst = false;
+  let leadFirst = false;
   const shownRows = () => {
     const matching = filter === 'attention' && context ? rows.filter(row => trailOf(row).attention.length) : rows;
+    if (leadFirst) return matching.toSorted((a,b)=>(b.lead_score?.score ?? -1)-(a.lead_score?.score ?? -1));
     return oldestFirst ? matching.toReversed() : matching;
-  };
-  // Keep formula coordinates independent of interactive search, filters and sorting.
-  const linkedResponseCells = () => {
-    if (!formulaResponses) return null;
-    const verified = formulaResponses.some(row => row.respondent);
-    const attribution = attributionColumns(versionNumbers.map(version => versions[version]), formulaResponses);
-    const fields = ['Submitted', 'Next step', ...(verified ? ['Verified sign-in'] : []), ...columns.map(column => shortLabel(column.label)), ...attribution.map(key => `Attribution: ${key}`)];
-    const values = [fields, ...formulaResponses.slice(0, 49).map(row => [
-      fmtDateTime(row.created_at), row.next_step ? STEP_LABELS[row.next_step.status]?.[1] || row.next_step.status : '',
-      ...(verified ? [row.respondent?.email ?? ''] : []), ...columns.map(column => cell(row, column)),
-      ...attribution.map(key => row.attribution?.[key] ?? '')
-    ])];
-    return Object.fromEntries(values.flatMap((row, index) => row.slice(0, 12).map((value, column) => [columnLetter(column) + (index + 1), value])));
   };
   const plural = (count, one, many = one + 's') => `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
   const filterWords = () => [
@@ -2578,10 +2990,6 @@ export async function responses(ctx, { workbook = false } = {}) {
 
   const draw = () => {
     drawExport();
-    if (workbook) {
-      $('#workbook-address').textContent = '—';
-      $('#workbook-value').textContent = 'Select a cell to read its value';
-    }
     const list = $('#responses');
     list.setAttribute('aria-busy', String(listState === 'loading'));
     if (listState === 'loading') return mount(list, loading('Searching responses…'));
@@ -2592,12 +3000,12 @@ export async function responses(ctx, { workbook = false } = {}) {
     const attentionRows = context ? rows.filter(row => trailOf(row).attention.length) : [];
     const shown = shownRows();
     mount(list, rows.length ? html`<div class="trail-filter" role="group" aria-label="Show responses">
-        <button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
+        <button class="btn btn-small" type="button" data-resume-metrics>Saved draft activity</button>${aiSummaryButton()}${rows.some(row=>row.lead_score) ? html`<button class="btn btn-small" type="button" id="sort-leads" aria-pressed="${leadFirst}">Highest lead scores first (loaded)</button>` : ''}<button class="btn btn-small" type="button" data-filter="all" aria-pressed="${filter === 'all'}">All loaded (${rows.length})</button>
         <button class="btn btn-small" type="button" data-filter="attention" aria-pressed="${filter === 'attention'}" ${context ? '' : raw('aria-disabled="true"')}>Needs attention${context ? ` (${attentionRows.length})` : ''}</button>
         <span class="muted">${context.runsAvailable && context.tasksAvailable ? html`Needs attention means a booking problem, a failed or retrying follow-up, an undelivered email, an overdue task, or an open task without a deadline. It checks the loaded responses.` : 'Follow-up history is unavailable. Reload to check it; missing history is not proof that nothing happened.'}</span></div>
       ${shown.length ? html`<div class="table-wrap response-sheet" tabindex="0" role="region" aria-label="Response spreadsheet"><table class="responses-table"><caption class="visually-hidden">Responses to ${form.draft.title}${active() ? `, matching ${filterWords()}` : ''}</caption>
-      <thead>${workbook ? html`<tr class="workbook-letters" aria-hidden="true"><th></th>${Array.from({ length: 2 + Number(verifiedColumn()) + columns.length + attributionKeys().length }, (_, index) => html`<th>${columnLetter(index)}</th>`)}</tr>` : ''}<tr>${workbook ? html`<th scope="col"><span class="visually-hidden">Row</span><span aria-hidden="true">1</span></th>` : ''}<th scope="col" aria-sort="${oldestFirst ? 'ascending' : 'descending'}"><button class="response-sort" type="button" id="sort-submitted" aria-label="Sort loaded responses by submission time, ${oldestFirst ? 'newest' : 'oldest'} first">Submitted <span aria-hidden="true">${oldestFirst ? '↑' : '↓'}</span></button></th><th scope="col">Next step</th>${verifiedColumn() ? html`<th scope="col" class="col-verified" data-verified-column>Verified sign-in <span class="col-note">identity, not an answer</span></th>` : ''}${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
-      <tbody>${shown.map((row, index) => html`<tr data-row="${row.id}" class="${row.id === openRow ? 'is-open' : ''}" ${row.id === openRow ? raw('aria-current="true"') : ''}>${workbook ? html`<th scope="row">${index + 2}</th>` : ''}<td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>
+      <thead><tr><th scope="col" aria-sort="${oldestFirst ? 'ascending' : 'descending'}"><button class="response-sort" type="button" id="sort-submitted" aria-label="Sort loaded responses by submission time, ${oldestFirst ? 'newest' : 'oldest'} first">Submitted <span aria-hidden="true">${oldestFirst ? '↑' : '↓'}</span></button></th><th scope="col">Next step</th>${verifiedColumn() ? html`<th scope="col" class="col-verified" data-verified-column>Verified sign-in <span class="col-note">identity, not an answer</span></th>` : ''}${columns.map(column => html`<th scope="col">${shortLabel(column.label)}</th>`)}${attributionKeys().map(key => html`<th scope="col" data-attribution-column>Attribution: ${key}</th>`)}</tr></thead>
+      <tbody>${shown.map((row, index) => html`<tr data-row="${row.id}" class="${row.id === openRow ? 'is-open' : ''}" ${row.id === openRow ? raw('aria-current="true"') : ''}><td class="submitted-cell">${fmtDateTime(row.created_at)}<div class="muted">Version ${row.form_version}</div>${row.lead_score ? html`<span class="badge" data-lead-score>${row.lead_score.band} · ${row.lead_score.score} points</span>` : ''}${row.payment || row.whatsapp_receipt ? html`<div class="response-status-line">${responsePaymentBadges(row)}</div>` : ''}
           <button class="btn btn-small" data-view-response="${row.id}" aria-expanded="${row.id === openRow}" aria-controls="response-detail">View<span class="visually-hidden"> response from ${fmtDateTime(row.created_at)}</span></button></td>
         <td>${stepBadge(row.next_step)}${trailOf(row)?.attention.length ? html`<div class="attention-note">Needs attention: ${trailOf(row).attention.join('; ')}</div>` : ''}</td>${verifiedColumn() ? html`<td class="answer-cell col-verified">${row.respondent?.email ?? html`<span class="muted">Not signed in</span>`}</td>` : ''}${columns.map(column => html`<td class="answer-cell">${cell(row, column) || html`<span class="muted">—</span>`}</td>`)}${attributionKeys().map(key => html`<td class="answer-cell">${row.attribution?.[key] ?? html`<span class="muted">—</span>`}</td>`)}</tr>`)}</tbody></table></div>
       `
@@ -2644,8 +3052,10 @@ export async function responses(ctx, { workbook = false } = {}) {
       ${row.respondent ? html`<section class="detail-identity" aria-labelledby="detail-identity-title"><h3 id="detail-identity-title">Verified sign-in</h3><p class="hint">Confirmed by your workspace's identity provider when this response was submitted. It is not an answer: the respondent could not type or change it.</p>
         <dl class="response-answers" data-verified><dt>Email</dt><dd>${row.respondent.email}</dd>${row.respondent.name ? html`<dt>Name</dt><dd>${row.respondent.name}</dd>` : ''}<dt>Account ID</dt><dd><code>${row.respondent.subject}</code></dd><dt>Signed in</dt><dd>${fmtDateTime(row.respondent.verified_at)}</dd></dl></section>`
         : ''}
+      ${row.lead_score ? html`<section aria-label="Lead qualification"><h3>${row.lead_score.band} lead · ${row.lead_score.score} points</h3><p class="hint">Scored using the published form version this person answered.</p>${row.lead_score.reasons.length ? html`<ul>${row.lead_score.reasons.map(reason => html`<li>${reason.question}: ${reason.answer} <strong>+${reason.points}</strong></li>`)}</ul>` : html`<p>No scored answers selected.</p>`}</section>` : ''}
+      ${row.payment || row.whatsapp_receipt ? html`<section aria-label="Payment and receipt" data-payment-detail><h3>${row.payment ? 'Payment' : 'Receipt'}</h3>${responsePaymentBadges(row)}${row.payment ? html`<p class="hint">${row.payment.complete ? 'Complete: Flow, webhooks, the next step and the receipt ran when the payment was confirmed.' : 'Incomplete: follow-ups wait until Razorpay confirms the full payment.'}${row.payment.paid_at ? ` Paid ${fmtDateTime(row.payment.paid_at)}.` : ''}${row.payment.provider_payment_id ? ` Razorpay payment ${row.payment.provider_payment_id}.` : ''}</p>` : ''}</section>` : ''}
       <h3>Answers</h3><p class="hint">What the respondent entered${row.respondent ? ', separate from the verified sign-in above' : ''}.</p>
-      <dl class="response-answers" data-answers>${[...fields, ...extra].map(field => html`<dt>${pipe(field.label, definition || { fields: [] }, row.answers)}</dt><dd>${answerText(field, row.answers[field.id]) || html`<span class="muted">Not answered or not shown</span>`}</dd>`)}</dl>
+      <dl class="response-answers" data-answers>${[...fields, ...extra].map(field => html`<dt>${pipe(field.label, definition || { fields: [] }, row.answers)}</dt><dd>${field.type === 'file_upload' && row.answers[field.id]?.length ? row.answers[field.id].map(file => html`<a class="attachment-link" data-external href="${wsPath('/forms/' + form.id + '/responses/' + row.id + '/files/' + file.id)}" download>${file.name}</a>`) : answerText(field, row.answers[field.id]) || html`<span class="muted">Not answered or not shown</span>`}</dd>`)}</dl>
       ${row.attribution ? html`<h3>Attribution</h3><p class="hint">From the link this person used. Anyone can edit a link, so treat these as unverified.</p><dl class="response-answers" data-attribution>${Object.entries(row.attribution).map(([key, value]) => html`<dt>${key}</dt><dd>${value}</dd>`)}</dl>` : ''}
       ${context ? trailList(trailOf(row)) : html`<p class="muted" role="status">Checking what happened next…</p>`}
       ${isAdmin() ? html`<div class="actions"><button class="btn btn-danger btn-small" data-delete="${row.id}">Delete this response</button></div>` : ''}</section>`);
@@ -2667,26 +3077,14 @@ export async function responses(ctx, { workbook = false } = {}) {
   let reopening = false; // closed only to reopen in the other layout: keep the content
   const closeDetail = ({ restore = true } = {}) => { if (!panel().open) return; restoreFocus = restore; panel().close(); };
 
-  mount(ctx.main, html`<div class="container page responses-page ${workbook ? 'sheets-workbook' : ''}" id="responses-page">
-    ${workbook ? html`<header class="workbook-heading"><div class="workbook-title"><span class="workbook-mark" aria-hidden="true">▦</span><div><h1>${form.draft.title}</h1><small>Schedora Sheets</small></div></div><a class="btn btn-small" href="/forms/${form.id}/responses">Open source form responses</a><div class="row export-actions" id="export-actions"></div></header>`
-      : html`<a href="/forms/${form.id}">← Back to form</a>
-      <div class="row-between responses-head"><h1>Responses</h1><div class="row"><a class="btn" href="/sheets/${form.id}">Open in Sheets</a><div class="row export-actions" id="export-actions"></div></div></div>`}
-    ${workbook ? '' : html`<p class="muted">${form.draft.title} · ${total} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>`}
-    ${workbook ? html`<nav class="workbook-menu" aria-label="Workbook menu">
-      <details><summary>File</summary><div><button type="button" data-scope="all">Download CSV</button></div></details>
-      <details><summary>Edit</summary><div><button type="button" data-sheet-action="copy">Copy selected cell</button><button type="button" data-edit-sheet="undo">Undo cell edit</button><button type="button" data-edit-sheet="redo">Redo cell edit</button><button type="button" data-edit-sheet="delete">Delete editable sheet</button></div></details>
-      <details><summary>View</summary><div><button type="button" data-sheet-action="gridlines">Toggle gridlines</button><a href="/forms/${form.id}/responses">Open Forms responses</a></div></details>
-      <details><summary>Insert</summary><div><button type="button" data-edit-sheet="add">New sheet</button></div></details>
-      <details><summary>Format</summary><div><button type="button" data-sheet-action="wrap">Toggle text wrapping</button></div></details>
-      <details><summary>Data</summary><div><button type="button" data-sheet-action="filter">Show or hide filters</button><button type="button" data-sheet-action="sort">Reverse submission order</button></div></details>
-      <details><summary>Tools</summary><div><button type="button" data-sheet-action="refresh">Refresh responses</button><button type="button" data-refresh-workbook>Refresh workbook</button></div></details>
-    </nav><div class="workbook-toolbar" role="group" aria-label="Spreadsheet toolbar">
-      <button type="button" data-sheet-action="filter">⌕ <span>Filters</span></button>
-      <button type="button" data-sheet-action="copy">▣ <span>Copy cell</span></button>
-      <button type="button" data-sheet-action="sort">↕ <span>Sort</span></button>
-      <button type="button" data-sheet-action="refresh">↻ <span>Refresh</span></button>
-    </div>` : ''}
-    ${workbook ? raw('<div class="workbook-responses">') : ''}
+  mount(ctx.main, html`<div class="container page responses-page" id="responses-page">
+    <a href="/forms/${form.id}">← Back to form</a>
+      <div class="row-between responses-head"><h1>Responses</h1><div class="row"><a class="btn" href="/sheets/${form.id}">Open in Sheets</a><a class="btn" href="/sheets/${form.id}?manage=links">Manage response link</a><div class="row export-actions" id="export-actions"></div></div></div>
+      <div class="responses-views" role="group" aria-label="Show responses as"><button type="button" class="btn btn-small" data-responses-view="list" aria-pressed="${ctx.query.get('view') === 'summary' ? 'false' : 'true'}">Individual responses</button><button type="button" class="btn btn-small" data-responses-view="summary" aria-pressed="${ctx.query.get('view') === 'summary' ? 'true' : 'false'}">Summary</button></div>
+      <section class="responses-summary-view" id="responses-summary-view" aria-labelledby="summary-heading" ${ctx.query.get('view') === 'summary' ? '' : raw('hidden')}><h2 id="summary-heading" class="visually-hidden" tabindex="-1">Summary</h2><div id="summary-body"></div></section>
+    ${html`<p class="muted">${form.draft.title} · ${total} total in ${workspace().name} · ${form.published_version ? `live version ${form.published_version}` : form.locked_ids?.length ? 'closed' : 'not published'} · kept for ${workspace().retention_days || 365} days under your workspace retention setting. <a href="/enquiries?from=response">See enquiries across all forms and bookings</a>.</p>`}
+    ${sheetsSyncSection(ctx.query.has('sheets'))}
+    <div id="responses-list-view" ${ctx.query.get('view') === 'summary' ? raw('hidden') : ''}>
     <form class="responses-filters" id="responses-filters" role="search" aria-label="Search and filter responses">
       <div class="filter-search"><label for="response-search">Search responses</label><input type="search" id="response-search" maxlength="200" autocomplete="off" value="${filters.q}" placeholder="Answer, receipt or verified email" aria-describedby="responses-summary"></div>
       <div><label for="response-since">Submitted</label><select id="response-since">${SINCE.map(([key, label]) => html`<option value="${key}" ${filters.since === key ? raw('selected') : ''}>${label}</option>`)}</select></div>
@@ -2697,52 +3095,42 @@ export async function responses(ctx, { workbook = false } = {}) {
     <p class="responses-summary" id="responses-summary"></p>
     <div id="export-status" tabindex="-1"></div>
     <p id="responses-status" class="visually-hidden" role="status"></p>
-    ${workbook ? html`<div class="workbook-cell-bar" role="status"><span id="workbook-address">—</span><span class="workbook-fx" aria-hidden="true">ƒx</span><span id="workbook-value">Select a cell to read its value</span></div>` : ''}
     <div class="responses-layout" id="responses-layout">
       <div id="responses"></div>
       <dialog class="response-panel" id="response-detail" aria-labelledby="detail-title"></dialog>
-    </div>${workbook ? raw('</div><div class="workbook-editor" hidden></div><footer class="workbook-footer workbook-tabs" aria-label="Workbook sheets"></footer>') : ''}</div>`);
-  if (workbook) $('#responses-filters').hidden = !active();
+    </div></div></div>`);
   draw();
+  mountSheetsSync(ctx, form);
 
-  if (workbook) {
-    const recalculate = mountWorkbookTabs($('#responses-page'), {
-      storageKey: `schedora.sheets.${session.user.id}.${workspace().id}.${form.id}`,
-      endpoint: wsPath(`/forms/${form.id}/workbook`),
-      alive: ctx.alive,
-      responseCells: linkedResponseCells
-    });
-    if (!formulaResponses) {
-      void api('GET', wsPath(`/forms/${form.id}/responses`)).then(page => {
-        if (!ctx.alive()) return;
-        formulaResponses = page.responses;
-        recalculate();
-      }).catch(() => { /* Linked formulas show a reference error until responses are available. */ });
-    }
-    const selectCell = cell => {
-      if (!cell) return;
-      $('.workbook-selected')?.classList.remove('workbook-selected');
-      cell.classList.add('workbook-selected');
-      $('#workbook-address').textContent = columnLetter(cell.cellIndex - 1) + cell.parentElement.rowIndex;
-      $('#workbook-value').textContent = cell.innerText.trim();
-    };
-    $('#responses').addEventListener('click', event => {
-      if (!event.target.closest('button, a')) selectCell(event.target.closest('.response-sheet tbody td'));
-    });
-    $('#responses').addEventListener('keydown', event => {
-      const table = event.target.matches('.response-sheet') && $('.responses-table', event.target);
-      if (!table || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      const selected = $('.workbook-selected', table);
-      const row = selected?.parentElement.sectionRowIndex ?? 0;
-      const col = selected?.cellIndex ?? 1;
-      const nextRow = Math.min(table.tBodies[0].rows.length - 1, Math.max(0, row + (selected && event.key === 'ArrowDown' ? 1 : selected && event.key === 'ArrowUp' ? -1 : 0)));
-      const nextCol = Math.min(table.tBodies[0].rows[nextRow].cells.length - 1, Math.max(1, col + (selected && event.key === 'ArrowRight' ? 1 : selected && event.key === 'ArrowLeft' ? -1 : 0)));
-      const next = table.tBodies[0].rows[nextRow].cells[nextCol];
-      event.preventDefault();
-      selectCell(next);
-      next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    });
-  }
+  // Summary: every response, counted per question on the server.
+  const percent = (count, of) => of ? Math.round(count / of * 100) : 0;
+  const bars = (items, of) => html`<ul class="summary-bars">${items.map(item => html`<li><span class="summary-label">${item.label}</span><span class="summary-track" aria-hidden="true"><span class="summary-fill" data-share="${percent(item.count, of)}"></span></span><span class="summary-count">${item.count} <span class="muted">(${percent(item.count, of)}%)</span></span></li>`)}</ul>`;
+  const loadSummary = async () => {
+    const target = $('#summary-body');
+    mount(target, loading('Counting responses…'));
+    try {
+      const data = await api('GET', wsPath(`/forms/${form.id}/responses/summary`));
+      if (!ctx.alive()) return;
+      mount(target, data.total ? html`<p class="muted">${plural(data.total, 'response')} in total, every version included${data.latest ? `; the latest arrived ${fmtDateTime(data.latest)}` : ''}. Search and filters do not apply here.</p>
+        ${data.scores ? html`<article class="summary-card"><h3>Quiz scores</h3>${bars(data.scores, data.total)}</article>` : ''}
+        ${data.questions.map(question => html`<article class="summary-card"><h3>${shortLabel(question.label)}</h3><p class="muted">${plural(question.answered, 'answer')}${question.kind === 'number' && question.average != null ? ` · average ${question.average} · lowest ${question.min} · highest ${question.max}` : ''}</p>
+          ${question.kind === 'choice' ? bars(question.options, question.answered) : question.kind === 'number' && question.points ? html`${bars(question.points, question.answered)}${question.labels.min || question.labels.max ? html`<p class="hint">${question.points[0].label} = ${question.labels.min || '—'} · ${question.points.at(-1).label} = ${question.labels.max || '—'}</p>` : ''}`
+            : question.kind === 'text' && question.recent.length ? html`<ul class="summary-recent" aria-label="Latest answers">${question.recent.map(answer => html`<li>${answer}</li>`)}</ul>` : ''}</article>`)}`
+        : html`<div class="empty"><h2>No responses yet</h2><p>The summary fills in as responses arrive.</p></div>`);
+      for (const fill of target.querySelectorAll('[data-share]')) fill.style.width = fill.dataset.share + '%';
+    } catch (error) { if (ctx.alive()) mount(target, notice('bad', html`<p>The summary could not be loaded. ${error.message}</p>`)); }
+  };
+  const showView = view => {
+    for (const button of $$('[data-responses-view]')) button.setAttribute('aria-pressed', String(button.dataset.responsesView === view));
+    $('#responses-summary-view').hidden = view !== 'summary';
+    $('#responses-list-view').hidden = view === 'summary';
+    const address = new URLSearchParams(location.search);
+    if (view === 'summary') address.set('view', 'summary'); else address.delete('view');
+    history.replaceState(history.state, '', ctx.path + (address.size ? '?' + address : ''));
+    if (view === 'summary') void loadSummary();
+  };
+  for (const button of $$('[data-responses-view]')) button.addEventListener('click', () => showView(button.dataset.responsesView));
+  if (ctx.query.get('view') === 'summary') void loadSummary();
 
   panel().addEventListener('close', () => {
     if (reopening || panel().open) { reopening = false; return; }
@@ -2763,6 +3151,7 @@ export async function responses(ctx, { workbook = false } = {}) {
     sinceAt = filters.since ? Date.now() - SINCE_DAYS[filters.since] * 86400000 : null;
     const address = new URLSearchParams();
     for (const key of ['q', 'since', 'version', 'signin']) if (String(filters[key]).trim()) address.set(key, String(filters[key]).trim());
+    if (!$('#responses-summary-view').hidden) address.set('view', 'summary');
     history.replaceState(history.state, '', ctx.path + (address.size ? '?' + address : ''));
     closeDetail({ restore: false });
     listState = 'loading';
@@ -2831,31 +3220,11 @@ export async function responses(ctx, { workbook = false } = {}) {
     const target = event.target.closest('button');
     if (!target || target.closest('#responses-filters') && target.id !== 'clear-filters') return;
     if (target.dataset.scope) return exportCsv(target.dataset.scope);
-    if (target.dataset.sheetAction) {
-      const action = target.dataset.sheetAction;
-      const menu = target.closest('details');
-      if (menu) { menu.open = false; menu.querySelector('summary').focus(); }
-      const workbookPage = $('#responses-page');
-      if (action === 'filter') {
-        const filtersForm = $('#responses-filters');
-        filtersForm.hidden = !filtersForm.hidden;
-        if (!filtersForm.hidden) $('#response-search').focus();
-      } else if (action === 'copy') {
-        const selected = $('.workbook-selected');
-        if (!selected) return toast('Select a cell first.');
-        try { await navigator.clipboard.writeText($('#workbook-value').textContent); toast('Cell copied.'); }
-        catch { toast('Could not copy the cell.'); }
-      } else if (action === 'sort') {
-        $('#sort-submitted')?.click();
-      } else if (action === 'refresh') {
-        await applyFilters();
-        toast(listState === 'ready' ? 'Responses refreshed.' : 'Could not refresh responses.');
-      } else {
-        workbookPage.classList.toggle(action === 'wrap' ? 'workbook-wrap' : 'workbook-no-gridlines');
-      }
-      return;
-    }
+    if(target.matches('[data-resume-metrics]')){try{const stats=await api('GET',wsPath(`/forms/${form.id}/resume-metrics`));await ask({title:'Saved draft activity · last 30 days',body:html`<p>${stats.opted_in_drafts} opted-in drafts · ${stats.submitted} submitted · ${stats.inactive_24h} inactive for at least 24 hours.</p><p>${stats.note}</p>`,confirm:'Close'});}catch(error){toast(error.message);}return;}
+    if (target.closest('[data-ai-response-summary]')) return openAiResponseSummary(form.id);
+    if (target.id === 'sort-leads') { leadFirst = !leadFirst; closeDetail({restore:false}); draw(); $('#sort-leads').focus(); return; }
     if (target.id === 'sort-submitted') {
+      leadFirst = false;
       closeDetail({ restore: false });
       oldestFirst = !oldestFirst;
       draw();
@@ -2903,6 +3272,12 @@ export async function responses(ctx, { workbook = false } = {}) {
       return;
     }
     if (target.id === 'close-detail') return closeDetail();
+    if (target.dataset.paymentRefresh) {
+      const payment = await refreshResponsePayment(wsPath(`/forms/${form.id}`), target.dataset.paymentRefresh, target);
+      const row = payment && rows.find(item => item.id === target.dataset.paymentRefresh);
+      if (row) { row.payment = payment; draw(); if (openRow === row.id && panel().open) showDetail(row, { focus: false }); }
+      return;
+    }
     if (target.dataset.stepDetail) {
       const shown = shownRows();
       const next = shown[shown.findIndex(row => row.id === openRow) + Number(target.dataset.stepDetail)];

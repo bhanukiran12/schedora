@@ -34,6 +34,10 @@ export function loadConfig(env = process.env, overrides = {}) {
     rateLimitPerMinute: Number(env.RATE_LIMIT_PER_MINUTE || 600),
     // Database space form images may take across the service (docs/FORMS.md, "Media").
     formImageStorageBytes: Number(env.FORM_IMAGE_STORAGE_MB || 60) * 1024 * 1024,
+    formUploadDirectory: env.FORM_UPLOAD_DIRECTORY || '',
+    formUploadScanner: env.FORM_UPLOAD_SCANNER || '',
+    formUploadWorkspaceBytes: Number(env.FORM_UPLOAD_WORKSPACE_MB || 10) * 1024 * 1024,
+    formUploadStorageBytes: Number(env.FORM_UPLOAD_STORAGE_MB || 100) * 1024 * 1024,
     // Proxies in front of the app that append to X-Forwarded-For (Render = 1; Vercel rewrite + Render = 2).
     trustProxyHops: Math.max(1, Number(env.TRUST_PROXY_HOPS || 1)),
     // Local development serves the static frontend from ../frontend; on Render the API runs alone.
@@ -64,6 +68,15 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Signing secret (whsec_...) of the provider's delivery-report webhook; empty means reports are not connected.
     emailWebhookSecret: env.EMAIL_WEBHOOK_SECRET || '',
     smsProvider: env.SMS_PROVIDER || 'outbox',
+    whatsappProvider: env.WHATSAPP_PROVIDER || 'outbox',
+    twilioWhatsappFrom: env.TWILIO_WHATSAPP_FROM || '',
+    twilioWhatsappContentSid: env.TWILIO_WHATSAPP_CONTENT_SID || '',
+    // Separate approved template for Forms receipts (1 name, 2 form title, 3 receipt code, 4 private stop link).
+    twilioWhatsappReceiptContentSid: env.TWILIO_WHATSAPP_RECEIPT_CONTENT_SID || '',
+    twilioInboundUrl: env.TWILIO_INBOUND_URL || '',
+    // Approved WhatsApp templates Flow may send: {"name": {"sid": "HX…", "variables": ["Label", …]}}.
+    twilioWhatsappFlowTemplates: JSON.parse(env.TWILIO_WHATSAPP_FLOW_TEMPLATES || '{}'),
+    twilioStatusCallback: env.TWILIO_STATUS_CALLBACK_URL || '',
     twilioAccountSid: env.TWILIO_ACCOUNT_SID || '',
     twilioAuthToken: env.TWILIO_AUTH_TOKEN || '',
     twilioFrom: env.TWILIO_FROM || '',
@@ -74,8 +87,16 @@ export function loadConfig(env = process.env, overrides = {}) {
     google: { clientId: env.GOOGLE_CLIENT_ID || '', clientSecret: env.GOOGLE_CLIENT_SECRET || '' },
     googleSignIn: { clientId: env.GOOGLE_SIGNIN_CLIENT_ID || '', clientSecret: env.GOOGLE_SIGNIN_CLIENT_SECRET || '' },
     microsoft: { clientId: env.MICROSOFT_CLIENT_ID || '', clientSecret: env.MICROSOFT_CLIENT_SECRET || '' },
+    // One-way Google Sheets sync for Forms. Off unless GOOGLE_SHEETS_SYNC=enabled; may reuse the Google OAuth
+    // client once drive.file is added to its consent screen, or use a client of its own.
+    googleSheets: { enabled: env.GOOGLE_SHEETS_SYNC === 'enabled', clientId: env.GOOGLE_SHEETS_CLIENT_ID || env.GOOGLE_CLIENT_ID || '', clientSecret: env.GOOGLE_SHEETS_CLIENT_SECRET || env.GOOGLE_CLIENT_SECRET || '' },
     zoom: { clientId: env.ZOOM_CLIENT_ID || '', clientSecret: env.ZOOM_CLIENT_SECRET || '' },
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    // Flow AI cost guards (docs/FLOW_V1_IMPLEMENTATION.md). They do not change plan prices or entitlements.
+    flowAiDescribeDaily: Number.isFinite(Number(env.FLOW_AI_DESCRIBE_DAILY)) && env.FLOW_AI_DESCRIBE_DAILY !== '' && env.FLOW_AI_DESCRIBE_DAILY != null ? Math.min(1000, Math.max(0, Math.floor(Number(env.FLOW_AI_DESCRIBE_DAILY)))) : 10,
+    // 'held' blocks turning on Flow v1 workflows (release package §4). Anything other than empty or 'on' holds.
+    flowV1Activation: ['', 'on'].includes(String(env.FLOW_V1_ACTIVATION ?? '').trim().toLowerCase()) ? 'on' : 'held',
+    flowAiInputChars:Math.min(50000, Math.max(1000, Math.floor(Number(env.FLOW_AI_INPUT_CHARS) || 8000))),
     aiModel: env.AI_MODEL || 'claude-opus-5-5',
     inboundEmailSecret: env.INBOUND_EMAIL_SECRET || '',
     assistAddress: env.ASSIST_ADDRESS || `assist@${productDomain}`,
@@ -101,6 +122,8 @@ export function loadConfig(env = process.env, overrides = {}) {
   if (!['none', 'test', 'razorpay'].includes(config.billingProvider)) throw new Error('Unsupported BILLING_PROVIDER.');
   if (!['evaluation', 'production'].includes(config.releaseMode)) throw new Error('RELEASE_MODE must be evaluation or production.');
   if (!['outbox', 'http'].includes(config.emailProvider)) throw new Error('EMAIL_PROVIDER must be outbox or http.');
+  for (const budget of [config.formUploadWorkspaceBytes, config.formUploadStorageBytes]) if (!Number.isSafeInteger(budget) || budget < 0) throw new Error('Form upload storage budgets must be finite nonnegative MB amounts.');
+  if (config.formUploadDirectory && (!config.formUploadScanner || (production && !config.persistentStorageConfirmed))) throw new Error('FORM_UPLOAD_DIRECTORY needs FORM_UPLOAD_SCANNER and confirmed persistent storage in production.');
   if (!Number.isSafeInteger(config.formImageStorageBytes) || config.formImageStorageBytes < 0) throw new Error('FORM_IMAGE_STORAGE_MB must specify a finite non-negative storage budget.');
   if (config.emailProvider === 'http' && (!config.emailHttpUrl || !config.emailHttpToken)) throw new Error('EMAIL_PROVIDER=http needs EMAIL_HTTP_URL and EMAIL_HTTP_TOKEN.');
   if (config.emailWebhookSecret && !validWebhookSecret(config.emailWebhookSecret)) throw new Error('EMAIL_WEBHOOK_SECRET must be the provider\'s whsec_ signing secret.');
@@ -118,6 +141,20 @@ export function loadConfig(env = process.env, overrides = {}) {
     if (url.protocol !== 'https:' && (production || url.protocol !== 'http:')) throw new Error('Alert email HTTP provider must use HTTPS.');
   }
   if (config.smsProvider === 'twilio' && (!config.twilioAccountSid || !config.twilioAuthToken || !config.twilioFrom)) throw new Error('SMS_PROVIDER=twilio needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM.');
+  if (!['outbox','twilio'].includes(config.smsProvider) || !['outbox','twilio'].includes(config.whatsappProvider)) throw new Error('Messaging providers must be outbox or twilio.');
+  if (config.whatsappProvider === 'twilio' && (!/^AC[a-f0-9]{32}$/i.test(config.twilioAccountSid) || !config.twilioAuthToken || !/^whatsapp:\+[1-9][0-9]{7,14}$/.test(config.twilioWhatsappFrom) || !/^HX[a-f0-9]{32}$/i.test(config.twilioWhatsappContentSid))) throw new Error('Twilio WhatsApp needs account credentials, a WhatsApp sender and an approved Content SID.');
+  if (config.twilioWhatsappReceiptContentSid && !/^HX[a-f0-9]{32}$/i.test(config.twilioWhatsappReceiptContentSid)) throw new Error('TWILIO_WHATSAPP_RECEIPT_CONTENT_SID must be an approved Content SID (HX...).');
+  for (const [name, template] of Object.entries(config.twilioWhatsappFlowTemplates || {})) {
+    if (!/^[a-z0-9_]{1,40}$/.test(name) || !/^HX[a-f0-9]{32}$/i.test(template?.sid || '') || !Array.isArray(template.variables) || template.variables.length > 10 || template.variables.some(label => typeof label !== 'string' || !label || label.length > 60)) throw new Error('TWILIO_WHATSAPP_FLOW_TEMPLATES maps lowercase names to {sid: HX…, variables: [labels]}.');
+  }
+  if (config.twilioInboundUrl) {
+    const url = new URL(config.twilioInboundUrl);
+    if (url.protocol !== 'https:' || url.pathname !== '/api/messaging/twilio/inbound' || url.search || url.hash || url.username || url.password) throw new Error('TWILIO_INBOUND_URL must be the public HTTPS /api/messaging/twilio/inbound URL.');
+  }
+  if (config.twilioStatusCallback) {
+    const url = new URL(config.twilioStatusCallback);
+    if (url.protocol !== 'https:' || url.pathname !== '/api/messaging/twilio/status' || url.search || url.hash || url.username || url.password) throw new Error('Twilio status callback must be the public HTTPS /api/messaging/twilio/status URL.');
+  }
   return config;
 }
 
@@ -131,12 +168,14 @@ export function publicConfig(config) {
     productDomain: config.productDomain,
     ...(config.deployment ? { deployment: config.deployment } : {}),
     ...(config.formsAuthoringFrozen ? { formsAuthoringFrozen: true } : {}),
+    ...(config.flowV1Activation === 'held' ? { flowActivationHeld: true } : {}),
     respondentSignin: Boolean(config.respondentSignin),
+    formUploads: Boolean(config.formUploadDirectory && config.formUploadScanner),
     analytics: config.analytics,
     googleSignIn: Boolean((config.googleSignIn?.clientId ? config.googleSignIn.clientId && config.googleSignIn.clientSecret : config.google.clientId && config.google.clientSecret) && (!config.production || config.encryptionKey)),
     billingMode: config.billingMode,
     operator: config.operator,
-    providers: { email: config.emailProvider, email_reports: config.emailProvider === 'http' && Boolean(config.emailWebhookSecret), sms: config.smsProvider, calendar: 'ICS feed', billing: config.billingProvider },
+    providers: { email: config.emailProvider, email_reports: config.emailProvider === 'http' && Boolean(config.emailWebhookSecret), sms: config.smsProvider, whatsapp: config.whatsappProvider, messaging_reports: Boolean(config.twilioStatusCallback), calendar: 'ICS feed', billing: config.billingProvider },
     integrations: {
       google: Boolean(config.google.clientId), microsoft: Boolean(config.microsoft.clientId), zoom: Boolean(config.zoom.clientId),
       ai: Boolean(config.anthropicApiKey), testPayments: !config.production || config.allowTestPayments

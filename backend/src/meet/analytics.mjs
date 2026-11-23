@@ -10,7 +10,7 @@ export function analytics(app, workspaceId, actor, { from, to, timezone = 'UTC' 
   const end = Date.parse(to + 'T23:59:59Z') + 14 * 3600000;
   const all = can(actor.role, 'meet.manage_all');
   const rows = app.db.all(`SELECT b.id, b.status, b.canceled_by, b.starts_at, b.created_at, b.rescheduled_from, b.source, b.payment_status, b.amount_cents, b.currency,
-      e.id AS event_type_id, e.title AS event_title, b.host_id, u.name AS host_name
+      (SELECT a.status FROM booking_attendance a WHERE a.booking_id=b.id) AS attendance, e.id AS event_type_id, e.title AS event_title, b.host_id, u.name AS host_name
     FROM bookings b JOIN event_types e ON e.id = b.event_type_id JOIN users u ON u.id = b.host_id
     WHERE b.workspace_id = ? AND b.starts_at BETWEEN ? AND ?
       AND (? = 1 OR EXISTS (SELECT 1 FROM meeting_hosts h WHERE h.meeting_id = b.meeting_id AND h.host_id = ?))`, workspaceId, start, end, all ? 1 : 0, actor.userId)
@@ -41,6 +41,7 @@ export function analytics(app, workspaceId, actor, { from, to, timezone = 'UTC' 
     range: { from, to, timezone },
     totals: {
       scheduled: scheduled.length, confirmed: live.length, canceled: canceled.length,
+      no_shows: rows.filter(row => row.attendance === 'no_show').length,
       rescheduled: rows.filter(row => row.rescheduled_from).length,
       cancellation_rate: scheduled.length ? Math.round((canceled.length / scheduled.length) * 1000) / 10 : 0,
       median_lead_hours: leadTimes.length ? Math.round(leadTimes[Math.floor(leadTimes.length / 2)]) : null

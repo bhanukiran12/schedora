@@ -163,12 +163,14 @@ function inviteeInput(eventType, body) {
   }
   const phoneQuestion = eventType.questions.find(question => question.type === 'phone' && answers[question.id]);
   if (!phone && phoneQuestion) phone = answers[phoneQuestion.id];
+  if (body.whatsapp_consent != null && typeof body.whatsapp_consent !== 'boolean') invalid('whatsapp_consent', 'Choose whether to receive WhatsApp reminders.');
+  if (body.whatsapp_consent && !/^\+[1-9][0-9]{7,14}$/.test(String(phone || '').replace(/[ ().-]/g,''))) invalid('phone', 'WhatsApp needs a phone number with country code.');
   const guests = Array.isArray(body.guests) ? body.guests.slice(0, 10).map((guest, index) => validEmail(guest, `guests.${index}`)) : [];
   return {
     name: text(body.name, 'name', { min: 1, max: 100 }),
     email: validEmail(body.email),
     notes: text(body.notes, 'notes', { max: 1000, multiline: true }),
-    timezone: body.timezone, answers, location, phone, guests
+    timezone: body.timezone, answers, location, phone, guests, whatsappConsent: body.whatsapp_consent === true
   };
 }
 
@@ -331,6 +333,7 @@ function claimSlot(app, eventType, start, input, { idempotencyKey, requestHash, 
     booked_by: bookedBy, contact_id: contactId, source, created_at: now
   };
   app.db.run(`INSERT INTO bookings (${Object.keys(booking).join(', ')}) VALUES (${Object.keys(booking).map(() => '?').join(', ')})`, ...Object.values(booking));
+  if (input.whatsappConsent) app.db.run('INSERT INTO booking_message_consent (booking_id,whatsapp,recorded_at) VALUES (?,1,?)',booking.id,now);
   return { booking, token };
 }
 
@@ -343,7 +346,7 @@ export function createBooking(app, eventType, body, idempotencyKey, options = {}
   requireKey(idempotencyKey);
   const input = inviteeInput(eventType, body);
   const start = parseStart(body.start);
-  const requestHash = sha256(JSON.stringify([eventType.id, start, input.name, input.email, input.timezone, input.notes, input.answers, input.location, input.guests]));
+  const requestHash = sha256(JSON.stringify([eventType.id, start, input.name, input.email, input.timezone, input.notes, input.answers, input.location, input.guests, input.phone, input.whatsappConsent]));
   try {
     return app.db.transaction(() => {
       const existing = app.db.get('SELECT * FROM bookings WHERE event_type_id = ? AND idempotency_key = ?', eventType.id, idempotencyKey);
@@ -409,6 +412,7 @@ export function publicBooking(app, booking, eventType) {
   const location = typeof booking.location === 'string' ? JSON.parse(booking.location) : booking.location;
   const meeting = app.db.get('SELECT video_url FROM meetings WHERE id = ?', booking.meeting_id);
   return {
+    whatsapp_reminders: Boolean(app.db.get('SELECT whatsapp FROM booking_message_consent WHERE booking_id=?',booking.id)?.whatsapp),
     id: booking.id, reference: booking.reference, status: booking.status,
     starts_at: new Date(booking.starts_at).toISOString(), ends_at: new Date(booking.ends_at).toISOString(),
     invitee_name: booking.invitee_name, invitee_email: booking.invitee_email, invitee_timezone: booking.invitee_timezone,
@@ -496,7 +500,7 @@ export function rescheduleByToken(app, token, body) {
       cancelAttendee(app, old, eventType, 'reschedule', null, false);
       const input = {
         name: old.invitee_name, email: old.invitee_email, timezone: isValidTimeZone(body.timezone) ? body.timezone : old.invitee_timezone, notes: old.notes,
-        answers: JSON.parse(old.answers), location: old.location ? JSON.parse(old.location) : null, phone: old.invitee_phone, guests: JSON.parse(old.guests)
+        answers: JSON.parse(old.answers), location: old.location ? JSON.parse(old.location) : null, phone: old.invitee_phone, guests: JSON.parse(old.guests), whatsappConsent: Boolean(app.db.get('SELECT whatsapp FROM booking_message_consent WHERE booking_id=?',old.id)?.whatsapp)
       };
       const { booking, token: fresh } = claimSlot(app, eventType, start, input, {
         idempotencyKey: 'reschedule-' + old.id, requestHash: sha256('reschedule:' + old.id), source: old.source, bookedBy: old.booked_by,
@@ -519,6 +523,7 @@ export function listBookings(app, workspaceId, actor, scope, { eventTypeId, host
   const rows = app.db.all(`SELECT b.id, b.reference, b.status, b.starts_at, b.ends_at, b.invitee_name, b.invitee_email, b.invitee_timezone, b.invitee_phone, b.notes, b.answers,
       b.location, b.guests, b.meeting_id, b.payment_status, b.amount_cents, b.currency, b.source, b.contact_id,
       b.canceled_by, b.cancel_reason, b.rescheduled_to, b.anonymized_at, e.title AS event_title, e.kind, e.timezone AS host_timezone, e.questions,
+      (SELECT a.status FROM booking_attendance a WHERE a.booking_id=b.id) AS attendance,
       (SELECT group_concat(u.name, ', ') FROM meeting_hosts h JOIN users u ON u.id = h.host_id WHERE h.meeting_id = b.meeting_id) AS host_name,
       m.video_url
     FROM bookings b JOIN event_types e ON e.id = b.event_type_id JOIN meetings m ON m.id = b.meeting_id

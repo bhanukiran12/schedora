@@ -1,0 +1,214 @@
+{
+  "inspected_at": "2026-11-23T11:51:35.176Z",
+  "read_only": true,
+  "server_version": "17.11",
+  "transaction_read_only": "on",
+  "latest_applied": [
+    {
+      "name": "postgres_v16_response_attribution",
+      "applied_at": "2026-11-07T10:13:44.474Z"
+    },
+    {
+      "name": "postgres_v17_respondent_signin",
+      "applied_at": "2026-11-09T10:27:58.263Z"
+    },
+    {
+      "name": "postgres_v18_form_workbooks",
+      "applied_at": "2026-11-17T13:19:26.439Z"
+    },
+    {
+      "name": "postgres_v19_standalone_workbooks",
+      "applied_at": "2026-11-17T13:19:26.565Z"
+    },
+    {
+      "name": "postgres_v20_form_response_edits",
+      "applied_at": "2026-11-18T10:15:39.157Z"
+    },
+    {
+      "name": "postgres_v21_form_uploads",
+      "applied_at": "2026-11-18T10:15:39.182Z"
+    },
+    {
+      "name": "postgres_v22_upload_response_edits",
+      "applied_at": "2026-11-18T10:15:39.192Z"
+    },
+    {
+      "name": "postgres_v23_workbook_trash",
+      "applied_at": "2026-11-19T10:05:02.963Z"
+    }
+  ],
+  "pending": [
+    "postgres_v24_product_tools",
+    "postgres_v25_message_consent",
+    "postgres_v26_whatsapp_workflows",
+    "postgres_v27_form_resume",
+    "postgres_v28_qualify_starters",
+    "postgres_v29_form_payments",
+    "postgres_v30_form_message_consent",
+    "postgres_v31_google_sheets_sync",
+    "postgres_v32_meeting_followups",
+    "postgres_v33_flow_v1"
+  ],
+  "unexpected": [],
+  "highest_applied": 23,
+  "flows": [
+    {
+      "action_type": "task",
+      "status": "paused",
+      "count": 2
+    }
+  ],
+  "flow_runs": [
+    {
+      "status": "succeeded",
+      "count": 2
+    }
+  ],
+  "emails_pending": [],
+  "outbox_undispatched": {
+    "count": 0,
+    "oldest_age_minutes": null
+  },
+  "flow_v1_tables_present": {
+    "flow_versions": false,
+    "flow_run_steps": false,
+    "flow_waits": false,
+    "flow_approvals": false,
+    "flow_schedules": false
+  },
+  "schema_size_mb": 4,
+  "table_count": 82,
+  "app_connections": [
+    {
+      "application_name": "",
+      "connections": 2,
+      "distinct_clients": 1,
+      "since": "2026-11-11T23:09:50.017Z"
+    },
+    {
+      "application_name": "pg_cron scheduler",
+      "connections": 1,
+      "distinct_clients": 0,
+      "since": "2026-10-24T05:36:06.337Z"
+    },
+    {
+      "application_name": "pg_net 0.20.4",
+      "connections": 1,
+      "distinct_clients": 0,
+      "since": "2026-10-24T05:36:06.335Z"
+    },
+    {
+      "application_name": "postgres_exporter",
+      "connections": 1,
+      "distinct_clients": 1,
+      "since": "2026-11-12T22:12:00.349Z"
+    },
+    {
+      "application_name": "PostgREST 14.18",
+      "connections": 1,
+      "distinct_clients": 1,
+      "since": "2026-10-24T05:36:06.465Z"
+    },
+    {
+      "application_name": "Supavisor",
+      "connections": 1,
+      "distinct_clients": 1,
+      "since": "2026-11-21T06:41:02.133Z"
+    },
+    {
+      "application_name": "Supavisor (auth_query)",
+      "connections": 1,
+      "distinct_clients": 1,
+      "since": "2026-11-12T06:26:02.590Z"
+    }
+  ],
+  "worker_activity_minutes_ago": {
+    "outbox_dispatched": 7275,
+    "email_sent": 14459,
+    "flow_run_updated": 7275
+  },
+  "row_counts": {
+    "api_keys": 0,
+    "assist_requests": 0,
+    "audit_log": 4,
+    "auth_identities": 3,
+    "auth_login_flows": 1,
+    "availability_rules": 21,
+    "billing_checkouts": 0,
+    "billing_events": 0,
+    "bookings": 4,
+    "busy_blocks": 0,
+    "calendar_connections": 2,
+    "contact_notes": 0,
+    "contacts": 5,
+    "credit_accounts": 1,
+    "credit_allocations": 5,
+    "credit_ledger": 19,
+    "credit_lots": 2,
+    "credit_payment_events": 0,
+    "credit_recharge_orders": 0,
+    "credit_reservations": 5,
+    "date_overrides": 0,
+    "email_provider_events": 0,
+    "emails": 17,
+    "event_type_hosts": 4,
+    "event_types": 4,
+    "flow_runs": 2,
+    "flows": 2,
+    "form_assets": 0,
+    "form_handoffs": 0,
+    "form_response_edits": 1,
+    "form_themes": 1,
+    "form_uploads": 0,
+    "form_version_assets": 0,
+    "form_versions": 11,
+    "form_workbook_comments": 0,
+    "form_workbook_links": 0,
+    "form_workbook_versions": 0,
+    "form_workbooks": 0,
+    "forms": 6,
+    "integrations": 2,
+    "meet_workflows": 0,
+    "meeting_hosts": 4,
+    "meetings": 4,
+    "memberships": 4,
+    "monitor_alerts": 1,
+    "outbox": 11,
+    "poll_options": 0,
+    "poll_votes": 0,
+    "polls": 0,
+    "recaps": 0,
+    "respondent_sessions": 0,
+    "responses": 5,
+    "schema_migrations": 23,
+    "sessions": 6,
+    "sso_configs": 0,
+    "subscriptions": 0,
+    "tasks": 2,
+    "transcripts": 0,
+    "usage_counters": 5,
+    "user_schedules": 2,
+    "users": 6,
+    "video_invites": 3,
+    "video_participants": 5,
+    "video_provider_events": 41,
+    "video_provider_ops": 4,
+    "video_rooms": 7,
+    "video_session_notes": 0,
+    "video_session_offers": 0,
+    "video_session_receipts": 0,
+    "video_usage_intervals": 5,
+    "video_usage_records": 10,
+    "webhook_deliveries": 0,
+    "webhook_endpoints": 0,
+    "workbook_access": 0,
+    "workbook_comments": 0,
+    "workbook_form_links": 0,
+    "workbook_trash": 0,
+    "workbook_versions": 60,
+    "workbooks": 3,
+    "worker_state": 0,
+    "workspace_onboarding": 2,
+    "workspaces": 4
+  }
+}

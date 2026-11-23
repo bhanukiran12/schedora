@@ -228,3 +228,41 @@ test('import and export need forms access in that workspace; images must belong 
     assert.match(refused.body.error.message, /^Question 1 \(“Name”\) shows an image that is not in this workspace/);
   } finally { await close(); }
 });
+
+test('exported question limits, collection settings and quiz feedback reimport without losing settings', async () => {
+  const { http, path, close } = await host();
+  try {
+    const definition = {
+      title: 'Configured quiz', presentation: 'classic', mode: 'knowledge_quiz',
+      responses: { limit: 20, open_at: Date.UTC(2026, 9, 1), close_at: Date.UTC(2026, 11, 1), closed_message: 'Closed for marking' },
+      fields: [
+        { id: 'quantity', type: 'number', label: 'Quantity', number: { min: 2, max: 8, integer: true, message: 'Use a whole number from 2 to 8' } },
+        { id: 'rating', type: 'scale', label: 'Rating', scale: { min: 1, max: 5, min_label: 'Low', max_label: 'High' } },
+        { id: 'quiz', type: 'single_choice', label: 'Choose', display: 'dropdown', options: [{ id: 'yes', label: 'Yes', correct: true, points: 2 }, { id: 'no', label: 'No' }], feedback: { correct: 'Well done', incorrect: 'Review this topic' } }
+      ]
+    };
+    const created = await http.post(path(''), { definition });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const exported = await http.get(path('/' + created.body.id + '/definition.json'));
+    assert.equal(exported.status, 200);
+    const imported = await importFile(http, path, exported.body);
+    assert.equal(imported.status, 201, JSON.stringify(imported.body));
+    assert.deepEqual(imported.body.form.draft, created.body.draft);
+    const publicForm = await http.post(path('/' + imported.body.form.id + '/publish'));
+    assert.equal(publicForm.status, 200, JSON.stringify(publicForm.body));
+    const publicDefinition = await http.get('/api/public/forms/' + imported.body.form.slug);
+    const choice = publicDefinition.body.definition.fields.find(field => field.id === 'quiz');
+    assert.ok(!('feedback' in choice));
+    assert.ok(choice.options.every(option => !('correct' in option) && !('points' in option)));
+    for (const [part, extra] of [['responses', { delivery_token: 'must-not-be-imported' }], ['number', { formula: 'unsupported' }], ['scale', { unknown: 1 }], ['feedback', { answer_key: 'unsupported' }]]) {
+      const invalid = structuredClone(exported.body);
+      const target = part === 'responses' ? invalid.definition.responses : invalid.definition.fields.find(field => part in field)[part];
+      Object.assign(target, extra);
+      assert.equal((await check(http, path, invalid)).status, 400, part + ' refuses unknown nested keys');
+    }
+    const withEdit = tiny({ responses: { allow_edit: true } });
+    const copiedEdit = await importFile(http, path, withEdit);
+    assert.equal(copiedEdit.status, 201, JSON.stringify(copiedEdit.body));
+    assert.equal(copiedEdit.body.form.draft.responses.allow_edit, true);
+  } finally { await close(); }
+});

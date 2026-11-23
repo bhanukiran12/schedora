@@ -2,6 +2,12 @@ import { $, $$, api, ask, badge, boot, errorBlock, fmtDateTime, handleSubmit, ht
 import { needsSession, setTitle, signInPrompt } from './pages.mjs';
 import { FLOW_STARTERS } from './flow-starters.mjs';
 import { emailEvidence } from './email-evidence.mjs';
+import { TRIGGERS as V1_TRIGGERS } from '../shared/flow-logic.mjs';
+import { chip, RUN_CHIP } from './flow-runs.mjs';
+
+const editHref = flow => flow.action_type === 'steps' ? `/flow/build/${flow.id}` : `/flow/${flow.id}`;
+const triggerLabel = type => V1_TRIGGERS[type]?.label || 'Workspace event';
+const STATE_CHIP = { draft: ['neutral', 'Draft'], on: ['ok', 'On'], paused: ['warn', 'Paused'], off: ['neutral', 'Off'] };
 
 const TRIGGERS = {
   'meet.booking.created': 'A Meet appointment is booked',
@@ -48,7 +54,44 @@ export async function dashboard(ctx) {
   } catch (error) { if (ctx.alive()) mount(panel, errorBlock(error)); }
 }
 
+// Flow v1 home: job templates (inactive drafts), "Describe your automation", usage and approvals.
+async function flowHome(ctx, panel) {
+  const [catalog, usage, approvals] = await Promise.all([api('GET', wsPath('/flow/templates')), api('GET', wsPath('/flow/usage')), api('GET', wsPath('/flow/approvals')).catch(() => [])]);
+  if (!ctx.alive()) return;
+  const bindings = Object.fromEntries(['form', 'event_type', 'workbook', 'sheet'].map(key => [key, ctx.query.get(key)]).filter(([, value]) => value && /^[A-Za-z0-9_-]{1,64}$/.test(value)));
+  const from = bindings.form ? 'this form' : bindings.event_type ? 'this event type' : bindings.workbook ? 'this workbook' : '';
+  const percent = usage.limit ? Math.min(100, Math.round(usage.used / usage.limit * 100)) : null;
+  const section = document.createElement('div');
+  section.className = 'flow-home';
+  panel.before(section);
+  mount(section, html`${approvals.length ? notice('warn', html`<p><strong>${approvals.length} step${approvals.length === 1 ? ' is' : 's are'} waiting for approval.</strong> <a href="/flow/approvals">Review approvals →</a></p>`) : ''}
+    <section class="workspace-overview-panel flow-usage" aria-labelledby="usage-heading"><header><div><p class="page-eyebrow">USAGE</p><h2 id="usage-heading">Runs this month</h2></div></header>
+      <p><strong>${usage.used}</strong>${usage.limit ? ` of ${usage.limit} runs` : ' runs (no limit while billing is open)'} · resets ${new Date(usage.resets_at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</p>
+      ${percent != null ? html`<meter min="0" max="100" value="${percent}" aria-label="Runs used this month">${percent}%</meter>` : ''}<p class="hint">${usage.counts}</p></section>
+    ${isAdmin() ? html`<section class="workspace-overview-panel flow-templates" aria-labelledby="templates-heading"><header><div><p class="page-eyebrow">START FROM A JOB</p><h2 id="templates-heading">Workflow templates${from ? ` for ${from}` : ''}</h2></div></header>
+      <p class="hint">Each template opens as an editable draft. Nothing runs until you publish it and turn it on.</p>
+      ${Object.entries(catalog.jobs).map(([job, label]) => html`<h3 class="flow-job">${label}</h3><ul class="flow-template-list">${catalog.templates.filter(item => item.job === job).map(item => html`<li><button class="flow-template" type="button" data-template="${item.id}"><strong>${item.name}</strong><span>${item.summary}</span>${item.note ? html`<small>${item.note}</small>` : ''}</button></li>`)}</ul>`)}
+      <div class="row"><button class="btn" type="button" id="flow-blank">Start a blank workflow</button>${usage.describe?.available ? html`<button class="btn" type="button" id="flow-describe">Describe your automation</button>` : ''}<a class="btn btn-link" href="/flow/approvals">Approvals</a></div></section>` : ''}`);
+  const create = async body => {
+    try { const flow = await api('POST', wsPath('/flow/workflows'), body); ctx.navigate('/flow/build/' + flow.id); }
+    catch (error) { toast(error.message); }
+  };
+  section.addEventListener('click', async event => {
+    const template = event.target.closest('[data-template]');
+    if (template) return create({ template: template.dataset.template, bindings });
+    if (event.target.id === 'flow-blank') return create({ name: 'New workflow', definition: { trigger: { type: bindings.event_type ? 'meet.booking.created' : bindings.workbook ? 'sheets.row.manual' : 'forms.response.created', ...(bindings.form || bindings.event_type || bindings.workbook ? { source: bindings.form || bindings.event_type || bindings.workbook } : {}), ...(bindings.sheet ? { config: { sheet: bindings.sheet } } : {}) }, steps: [] } });
+    if (event.target.id === 'flow-describe') {
+      const choice = await ask({ title: 'Describe your automation', body: 'AI builds an editable draft. You review every step; nothing is published or turned on.', fields: html`<label for="describe-text">What should happen?</label><textarea id="describe-text" name="description" rows="4" minlength="10" maxlength="2000" required placeholder="When someone submits the enquiry form and is a Hot lead, email them a booking link. If they don't book within a day, create a call task for the owner."></textarea>`, confirm: 'Build draft' });
+      if (!choice) return;
+      event.target.disabled = true;
+      try { const flow = await api('POST', wsPath('/flow/describe'), { description: choice.description, request_id: crypto.randomUUID() }); ctx.navigate('/flow/build/' + flow.id); }
+      catch (error) { toast(error.message); event.target.disabled = false; }
+    }
+  });
+}
+
 async function flowOverview(ctx, panel) {
+  await flowHome(ctx, panel);
   const [flows, runs] = await Promise.all([api('GET', wsPath('/flows')), api('GET', wsPath('/runs'))]);
   if (!ctx.alive()) return;
   const active = flows.filter(flow => flow.status === 'enabled');
@@ -59,7 +102,7 @@ async function flowOverview(ctx, panel) {
     <a class="workspace-metric workspace-metric--attention" href="/flow/runs?status=failed"><span>Needs attention</span><strong>${failed.length}</strong><small>Failed runs to review</small></a>
   </div><div class="workspace-overview__grid">
     <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">AUTOMATION</p><h2>Your workflows</h2></div><a href="/flow?tab=flows">All workflows →</a></header>
-      ${flows.length ? html`<ul class="workspace-overview-list">${flows.slice(0, 6).map(flow => html`<li><span><strong>${flow.name}</strong><small>${TRIGGERS[flow.trigger_type] || 'Workspace event'} · ${ACTIONS[flow.action_type]}</small></span>${badge(flow.status)}<a class="btn btn-small" href="/flow/${flow.id}">Edit</a></li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No workflows yet</strong><p>Choose what starts the follow-up and what should happen next.</p><a class="btn btn-small btn-primary" href="/flow/new">Create a workflow</a></div>`}
+      ${flows.length ? html`<ul class="workspace-overview-list">${flows.slice(0, 6).map(flow => html`<li><span><strong>${flow.name}</strong><small>${triggerLabel(flow.trigger_type)}${flow.action_type === 'steps' ? '' : ` · ${ACTIONS[flow.action_type]}`}</small></span>${badge(flow.status)}<a class="btn btn-small" href="${editHref(flow)}">Edit</a></li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No workflows yet</strong><p>Choose what starts the follow-up and what should happen next.</p><a class="btn btn-small btn-primary" href="/flow/new">Create a workflow</a></div>`}
     </section>
     <section class="workspace-overview-panel"><header><div><p class="page-eyebrow">ACTIVITY</p><h2>Recent runs</h2></div><a href="/flow/runs">Run history →</a></header>
       ${runs.length ? html`<ul class="workspace-overview-list">${runs.slice(0, 6).map(run => html`<li><time>${fmtDateTime(run.created_at)}</time><span><strong>${run.flow_name}</strong><small>${run.last_error || (run.result?.task ? 'Follow-up task created' : run.result?.email ? 'Email action recorded' : 'Workflow run')}</small></span>${badge(run.status)}</li>`)}</ul>` : html`<div class="workspace-overview__empty"><strong>No runs yet</strong><p>Runs appear here after an enabled workflow receives a booking or response.</p></div>`}
@@ -67,7 +110,33 @@ async function flowOverview(ctx, panel) {
   </div>${failed.length ? html`<p class="workspace-overview__attention"><strong>${failed.length} failed ${failed.length === 1 ? 'run needs' : 'runs need'} attention.</strong> <a href="/flow/runs?status=failed">Review failed runs →</a></p>` : ''}`);
 }
 
+// Integrations, honestly labelled: only "Connected and tested" (or native) channels can be used by a
+// workflow that is on. Others can still be simulated.
+const INTEGRATION_STATE = { tested: ['ok', 'Connected and tested'], connected: ['warn', 'Connected, not tested yet'], not_configured: ['neutral', 'Not configured'], local: ['warn', 'Local outbox (nothing delivered)'], native: ['ok', 'Built in'] };
 async function connectionsTab(ctx, panel) {
+  await classicConnections(ctx, panel);
+  const status = await api('GET', wsPath('/flow/integrations'));
+  if (!ctx.alive()) return;
+  const section = document.createElement('section');
+  section.className = 'workspace-overview-panel flow-integrations';
+  section.setAttribute('aria-labelledby', 'integrations-heading');
+  mount(section, html`<header><div><p class="page-eyebrow">CHANNELS AND APPS</p><h2 id="integrations-heading">Integrations</h2></div></header>
+    <p class="hint">A workflow can be turned on only when every channel it uses is connected and tested. Use “Send test to me” in a workflow to test a channel. Unconfigured channels can still be tested with a recent record (nothing is sent).</p>
+    <ul class="list">${Object.entries(status).map(([key, item]) => html`<li class="row-between"><div><div class="list-title">${item.label}</div>${item.note ? html`<p class="hint">${item.note}</p>` : ''}${item.channel ? html`<p class="hint">${item.channel}</p>` : ''}${item.templates?.length ? html`<p class="hint">Approved templates: ${item.templates.map(template => template.name).join(', ')}</p>` : ''}</div>
+      <div class="row">${chip(INTEGRATION_STATE[item.state] || ['neutral', item.state])}${key === 'slack' && isAdmin() ? (item.state === 'not_configured' ? html`<button class="btn btn-small" type="button" id="slack-connect">Connect Slack</button>` : html`<button class="btn btn-small" type="button" id="slack-disconnect">Disconnect</button>`) : ''}</div></li>`)}</ul>`);
+  panel.append(section);
+  $('#slack-connect', section)?.addEventListener('click', async () => {
+    const choice = await ask({ title: 'Connect Slack', body: 'Create an incoming webhook in Slack for the channel you want, then paste its address. Nothing is posted until you send a test or turn on a workflow.', fields: html`<label for="slack-url">Incoming webhook address</label><input id="slack-url" name="webhook_url" type="url" required maxlength="300" placeholder="https://hooks.slack.com/services/…"><label for="slack-channel">Channel name (for your reference)</label><input id="slack-channel" name="channel" maxlength="80" placeholder="#leads">`, confirm: 'Connect' });
+    if (!choice) return;
+    try { await api('PUT', wsPath('/flow/integrations/slack'), choice); toast('Slack connected. Send a test from a workflow to confirm it.'); ctx.render(); } catch (error) { toast(error.message); }
+  });
+  $('#slack-disconnect', section)?.addEventListener('click', async () => {
+    if (!(await ask({ title: 'Disconnect Slack?', body: 'Workflows with a Slack step cannot be turned on until it is connected and tested again.', confirm: 'Disconnect', danger: true }))) return;
+    try { await api('DELETE', wsPath('/flow/integrations/slack')); ctx.render(); } catch (error) { toast(error.message); }
+  });
+}
+
+async function classicConnections(ctx, panel) {
   const flows = await api('GET', wsPath('/flows'));
   if (!ctx.alive()) return;
   const cards = [
@@ -89,13 +158,21 @@ async function flowsTab(ctx, panel) {
     ${isAdmin() ? html`<p class="flow-empty-lead">Start from an outcome. Each opens as an unsaved draft you can edit; nothing runs until you enable it.</p>
       <ul class="flow-starter-links">${FLOW_STARTERS.map(starter => html`<li><a href="/flow/new?starter=${starter.id}"><strong>${starter.name}</strong><span>${starter.description}</span></a></li>`)}</ul>
       <div class="row"><a class="btn" href="/flow/new">Start from scratch</a><a class="btn" href="/setup/flow">Set up Flow</a></div>` : html`<p>Ask a workspace administrator to create one.</p>`}</div>`);
-  mount(panel, html`<ul class="list">${flows.map(flow => html`<li class="row-between"><div>
+  const v1 = Object.fromEntries((await api('GET', wsPath('/flow/workflows'))).map(flow => [flow.id, flow]));
+  if (!ctx.alive()) return;
+  mount(panel, html`<ul class="list">${flows.map(flow => { const steps = v1[flow.id]?.action_type === 'steps' ? v1[flow.id] : null; return html`<li class="row-between"><div>
       <div class="list-title">${flow.name}</div>
-      <div class="meta"><span>${TRIGGERS[flow.trigger_type]} → ${ACTIONS[flow.action_type]}</span><span>${flow.run_count} runs</span>${flow.failed_count ? html`<a href="/flow/runs">${flow.failed_count} failed</a>` : ''}</div></div>
-    <div class="row">${badge(flow.status)}${isAdmin() ? html`
-      ${flow.status === 'enabled' ? html`<button class="btn btn-small" data-status="paused" data-id="${flow.id}">Pause</button>` : html`<button class="btn btn-small" data-status="enabled" data-id="${flow.id}">${flow.status === 'paused' ? 'Resume' : 'Enable flow'}</button>`}
-      <a class="btn btn-small" href="/flow/${flow.id}">Edit</a>` : ''}</div></li>`)}</ul>
+      <div class="meta"><span>${triggerLabel(flow.trigger_type)}${steps ? ` · ${steps.definition.steps.length} steps` : ` → ${ACTIONS[flow.action_type]}`}</span><span>${flow.run_count} runs</span>${flow.failed_count ? html`<a href="/flow/runs?status=failed">${flow.failed_count} failed</a>` : ''}${steps?.failing ? html`<span class="badge badge-bad">Failing</span>` : ''}</div>
+      ${steps ? html`<p class="hint">${steps.sentence}</p>` : ''}</div>
+    <div class="row">${steps ? html`${chip(STATE_CHIP[steps.state] || STATE_CHIP.draft)}${steps.unpublished_changes ? chip(['warn', 'Unpublished changes']) : ''}` : badge(flow.status)}${isAdmin() ? html`
+      ${steps ? (steps.failed_count ? html`<button class="btn btn-small" data-retry-failed="${flow.id}">Retry failed (${steps.failed_count})</button>` : '') : flow.status === 'enabled' ? html`<button class="btn btn-small" data-status="paused" data-id="${flow.id}">Pause</button>` : html`<button class="btn btn-small" data-status="enabled" data-id="${flow.id}">${flow.status === 'paused' ? 'Resume' : 'Enable flow'}</button>`}
+      <a class="btn btn-small" href="${editHref(flow)}">Edit</a>` : ''}</div></li>`; })}</ul>
     <p class="muted">Paused flows keep new events queued and run them when resumed. Draft flows ignore events.</p>`);
+  $$('[data-retry-failed]', panel).forEach(button => button.onclick = async () => {
+    if (!(await ask({ title: 'Retry failed runs?', body: 'Each failed run restarts at the step that failed. Steps that already happened are not repeated, and runs whose outcome is uncertain are listed for you to check one by one. Retries do not count toward usage.', confirm: 'Retry failed runs' }))) return;
+    try { const result = await api('POST', wsPath(`/flow/workflows/${button.dataset.retryFailed}/retry-failed`), {}); toast(`${result.retried} run(s) queued for retry.${result.needs_review.length ? ` ${result.needs_review.length} need your review first.` : ''}`); ctx.render(); }
+    catch (error) { toast(error.message); }
+  });
   $$('[data-status]', panel).forEach(button => button.onclick = async () => {
     try { await api('PATCH', wsPath('/flows/' + button.dataset.id), { status: button.dataset.status }); toast(button.dataset.status === 'enabled' ? 'Flow enabled.' : 'Flow paused.'); ctx.render(); }
     catch (error) { toast(error.message); }
@@ -103,14 +180,14 @@ async function flowsTab(ctx, panel) {
 }
 
 async function runsTab(ctx, panel) {
-  const status = ['failed', 'succeeded', 'queued', 'retrying'].includes(ctx.query.get('status')) ? ctx.query.get('status') : 'all';
+  const status = ['failed', 'succeeded', 'queued', 'retrying', 'waiting', 'needs_approval', 'skipped', 'canceled'].includes(ctx.query.get('status')) ? ctx.query.get('status') : 'all';
   const draw = runs => mount(panel, html`<div class="row-between"><p class="muted">A run succeeds when its task is created or its email action is recorded. Each email outcome uses the sending method saved for that message, where available. Inbox delivery is not tracked. Retrying reuses the same run, so a created task or accepted email is not repeated.</p><button class="btn btn-small" id="refresh">Refresh</button></div>
-    <nav class="row section-gap" aria-label="Filter workflow runs">${[['all', 'All runs'], ['failed', 'Needs attention'], ['queued', 'Queued'], ['retrying', 'Retrying'], ['succeeded', 'Succeeded']].map(([key, label]) => html`<a class="btn btn-small ${status === key ? 'btn-primary' : ''}" href="/flow/runs${key === 'all' ? '' : `?status=${key}`}" ${status === key ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
+    <nav class="row section-gap" aria-label="Filter workflow runs">${[['all', 'All runs'], ['failed', 'Needs attention'], ['waiting', 'Waiting'], ['needs_approval', 'Needs approval'], ['queued', 'Queued'], ['retrying', 'Retrying'], ['succeeded', 'Succeeded'], ['skipped', 'Skipped'], ['canceled', 'Canceled']].map(([key, label]) => html`<a class="btn btn-small ${status === key ? 'btn-primary' : ''}" href="/flow/runs${key === 'all' ? '' : `?status=${key}`}" ${status === key ? raw('aria-current="page"') : ''}>${label}</a>`)}</nav>
     ${runs.length ? html`<div class="table-wrap stack-on-mobile"><table><thead><tr><th>Started</th><th>Flow</th><th>Trigger</th><th>Status</th><th>Attempts</th><th>Outcome</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody>
     ${runs.map(run => html`<tr><td data-label="Started">${fmtDateTime(run.created_at)}</td><td data-label="Flow">${run.flow_name}${run.flow_status === 'paused' && ['queued', 'retrying'].includes(run.status) ? html`<div class="muted">Held while paused</div>` : ''}</td>
-      <td data-label="Trigger">${TRIGGERS[run.event_type] || 'Workspace event'}</td><td data-label="Status">${badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
-      <td data-label="Outcome"><div>${run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailEvidence(run).text : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</div></td>
-      <td class="${run.status === 'failed' && isAdmin() ? '' : 'empty-cell'}">${run.status === 'failed' && isAdmin() ? html`<button class="btn btn-small" data-retry="${run.id}">Retry<span class="visually-hidden"> ${run.flow_name}</span></button>` : ''}</td></tr>`)}</tbody></table></div>`
+      <td data-label="Trigger">${triggerLabel(run.event_type)}</td><td data-label="Status">${run.version != null ? chip(RUN_CHIP[run.status] || ['neutral', run.status]) : badge(run.status)}</td><td data-label="Attempts">${run.attempts}</td>
+      <td data-label="Outcome"><div>${run.version != null ? html`<span>${run.reason || ''}</span> <a href="/flow/runs/${run.id}">View steps<span class="visually-hidden"> of ${run.flow_name}</span></a>` : run.last_error ? html`<span>${run.last_error}</span>` : run.result?.task ? html`Task created · <a href="/flow/tasks">View tasks</a>` : run.result?.email ? emailEvidence(run).text : ''}${run.status === 'retrying' ? html`<div class="muted">Next try ${fmtDateTime(run.next_attempt_at)}</div>` : ''}</div></td>
+      <td class="${run.status === 'failed' && isAdmin() && run.version == null ? '' : 'empty-cell'}">${run.status === 'failed' && isAdmin() && run.version == null ? html`<button class="btn btn-small" data-retry="${run.id}">Retry<span class="visually-hidden"> ${run.flow_name}</span></button>` : ''}</td></tr>`)}</tbody></table></div>`
     : html`<div class="empty">${status === 'failed' ? 'No failed runs. You’re all caught up.' : 'No runs yet. Runs appear when an enabled flow’s trigger happens.'}</div>`}`);
   const load = async () => { const runs = await api('GET', wsPath(`/runs${status === 'all' ? '' : `?status=${encodeURIComponent(status)}`}`)); if (ctx.alive()) draw(runs); };
   await load();

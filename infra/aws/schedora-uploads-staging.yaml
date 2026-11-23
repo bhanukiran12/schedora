@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private encrypted storage for Schedora staging respondent attachments.
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+Resources:
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      BackupPolicy:
+        Status: ENABLED
+      FileSystemTags:
+        - Key: Name
+          Value: schedora-staging-uploads
+        - Key: Environment
+          Value: staging
+  StorageSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Schedora staging tasks access private attachment storage
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: schedora-staging-uploads
+  MountA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetA
+      SecurityGroups: [!Ref StorageSecurityGroup]
+  MountB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref SubnetB
+      SecurityGroups: [!Ref StorageSecurityGroup]
+Outputs:
+  FileSystemId:
+    Value: !Ref FileSystem
+  MountSecurityGroupId:
+    Value: !Ref StorageSecurityGroup
