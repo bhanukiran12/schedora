@@ -799,6 +799,9 @@ async function freezeSection() {
   const uiWrites = async label => {
     // The preceding journey may be on the old standalone frontend origin. Sign
     // in on this server's origin so its host-only session reaches the builder.
+    // Each server revision gets a fresh browser session; a retained valid cookie
+    // would redirect /login to the dashboard before the login form can appear.
+    await send('Network.clearBrowserCookies');
     await open('/login', "document.querySelector('input[type=email]')");
     const login = await evaluate(`(async () => { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(owner.email)}, password: 'a sufficiently long password' }) }); return response.status; })()`);
     if (login !== 200) throw new Error(label + ': browser login failed (' + login + ')');
