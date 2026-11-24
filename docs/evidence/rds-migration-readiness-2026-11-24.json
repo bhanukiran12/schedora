@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-24",
+  "source_commit": "18d1dbd",
+  "status": "target_ready_cutover_waiting_for_production_routing_decision",
+  "aws": {
+    "region": "ap-south-1",
+    "database": "schedora-shared",
+    "stack_status": "CREATE_COMPLETE",
+    "database_status": "available",
+    "endpoint": "schedora-shared.c3oyoucku4fp.ap-south-1.rds.amazonaws.com",
+    "postgres_version": "17.11",
+    "class": "db.t4g.micro",
+    "multi_az": false,
+    "publicly_accessible": false,
+    "storage_encrypted": true,
+    "deletion_protection": true,
+    "backup_retention_days": 1,
+    "backup_retention_note": "Account Free plan rejected seven days; template default remains seven. Account plan was not upgraded.",
+    "preflight_task": "schedora-web:22",
+    "preflight_task_id": "ed7b2e3be75548af94ec0c2b2a943c19",
+    "preflight_result": {
+      "runtime_credentials_injected": true,
+      "tls": true,
+      "target_populated": false
+    },
+    "migration_image": "sha256:4a6fc4e0818a36a0e011047e72507adb43a2d5eda8911716d9dfd19e55d3043d",
+    "application_image": "sha256:12ec14c355f3ce71619ed38138d9e18cfe663328bc797b828433117ed4479ebb",
+    "prepared_application_task": "schedora-web:23",
+    "prepared_task_not_started": true,
+    "prepared_task_dependency": "Successful migration must publish the new app secret URL before task 23 can start.",
+    "active_service_task": "schedora-web:21",
+    "active_service_running": 1,
+    "flow_activation": "held"
+  },
+  "permissions": {
+    "deployment_policy_attached": true,
+    "deployment_policy_group": "SchedoraDeploy",
+    "runtime_change_approved_and_applied": true,
+    "temporary_migration_access_expires_utc": "2026-11-25T18:30:00Z",
+    "deployment_user_secret_value_read_added": false
+  },
+  "local_transfer_rehearsal": {
+    "verified": true,
+    "tables": 105,
+    "rows": 337,
+    "schema_matches": true,
+    "differing_tables": [],
+    "source_unchanged": true,
+    "repeat_transfer_refused": true,
+    "disposable_container_and_network_removed": true
+  },
+  "checks": {
+    "syntax_files": 307,
+    "unit_tests": 560,
+    "unit_passed": 553,
+    "unit_failed": 0,
+    "optional_postgres_skipped": 7,
+    "targeted_database_tests_passed": 4
+  },
+  "cutover": {
+    "writers_paused": false,
+    "live_data_copied": false,
+    "new_app_secret_url_published": false,
+    "application_database_switched": false,
+    "source_deleted": false,
+    "reason": "Production DNS and frontend API rewrites still reference Vercel/Render; Render service remains Live on revision 989cda5. Owner was asked whether to migrate public production routes too or retire legacy production and use AWS staging only. Existing apps remain running until clarified."
+  }
+}

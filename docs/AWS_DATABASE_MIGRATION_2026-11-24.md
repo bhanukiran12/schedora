@@ -79,3 +79,22 @@ The one-shot migration image was built and rehearsed using that backup in a disp
 `SchedoraRdsRuntimeMigration.json` and the additive `SchedoraRuntimeBoundary.json` change were approved and applied on 24 November. Additions are restricted to `schedora-web-execution`, the exact new app and owner secrets, and the exact encryption key through Secrets Manager with the secret's encryption context. Owner reads and app-URL publication expire at `2026-11-25T18:30:00Z` (26 November midnight IST); remove them after migration even if they have expired. Existing AppBeta references and permissions are preserved. The deployment user's policy still cannot read secret values.
 
 Current checks: syntax check 307 files passed; database comparison and TLS tests 4/4 passed; full TLS transfer rehearsal passed. IAM Access Analyzer validation was denied to the deployment identity; its validation has not been claimed. Runtime policy additions use the official Secrets Manager encryption-context restrictions documented at https://docs.aws.amazon.com/secretsmanager/latest/userguide/security-encryption.html .
+
+## Runtime approval and private-network verification
+
+The owner approved the runtime change. `SchedoraRuntimeBoundary` version 3 is now the default, and inline policy `SchedoraRdsRuntimeMigration` is attached to `schedora-web-execution`. The one-shot ECS preflight (`schedora-web:22`, task `ed7b2e3be75548af94ec0c2b2a943c19`) successfully received its credentials at runtime and connected from the application security group over verified TLS. Its read-only query reported PostgreSQL 17.11 and no `schedora` schema in the target. No credentials or source rows were logged.
+
+Committed migration code is `18d1dbd`. Both images were built from that clean checkout and pushed to immutable ECR tags:
+
+- Migration: `database-migration-18d1dbd`, digest `sha256:4a6fc4e0818a36a0e011047e72507adb43a2d5eda8911716d9dfd19e55d3043d`.
+- App: `rds-18d1dbd`, digest `sha256:12ec14c355f3ce71619ed38138d9e18cfe663328bc797b828433117ed4479ebb`.
+
+Prepared application task `schedora-web:23` changes only the image and DATABASE_URL secret reference from task 21. It preserves the exact AppBeta app-encryption-key reference, EFS mounts, all other provider settings and the Flow activation hold. **Do not start it until migration publishes the new app secret's `url` field.** The running service still references task 21 and the source database. Always use exact task revisions; the preflight revision is not a web-server task.
+
+The full unit suite passed: 560 tests, 553 passed, 0 failed, 7 optional PostgreSQL tests skipped. Local fixture container/network were removed; the protected backup remains outside Git. Evidence is in `docs/evidence/rds-migration-readiness-2026-11-24.json` and its two screenshots.
+
+### Remaining routing decision before cutover
+
+Read-only checks show production domains still resolve to Vercel, and `frontend/vercel.json` still proxies API calls to `schedora-api.onrender.com`. The signed-in Render dashboard confirms that service remains Live on `989cda5`. The existing AWS certificate covers only `staging.schedora.in` and `*.staging.schedora.in`. Moving production routes requires production TLS/DNS/application configuration; it cannot be assumed from staging health.
+
+The owner was asked whether to migrate public production routes to AWS as part of this cutover or use AWS staging only and stop legacy production. Until answered, no writer was paused, no live data was copied, no new URL was published and no service switched databases. This avoids either split writes or an unannounced production outage. The user also requested a Claude prompt for remaining Flow work after migration; a prepared handoff is at `docs/CLAUDE_FLOW_CONTINUATION_PROMPT.md`, with infrastructure explicitly excluded from parallel development.
