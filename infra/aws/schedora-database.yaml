@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private shared PostgreSQL database for Schedora Meet Forms Sheets and Flow
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+  ApplicationSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Only tasks in this security group may connect to PostgreSQL
+  DatabaseIdentifier:
+    Type: String
+    Default: schedora-shared
+    AllowedPattern: '[a-z][a-z0-9-]{0,62}'
+  EngineVersion:
+    Type: String
+    Default: '17.11'
+    Description: Match the source PostgreSQL major version during migration
+  InstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small]
+  MultiAZ:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Confirm recurring cost before provisioning; false is a testing-only cost choice
+  ExistingDatabaseKeyArn:
+    Type: String
+    Default: ''
+    Description: Reuse a retained Schedora database encryption key when recovering a failed setup
+  ExistingDatabaseLogGroup:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  ExistingApplicationSecretArn:
+    Type: String
+    Default: ''
+    Description: Reuse the retained application credential after a failed setup
+  BackupRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 7]
+    Description: Use 1 only for the account Free plan testing limit; otherwise retain 7 days
+Conditions:
+  UseMultiAZ: !Equals [!Ref MultiAZ, 'true']
+  CreateDatabaseKey: !Equals [!Ref ExistingDatabaseKeyArn, '']
+  CreateDatabaseLogs: !Equals [!Ref ExistingDatabaseLogGroup, 'false']
+  CreateApplicationSecret: !Equals [!Ref ExistingApplicationSecretArn, '']
+Resources:
+  DatabaseKey:
+    Type: AWS::KMS::Key
+    Condition: CreateDatabaseKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Schedora shared database storage secrets and database logs
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
+          - Sid: EncryptedDatabaseLogs
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action: [kms:Encrypt, kms:Decrypt, kms:ReEncrypt*, kms:GenerateDataKey*, kms:DescribeKey]
+            Resource: '*'
+            Condition:
+              ArnLike:
+                kms:EncryptionContext:aws:logs:arn: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/rds/instance/${DatabaseIdentifier}/*
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL accepts only Schedora application and migration tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApplicationSecurityGroup
+      Tags:
+        - Key: Project
+          Value: Schedora
+  DatabaseSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Schedora database in the existing app VPC across two availability zones
+      SubnetIds: !Ref Subnets
+  DatabaseParameters:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Require verified encrypted PostgreSQL connections
+      Family: postgres17
+      Parameters:
+        rds.force_ssl: '1'
+        log_connections: '1'
+        log_disconnections: '1'
+        log_statement: none
+        log_min_error_statement: panic
+  DatabaseLogs:
+    Type: AWS::Logs::LogGroup
+    Condition: CreateDatabaseLogs
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/rds/instance/${DatabaseIdentifier}/postgresql
+      RetentionInDays: 14
+      KmsKeyId: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+  ApplicationCredentials:
+    Type: AWS::SecretsManager::Secret
+    Condition: CreateApplicationSecret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub ${AWS::StackName}-app
+      Description: Separate Schedora application database role; migration populates URL after verification
+      KmsKeyId: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"schedora_app"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+      Tags:
+        - Key: Project
+          Value: Schedora
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Ref DatabaseIdentifier
+      DBName: schedora
+      Engine: postgres
+      EngineVersion: !Ref EngineVersion
+      DBInstanceClass: !Ref InstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      StorageEncrypted: true
+      KmsKeyId: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+      PubliclyAccessible: false
+      MultiAZ: !If [UseMultiAZ, true, false]
+      VPCSecurityGroups: [!GetAtt DatabaseSecurityGroup.GroupId]
+      DBSubnetGroupName: !Ref DatabaseSubnets
+      DBParameterGroupName: !Ref DatabaseParameters
+      MasterUsername: schedora_owner
+      ManageMasterUserPassword: true
+      MasterUserSecret:
+        KmsKeyId: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+      BackupRetentionPeriod: !Ref BackupRetentionDays
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      PerformanceInsightsKMSKeyId: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+      EnableCloudwatchLogsExports: [postgresql]
+      Tags:
+        - Key: Project
+          Value: Schedora
+        - Key: created_by
+          Value: rds-oss-skill
+        - Key: generation_model
+          Value: codex
+Outputs:
+  Endpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  Port:
+    Value: !GetAtt Database.Endpoint.Port
+  OwnerSecretArn:
+    Value: !GetAtt Database.MasterUserSecret.SecretArn
+  ApplicationSecretArn:
+    Value: !If [CreateApplicationSecret, !Ref ApplicationCredentials, !Ref ExistingApplicationSecretArn]
+  DatabaseKeyArn:
+    Value: !If [CreateDatabaseKey, !GetAtt DatabaseKey.Arn, !Ref ExistingDatabaseKeyArn]
+  DatabaseSecurityGroupId:
+    Value: !GetAtt DatabaseSecurityGroup.GroupId

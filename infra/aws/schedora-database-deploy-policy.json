@@ -1,0 +1,212 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DescribeRdsDefaultKeyMetadata",
+      "Effect": "Allow",
+      "Action": "kms:DescribeKey",
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/8b5bb106-6a57-491a-b1f9-d120ef9661bd"
+    },
+    {
+      "Sid": "CreateTaggedDatabaseKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1",
+          "aws:RequestTag/Project": "Schedora"
+        }
+      }
+    },
+    {
+      "Sid": "TagKeyDuringCreation",
+      "Effect": "Allow",
+      "Action": [
+        "kms:TagResource"
+      ],
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1",
+          "aws:RequestTag/Project": "Schedora"
+        }
+      }
+    },
+    {
+      "Sid": "ManageOnlySchedoraKeys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:PutKeyPolicy",
+        "kms:EnableKeyRotation",
+        "kms:GetKeyRotationStatus",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1",
+          "aws:ResourceTag/Project": "Schedora"
+        }
+      }
+    },
+    {
+      "Sid": "DatabaseServiceKeyGrants",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateGrant"
+      ],
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1",
+          "aws:ResourceTag/Project": "Schedora"
+        },
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "DatabaseServiceEncryption",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+        "kms:GenerateDataKeyWithoutPlaintext"
+      ],
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1",
+          "aws:ResourceTag/Project": "Schedora",
+          "kms:ViaService": [
+            "rds.ap-south-1.amazonaws.com",
+            "secretsmanager.ap-south-1.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ProvisionNamedDatabase",
+      "Effect": "Allow",
+      "Action": [
+        "rds:CreateDBInstance",
+        "rds:ModifyDBInstance",
+        "rds:CreateDBSubnetGroup",
+        "rds:ModifyDBSubnetGroup",
+        "rds:DeleteDBSubnetGroup",
+        "rds:CreateDBParameterGroup",
+        "rds:ModifyDBParameterGroup",
+        "rds:DeleteDBParameterGroup",
+        "rds:AddTagsToResource",
+        "rds:RemoveTagsFromResource",
+        "rds:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:rds:ap-south-1:255948905492:db:schedora-shared",
+        "arn:aws:rds:ap-south-1:255948905492:pg:schedora-database-*",
+        "arn:aws:rds:ap-south-1:255948905492:subgrp:schedora-database-*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    },
+    {
+      "Sid": "ReadDatabaseSetup",
+      "Effect": "Allow",
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBSubnetGroups",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeDBParameters",
+        "rds:DescribeDBEngineVersions",
+        "rds:DescribeOrderableDBInstanceOptions"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    },
+    {
+      "Sid": "ManageGeneratedDatabaseSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:ListSecretVersionIds",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:ap-south-1:255948905492:secret:schedora-database-*",
+        "arn:aws:secretsmanager:ap-south-1:255948905492:secret:rds!db-*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    },
+    {
+      "Sid": "GenerateDatabasePasswords",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetRandomPassword"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    },
+    {
+      "Sid": "DatabaseEncryptedLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogStreams",
+        "logs:PutRetentionPolicy",
+        "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup",
+        "logs:TagResource",
+        "logs:TagLogGroup",
+        "logs:AssociateKmsKey"
+      ],
+      "Resource": [
+        "arn:aws:logs:ap-south-1:255948905492:log-group:/aws/rds/instance/schedora-shared/postgresql",
+        "arn:aws:logs:ap-south-1:255948905492:log-group:/aws/rds/instance/schedora-shared/postgresql:*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    },
+    {
+      "Sid": "RdsServiceRoleOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateServiceLinkedRole"
+      ],
+      "Resource": "arn:aws:iam::255948905492:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "rds.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

@@ -4,6 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { loadVideoConfig, publicVideoConfig } from './video/config.mjs';
 import { validWebhookSecret } from './platform/email-events.mjs';
 
+function bundledDatabaseCa(connectionString) {
+  let host;
+  try { host = new URL(connectionString).hostname.toLowerCase(); } catch { return ''; }
+  const certificate = host.endsWith('.pooler.supabase.com') ? 'supabase-ca.crt'
+    : host.endsWith('.ap-south-1.rds.amazonaws.com') ? 'rds-ap-south-1.pem' : null;
+  return certificate ? readFileSync(new URL(`../certs/${certificate}`, import.meta.url), 'utf8') : '';
+}
+
 // All configuration comes from the server environment. No secret is ever sent to the browser.
 export function loadConfig(env = process.env, overrides = {}) {
   const production = env.NODE_ENV === 'production';
@@ -28,7 +36,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     productDomain,
     databasePath: env.DATABASE_PATH || './data/schedora.db',
     databaseUrl: env.DATABASE_URL || '',
-    databaseCa: env.DATABASE_CA_CERT || (env.DATABASE_URL?.includes('.pooler.supabase.com') ? readFileSync(new URL('../certs/supabase-ca.crt', import.meta.url), 'utf8') : ''),
+    databaseCa: env.DATABASE_CA_CERT || bundledDatabaseCa(env.DATABASE_URL),
     trustProxy: env.TRUST_PROXY === 'true',
     // Requests per minute per client address, across the whole site.
     rateLimitPerMinute: Number(env.RATE_LIMIT_PER_MINUTE || 600),

@@ -1,0 +1,75 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Resource": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:schedora-database-app-54D7Ve",
+      "Sid": "ReadRdsApplicationCredential",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue"
+    },
+    {
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/5427764f-c282-4982-80d8-7d6179b6101d",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.ap-south-1.amazonaws.com",
+          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:schedora-database-app-54D7Ve"
+        }
+      },
+      "Sid": "DecryptRdsApplicationCredential",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt"
+    },
+    {
+      "Resource": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:rds!db-9ff9206f-e9c2-4416-adfa-2b82ed609d6e-HHPBUH",
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "2026-11-25T18:30:00Z"
+        }
+      },
+      "Sid": "TemporaryReadRdsOwnerCredential",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue"
+    },
+    {
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/5427764f-c282-4982-80d8-7d6179b6101d",
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "2026-11-25T18:30:00Z"
+        },
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.ap-south-1.amazonaws.com",
+          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:rds!db-9ff9206f-e9c2-4416-adfa-2b82ed609d6e-HHPBUH"
+        }
+      },
+      "Sid": "TemporaryDecryptRdsOwnerCredential",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt"
+    },
+    {
+      "Resource": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:schedora-database-app-54D7Ve",
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "2026-11-25T18:30:00Z"
+        }
+      },
+      "Sid": "TemporaryPublishRdsApplicationUrl",
+      "Effect": "Allow",
+      "Action": "secretsmanager:PutSecretValue"
+    },
+    {
+      "Resource": "arn:aws:kms:ap-south-1:255948905492:key/5427764f-c282-4982-80d8-7d6179b6101d",
+      "Condition": {
+        "DateLessThan": {
+          "aws:CurrentTime": "2026-11-25T18:30:00Z"
+        },
+        "StringEquals": {
+          "kms:ViaService": "secretsmanager.ap-south-1.amazonaws.com",
+          "kms:EncryptionContext:SecretARN": "arn:aws:secretsmanager:ap-south-1:255948905492:secret:schedora-database-app-54D7Ve"
+        }
+      },
+      "Sid": "TemporaryEncryptRdsApplicationUrl",
+      "Effect": "Allow",
+      "Action": "kms:GenerateDataKey"
+    }
+  ]
+}

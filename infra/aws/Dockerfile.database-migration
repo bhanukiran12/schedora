@@ -1,0 +1,19 @@
+FROM node:24-bookworm-slim AS node
+WORKDIR /dependencies
+COPY backend/package.json backend/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+FROM public.ecr.aws/aws-cli/aws-cli:2.35.8 AS awscli
+
+FROM postgres:17-bookworm
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /dependencies/node_modules /job/node_modules
+COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
+RUN ln -s /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws
+WORKDIR /job
+COPY backend/src ./src
+COPY backend/certs ./certs
+COPY backend/scripts/database-compare.mjs backend/scripts/database-transfer.mjs ./scripts/
+USER postgres
+RUN node --version && aws --version && pg_dump --version
+CMD ["node", "scripts/database-transfer.mjs"]
